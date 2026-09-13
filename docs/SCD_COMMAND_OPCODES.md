@@ -815,7 +815,7 @@ Obstacle record layout (starts at opcode stream `+2`, so record offset = stream 
 | Record offset | Key | Type | Description |
 |---|---|---|---|
 | +0x00 | unused0 | u8[8] | Not read by the handler; the record is referenced whole via the entry pointer. |
-| +0x08 | itemType | u8 | Item type character (`0x54` cut-off for visibility mask shape; special cases for `'R'`/`'P'` palettes and `'/'` with Jill). |
+| +0x08 | itemType | u8 | Item id/code. The `0x54` cut-off is `<= ITEM_MAP_LAST` (`0x53`), which selects the map pickup-handler shape. Four ids get special handling: `ITEM_MAP_COURTYARD` (`0x50`) and `ITEM_MAP_GUARDHOUSE` (`0x52`) have their 256-entry palette darkened, `ITEM_INK_RIBBONS` (`0x2F`) is skipped for Jill on a first playthrough, and `ITEM_CRANK_HEX` (`0x1E`) attaches an extra model. |
 | +0x0A | modelIdx | u8 | Index into `g_item_model_table` / RDT `item_models`; also event entry word `+4`. |
 | +0x0B | scaParent | u8 | Whose matrix the item hangs off — this is what the posX/Y/Z below are *relative to*. `0xFF` none (absolute room coords), `0xFE` player, else `g_omodel_table[value]`. See [SCA parent](#0x18-sca-parent) below. |
 | +0x0C | posX | s16 | Position X (also object `+0x34`/`+0x6C`). |

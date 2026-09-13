@@ -674,10 +674,11 @@ int cmd_item_model_set(void)
             DAT_008e1c78 = g_TextureBankID;
             DAT_008e1c70 = g_TextureCurrentPage;
             ClearTmdProcessingFlag();
-            // Item types 'R' (0x52) and 'P' (0x50) get their 256-entry 5551 palette
-            // darkened: each 5-bit channel drops by 9, clamped at 0, bit 15 kept.
-            // This loop was missing entirely.
-            if ((char)g_ScdOpcodes[10] == 'R' || (char)g_ScdOpcodes[10] == 'P') {
+            // The two map items - guardhouse (0x52) and courtyard (0x50) - get
+            // their 256-entry 5551 palette darkened: each 5-bit channel drops by
+            // 9, clamped at 0, bit 15 kept. This loop was missing entirely.
+            if ((char)g_ScdOpcodes[10] == ITEM_MAP_GUARDHOUSE ||
+                (char)g_ScdOpcodes[10] == ITEM_MAP_COURTYARD) {
                 unsigned short* pal = (unsigned short*)(itemModelData[1] + 0x14);
                 for (int n = 0; n < 256; n++) {
                     unsigned short c = *pal;
@@ -697,7 +698,7 @@ int cmd_item_model_set(void)
             ProcessTmdTextures(2, (unsigned int*)(unsigned int)*itemModelData, DAT_008e1c78, DAT_008e1c70);
         }
         FUN_00473ea0(*itemModelData, modelPtr + 0xc, (ScaMatrixData*)(modelPtr + 0x1c));
-        if ((char)g_ScdOpcodes[10] == 0x1e) {
+        if ((char)g_ScdOpcodes[10] == ITEM_CRANK_HEX) {
             FUN_004870d0(*(int*)(modelPtr + 0x18));
         }
 

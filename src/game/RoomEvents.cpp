@@ -977,7 +977,7 @@ void room_event_item_pickup(void)
 void room_event_take_item(void)
 {
     unsigned char* record = *(unsigned char**)((char*)g_pRoomActionEntry + 8);
-    if ((char)record[8] == 'M') {          // 0x4D = ITEM_COMM_RADIO
+    if ((char)record[8] == ITEM_COMM_RADIO) {
         Flg_on((int)g_ScenarioFlags, SCENARIO_FLAG_HAS_RADIO);
         return;
     }
