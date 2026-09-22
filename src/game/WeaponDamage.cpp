@@ -5,8 +5,10 @@
 // projectile distance) to find the closest target in range+FOV, then
 // subtracts damage from the enemy's health and sets the hit reaction state.
 #include "../Globals.h"
+#include "../DebugPrint.h"   // dbg_printf
 #include <cstdlib>                   // rand() - MSVC got this via <windows.h>
 #include "entities/EntityCommon.h"   // ENEMY_* / NPC_* type ids
+#include "dc/WeaponDamageTables.h"    // DC per-mode damage columns (generated)
 
 // ---- Global scratch variable (set by apply_weapon_damage before hit detection) ----
 extern int g_scaled_down_dist;  // holds weapon_id - 1 during hit detection
@@ -336,6 +338,20 @@ unsigned char apply_weapon_damage(unsigned int weapon_id)
     unsigned int wpnRange = weapons_ranges[
         (unsigned int)weaponAdj + (unsigned int)(g_playerEntityPointer.id & 1) * 10];
 
+    // DC ADVANCED: the PS1 promotes the Beretta (item 2) to slot 3 - the DC's
+    // Beretta M92FS custom (item 4; in the USA build that slot is the unused
+    // DumDum Python) - for this shot (~1/8 chance, table 0x8008C854): that
+    // slot's hit detector, records and post-hit callback, plus a hit-state base
+    // of 4 instead of the weapon id (SLUS_005.51 0x800120e8). The range above
+    // was already read with the real weapon, matching the original's order.
+    unsigned char hitStateBase = (unsigned char)weapon_id;
+    if (g_bDcMode && (g_main_state_flags2 & MSF2_DC_ADVANCED) != 0 &&
+        weaponAdj == 1 && ((DC_BERETTA_ROLL_MASK >> (rand() & 0xF)) & 1) != 0) {
+        weaponAdj = 3;
+        g_scaled_down_dist = weaponAdj;
+        hitStateBase = 4;
+    }
+
     Entity* enemy = NULL;
 
     // Second pass: check each active enemy for weapon hit
@@ -380,7 +396,22 @@ unsigned char apply_weapon_damage(unsigned int weapon_id)
 
     unsigned char hitState;
     short damage;
-    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0) {
+    if (g_bDcMode) {
+        // The DC reads the damage from one of three mode columns and has no
+        // second-playthrough damage table; the knockback/type/data/hit fields
+        // still come from the STANDARD records (SLUS_005.51 0x800120e8: the
+        // 0x40000 bit -> 0x8008B59A, (bits & 0x30000) == 0x20000 ->
+        // 0x8008BEFA, else the base column - so ADVANCED* reads the base
+        // column, exactly as the difficulty byte does here).
+        if (g_DcDifficulty == DC_DIFFICULTY_TRAINING) {
+            damage = g_dcWeaponDamageTraining[tableIdx];
+        } else if (g_DcDifficulty == DC_DIFFICULTY_ADVANCED) {
+            damage = g_dcWeaponDamageAdvanced[tableIdx];
+        } else {
+            damage = rec->dmg;              // STANDARD and ADVANCED* share this column
+        }
+        hitState = rec->hit;
+    } else if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0) {
         hitState = rec->hit;                                // first-playthrough hit-state @ +10
         damage = rec->dmg;                                  // first-playthrough damage @ +6
     } else {
@@ -393,7 +424,7 @@ unsigned char apply_weapon_damage(unsigned int weapon_id)
     if ((g_playerEntityPointer.flags & 0xE0) != 0x20) {
         hitState += (g_playerEntityPointer.flags >> 5);
     }
-    hitState |= (unsigned char)(weapon_id << 3);
+    hitState |= (unsigned char)(hitStateBase << 3);
     enemy->hit_state = hitState;
 
     typedef void (*postHitFn)(Entity* ent);
@@ -420,16 +451,18 @@ unsigned char apply_weapon_damage(unsigned int weapon_id)
 // ============================================================================
 
 // Weapon index used by every per-weapon table below (weaponAdj = weapon_id - 1):
-//   0 knife          1 handgun         2 shotgun        3 python         4 magnum
+//   0 knife          1 handgun         2 shotgun        3 python DumDum  4 python magnum
 //   5 flamethrower   6 GL explosive    7 GL acid        8 GL flame       9 rocket launcher
+// Slot 3 is item 4 (unobtainable in the USA; the DC's Beretta M92FS custom) and
+// slot 4 is item 5 (the live Colt Python) - see the note on the hit-record table.
 
 // 0x004bb530 - per-weapon hit detection callbacks (weaponAdj = weapon_id - 1)
 void* PTR_weapons_hit_detection_functions[10] = {
     (void*)weapon_hit_detect_knife,      // [0] 0x0043d690 - knife
     (void*)weapon_hit_detect_gun,        // [1] 0x0043d410 - handgun
     (void*)weapon_hit_detect_gun,        // [2] shotgun
-    (void*)weapon_hit_detect_gun,        // [3] python, regular rounds
-    (void*)weapon_hit_detect_gun,        // [4] python, magnum rounds
+    (void*)weapon_hit_detect_gun,        // [3] python (DumDum rounds, item 4)
+    (void*)weapon_hit_detect_gun,        // [4] python (magnum rounds, item 5)
     (void*)weapon_hit_detect_projectile, // [5] 0x0043d810 - flamethrower
     (void*)weapon_hit_detect_projectile, // [6] GL explosive rounds
     (void*)weapon_hit_detect_projectile, // [7] GL acid rounds
@@ -442,8 +475,8 @@ void* PTR_post_hit_callbacks[10] = {
     (void*)weapon_post_hit_knife,    // [0] 0x0043c290 - knife
     (void*)weapon_post_hit_reaction, // [1] 0x0043c350 - handgun
     (void*)weapon_post_hit_shotgun,  // [2] 0x0043c370 - shotgun
-    (void*)weapon_post_hit_shotgun,  // [3] python, regular rounds
-    (void*)weapon_post_hit_shotgun,  // [4] python, magnum rounds
+    (void*)weapon_post_hit_shotgun,  // [3] python (DumDum rounds, item 4)
+    (void*)weapon_post_hit_shotgun,  // [4] python (magnum rounds, item 5)
     (void*)weapon_post_hit_blood,    // [5] 0x0043c3b0 - flamethrower
     (void*)weapon_post_hit_blood2,   // [6] 0x0043c770 - GL explosive rounds
     (void*)weapon_post_hit_sparks,   // [7] 0x0043ca30 - GL acid rounds
@@ -530,8 +563,8 @@ unsigned int weapons_ranges[20] = {
      400,  // [0] ITEM_KNIFE             - combat knife
     1200,  // [1] ITEM_BERETTA           - handgun
     2600,  // [2] ITEM_SHOTGUN           - shotgun
-     800,  // [3] ITEM_COLT_PYTHON_DUM   - Colt Python, regular rounds
-     800,  // [4] ITEM_COLT_PYTHON_MAG   - Colt Python, magnum rounds
+     800,  // [3] ITEM_COLT_PYTHON_DUM   - Colt Python, DumDum rounds (item 4; see the note below)
+     800,  // [4] ITEM_COLT_PYTHON_MAG   - Colt Python, magnum rounds (the live one, item 5)
      400,  // [5] ITEM_FLAMETHROWER      - flamethrower (flame sprite radius)
      900,  // [6] ITEM_BAZOOKA_EXPLOSIVE - grenade launcher, explosive rounds
      900,  // [7] ITEM_BAZOOKA_ACID      - grenade launcher, acid rounds
@@ -541,8 +574,8 @@ unsigned int weapons_ranges[20] = {
      500,  // [0] ITEM_KNIFE             - combat knife      (+100 vs Chris)
     1300,  // [1] ITEM_BERETTA           - handgun           (+100 vs Chris)
     2600,  // [2] ITEM_SHOTGUN           - shotgun
-     800,  // [3] ITEM_COLT_PYTHON_DUM   - Colt Python, regular rounds
-     800,  // [4] ITEM_COLT_PYTHON_MAG   - Colt Python, magnum rounds
+     800,  // [3] ITEM_COLT_PYTHON_DUM   - Colt Python, DumDum rounds (item 4; see the note below)
+     800,  // [4] ITEM_COLT_PYTHON_MAG   - Colt Python, magnum rounds (the live one, item 5)
      400,  // [5] ITEM_FLAMETHROWER      - flamethrower (flame sprite radius)
      900,  // [6] ITEM_BAZOOKA_EXPLOSIVE - grenade launcher, explosive rounds
      900,  // [7] ITEM_BAZOOKA_ACID      - grenade launcher, acid rounds
@@ -553,17 +586,26 @@ unsigned int weapons_ranges[20] = {
 // 0x004bb698 - first-playthrough hit records (WeaponHitRecordFirstRun = { kx, ky, kz,
 // dmg, type, data, hit, pad }, see top of file), 10 records per enemy,
 // indexed (weaponAdj + enemyType * 10). One record per weapon slot, same
-// order as weapons_ranges: knife, handgun, shotgun, python (regular rounds),
-// python (magnum rounds), flamethrower, GL explosive, GL acid, GL flame,
-// rocket launcher.
+// order as weapons_ranges: knife, handgun, shotgun, python (DumDum),
+// python (magnum), flamethrower, GL explosive, GL acid, GL flame, rocket launcher.
+//
+// The two Python slots, by item id:
+//   slot 3 = item 4 = ITEM_COLT_PYTHON_DUM - Colt Python taking DumDum rounds.
+//            Unobtainable in the USA builds. The Director's Cut gives item 4 to
+//            its Beretta M92FS custom, so there the slot-3 records (and the
+//            generated per-mode damage columns) are that Beretta's - which is
+//            also the row the ADVANCED Beretta promotion below switches to.
+//   slot 4 = item 5 = ITEM_COLT_PYTHON_MAG - the live Colt Python, magnum
+//            rounds. Plain "magnum" in this file means this slot.
+// The ten slots line up 1:1 with the ITEM_ ids 0x01..0x0A (weapon_id - 1).
 WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     // ---- 0x00 ENEMY_ZOMBIE ----
 //  {    kx,    ky,  kz, dmg, type, data, hit, pad }
     {   100,  -1800,   0,    8,   0,   0,   1, 0 },  // knife
     {   100,  -2620,   0,    9,   0,   1,   1, 0 },  // handgun
     {   100,  -2500,   0,   53,   4,   0,   2, 0 },  // shotgun
-    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python
-    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // magnum
+    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python (DumDum)
+    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // python (magnum)
     {   150,  -1500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   150,  -1620,   0,  201,   0,   0,   2, 0 },  // GL explosive
     {   150,  -1520,   0,   95,   9,   0,   1, 0 },  // GL acid
@@ -573,8 +615,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {   100,  -1800,   0,    8,   0,   0,   1, 0 },  // knife
     {   100,  -2620,   0,    9,   0,   1,   1, 0 },  // handgun
     {   100,  -2500,   0,   53,   4,   0,   2, 0 },  // shotgun
-    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python
-    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // magnum
+    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python (DumDum)
+    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // python (magnum)
     {   150,  -1500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   150,  -1620,   0,  201,   0,   0,   2, 0 },  // GL explosive
     {   150,  -1520,   0,   95,   9,   0,   1, 0 },  // GL acid
@@ -584,8 +626,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {   100,  -1200,   0,   30,   0,   0,   1, 0 },  // knife
     {   100,  -1200,   0,   20,   0,   1,   1, 0 },  // handgun
     {   100,  -1200,   0,   40,   4,   0,   2, 0 },  // shotgun
-    {   100,  -1200,   0,   60,   4,   0,   2, 0 },  // python
-    {   100,  -1200,   0,  130,   4,   0,   2, 0 },  // magnum
+    {   100,  -1200,   0,   60,   4,   0,   2, 0 },  // python (DumDum)
+    {   100,  -1200,   0,  130,   4,   0,   2, 0 },  // python (magnum)
     {   100,      0,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   100,   -100,   0,  200,   0,   0,   2, 0 },  // GL explosive
     {   100,      0,   0,  100,   9,   0,   1, 0 },  // GL acid
@@ -595,8 +637,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,  -1200,   0,   10,   0,   8,   1, 0 },  // knife
     {     0,  -1220,   0,   20,   0,   9,   1, 0 },  // handgun
     {     0,  -1100,   0,   40,   0,   8,   2, 0 },  // shotgun
-    {     0,  -1220,   0,   40,   0,   8,   2, 0 },  // python
-    {     0,  -1220,   0,  130,   0,   8,   2, 0 },  // magnum
+    {     0,  -1220,   0,   40,   0,   8,   2, 0 },  // python (DumDum)
+    {     0,  -1220,   0,  130,   0,   8,   2, 0 },  // python (magnum)
     {     0,  -1100,   0,   20,  14,   7,   1, 0 },  // flamethrower
     {     0,  -1120,   0,  100,   0,   0,   2, 0 },  // GL explosive
     {     0,  -1120,   0,  100,   9,   0,   1, 0 },  // GL acid
@@ -606,8 +648,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,   -900,   0,   10,   0,   8,   1, 0 },  // knife
     {     0,   -920,   0,   14,   0,   9,   1, 0 },  // handgun
     {     0,   -800,   0,   40,   0,   8,   2, 0 },  // shotgun
-    {     0,   -920,   0,   50,   0,   8,   2, 0 },  // python
-    {     0,   -920,   0,   70,   0,   8,   2, 0 },  // magnum
+    {     0,   -920,   0,   50,   0,   8,   2, 0 },  // python (DumDum)
+    {     0,   -920,   0,   70,   0,   8,   2, 0 },  // python (magnum)
     {     0,   -800,   0,   20,  14,   7,   1, 0 },  // flamethrower
     {     0,   -820,   0,   60,   0,   0,   2, 0 },  // GL explosive
     {     0,   -820,   0,   60,   9,   0,   1, 0 },  // GL acid
@@ -617,8 +659,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   50,   0,   0,   1, 0 },  // knife
     {     0,      0,   0,   26,   0,   0,   1, 0 },  // handgun
     {     0,      0,   0,   50,   0,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   50,   0,   0,   2, 0 },  // python
-    {     0,      0,   0,  130,   0,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   50,   0,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,  130,   0,   0,   2, 0 },  // python (magnum)
     {     0,      0,   0,   20,  14,   5,   1, 0 },  // flamethrower
     {     0,      0,   0,  200,   0,   0,   2, 0 },  // GL explosive
     {     0,      0,   0,   60,   9,   0,   1, 0 },  // GL acid
@@ -628,8 +670,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,  -1500,   0,   16,   9,   6,   1, 0 },  // knife
     {     0,  -1500,   0,   14,   9,   6,   1, 0 },  // handgun
     {     0,  -1500,   0,   32,   9,   6,   2, 0 },  // shotgun
-    {     0,  -1500,   0,   40,   9,   6,   2, 0 },  // python
-    {     0,  -1500,   0,  130,   9,   6,   2, 0 },  // magnum
+    {     0,  -1500,   0,   40,   9,   6,   2, 0 },  // python (DumDum)
+    {     0,  -1500,   0,  130,   9,   6,   2, 0 },  // python (magnum)
     {   150,  -1500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   150,  -1500,   0,  100,   0,   0,   2, 0 },  // GL explosive
     {   150,  -1500,   0,  200,   9,   0,   1, 0 },  // GL acid
@@ -639,8 +681,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   20,   0,  16,   1, 0 },  // knife
     {     0,      0,   0,   30,   0,  17,   1, 0 },  // handgun
     {     0,      0,   0,   60,   0,  16,   2, 0 },  // shotgun
-    {     0,      0,   0,   70,   0,  16,   2, 0 },  // python
-    {     0,      0,   0,  130,   0,  16,   2, 0 },  // magnum
+    {     0,      0,   0,   70,   0,  16,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,  130,   0,  16,   2, 0 },  // python (magnum)
     {     0,      0,   0,   20,  14,   4,   1, 0 },  // flamethrower
     {     0,      0,   0,  200,   0,   0,   2, 0 },  // GL explosive
     {     0,      0,   0,   80,   9,   0,   1, 0 },  // GL acid
@@ -650,8 +692,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   15,   1,   0,   1, 0 },  // knife
     {     0,   1000,   0,   15,   0,   0,   1, 0 },  // handgun
     {     0,   1500,   0,   20,   0,   0,   2, 0 },  // shotgun
-    {     0,   1000,   0,   38,   0,   0,   2, 0 },  // python
-    {     0,   1000,   0,   74,   0,   0,   2, 0 },  // magnum
+    {     0,   1000,   0,   38,   0,   0,   2, 0 },  // python (DumDum)
+    {     0,   1000,   0,   74,   0,   0,   2, 0 },  // python (magnum)
     {     0,   1500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {     0,   1500,   0,   50,   2,   0,   2, 0 },  // GL explosive
     {     0,   1500,   0,   40,   9,   0,   1, 0 },  // GL acid
@@ -661,8 +703,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   17,   0,   0,   1, 0 },  // knife
     {     0,      0,   0,   20,   1,   0,   1, 0 },  // handgun
     {     0,      0,   0,   30,   1,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python
-    {     0,      0,   0,  130,   1,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,  130,   1,   0,   2, 0 },  // python (magnum)
     {   150,  -1500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   150,  -1500,   0,  200,   0,   0,   2, 0 },  // GL explosive
     {   150,  -1500,   0,   60,   9,   0,   1, 0 },  // GL acid
@@ -672,8 +714,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   20,   0,   0,   1, 0 },  // knife
     {     0,      0,   0,   20,   0,   0,   1, 0 },  // handgun
     {     0,      0,   0,   40,   0,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   50,   0,   0,   2, 0 },  // python
-    {     0,      0,   0,  130,   0,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   50,   0,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,  130,   0,   0,   2, 0 },  // python (magnum)
     {     0,      0,   0,   30,  14,   3,   1, 0 },  // flamethrower
     {     0,      0,   0,  200,   0,   0,   2, 0 },  // GL explosive
     {     0,      0,   0,   60,   9,   0,   1, 0 },  // GL acid
@@ -683,8 +725,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,    0,   1,   0,   1, 0 },  // knife (no damage)
     {     0,      0,   0,    0,   1,   0,   1, 0 },  // handgun (no damage)
     {     0,      0,   0,    0,   1,   0,   1, 0 },  // shotgun (no damage)
-    {     0,      0,   0,    0,   1,   0,   1, 0 },  // python (no damage)
-    {     0,      0,   0,    0,   1,   0,   1, 0 },  // magnum (no damage)
+    {     0,      0,   0,    0,   1,   0,   1, 0 },  // python (DumDum, no damage)
+    {     0,      0,   0,    0,   1,   0,   1, 0 },  // python (magnum, no damage)
     {     0,  -1500,   0,    0,  14,   7,   1, 0 },  // flamethrower (no damage)
     {     0,  -1500,   0,    0,   0,   0,   2, 0 },  // GL explosive (no damage)
     {     0,  -1500,   0,    0,   9,   0,   1, 0 },  // GL acid (no damage)
@@ -694,8 +736,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   10,   0,   0,   1, 0 },  // knife
     {     0,      0,   0,   20,   1,   0,   1, 0 },  // handgun
     {     0,      0,   0,   30,   1,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   50,   1,   0,   2, 0 },  // python
-    {     0,      0,   0,   80,   1,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   50,   1,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,   80,   1,   0,   2, 0 },  // python (magnum)
     {   150,  -2000,   0,   20,   2,   6,   1, 0 },  // flamethrower
     {   150,  -2000,   0,  100,   2,   0,   2, 0 },  // GL explosive
     {   150,  -2000,   0,  100,   2,   0,   1, 0 },  // GL acid
@@ -705,8 +747,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   20,   0,   8,   1, 0 },  // knife
     {     0,      0,   0,   30,   1,   0,   1, 0 },  // handgun
     {     0,      0,   0,   40,   1,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python
-    {     0,      0,   0,   80,   1,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,   80,   1,   0,   2, 0 },  // python (magnum)
     {     0,      0,   0,   20,   2,   7,   1, 0 },  // flamethrower
     {     0,      0,   0,   80,   2,   0,   2, 0 },  // GL explosive
     {     0,      0,   0,  130,   2,   0,   1, 0 },  // GL acid
@@ -716,8 +758,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // knife (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // handgun (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // shotgun (no damage)
-    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (no damage)
-    {     0,      0,   0,    0,   1,   0,   0, 0 },  // magnum (no damage)
+    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (DumDum, no damage)
+    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (magnum, no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // flamethrower (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // GL explosive (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // GL acid (no damage)
@@ -727,8 +769,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // knife (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // handgun (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // shotgun (no damage)
-    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (no damage)
-    {     0,      0,   0,    0,   1,   0,   0, 0 },  // magnum (no damage)
+    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (DumDum, no damage)
+    {     0,      0,   0,    0,   1,   0,   0, 0 },  // python (magnum, no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // flamethrower (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // GL explosive (no damage)
     {     0,      0,   0,    0,   1,   0,   0, 0 },  // GL acid (no damage)
@@ -738,8 +780,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   10,   0,   0,   1, 0 },  // knife
     {     0,      0,   0,   20,   1,   0,   1, 0 },  // handgun
     {     0,      0,   0,   30,   1,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   50,   1,   0,   2, 0 },  // python
-    {     0,      0,   0,   80,   1,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   50,   1,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,   80,   1,   0,   2, 0 },  // python (magnum)
     {   150,  -2000,   0,   20,   2,   6,   1, 0 },  // flamethrower
     {   150,  -2000,   0,  100,   2,   0,   2, 0 },  // GL explosive
     {   150,  -2000,   0,  100,   2,   0,   1, 0 },  // GL acid
@@ -749,8 +791,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {   100,  -1800,   0,    8,   0,   0,   1, 0 },  // knife
     {   100,  -2620,   0,    9,   0,   1,   1, 0 },  // handgun
     {   100,  -1500,   0,   53,   4,   0,   2, 0 },  // shotgun
-    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python
-    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // magnum
+    {   100,  -2620,   0,   50,   4,   0,   2, 0 },  // python (DumDum)
+    {   100,  -2620,   0,  130,   4,   0,   2, 0 },  // python (magnum)
     {   150,  -2500,   0,   20,  14,   6,   1, 0 },  // flamethrower
     {   150,  -1620,   0,  201,   0,   0,   2, 0 },  // GL explosive
     {   150,  -1520,   0,   95,   9,   0,   1, 0 },  // GL acid
@@ -760,8 +802,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   20,   0,   8,   1, 0 },  // knife
     {     0,      0,   0,   30,   1,   0,   1, 0 },  // handgun
     {     0,      0,   0,   40,   1,   0,   2, 0 },  // shotgun
-    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python
-    {     0,      0,   0,   80,   1,   0,   2, 0 },  // magnum
+    {     0,      0,   0,   40,   1,   0,   2, 0 },  // python (DumDum)
+    {     0,      0,   0,   80,   1,   0,   2, 0 },  // python (magnum)
     {     0,      0,   0,   20,   2,   7,   1, 0 },  // flamethrower
     {     0,      0,   0,   80,   2,   0,   2, 0 },  // GL explosive
     {     0,      0,   0,  130,   2,   0,   1, 0 },  // GL acid
@@ -771,8 +813,8 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
     {     0,      0,   0,   10,   1,   0,   1, 0 },  // knife (burns it)
     {     0,      0,   0,    0,   1,   0,   1, 0 },  // handgun (no damage)
     {     0,      0,   0,    0,   1,   0,   2, 0 },  // shotgun (no damage)
-    {     0,      0,   0,    0,   1,   0,   2, 0 },  // python (no damage)
-    {     0,      0,   0,    0,   1,   0,   2, 0 },  // magnum (no damage)
+    {     0,      0,   0,    0,   1,   0,   2, 0 },  // python (DumDum, no damage)
+    {     0,      0,   0,    0,   1,   0,   2, 0 },  // python (magnum, no damage)
     {     0,      0,   0,    2,   2,   7,   1, 0 },  // flamethrower (burns it)
     {     0,      0,   0,   30,   2,   0,   2, 0 },  // GL explosive (burns it)
     {     0,      0,   0,   30,   2,   0,   1, 0 },  // GL acid (burns it)
@@ -783,17 +825,17 @@ WeaponHitRecordFirstRun g_weaponHitRecordsFirstRun[200] = {
 // 0x004bbffe - second-playthrough ("western" difficulty) records (WeaponHitRecordSecondRun = { dmg,
 // unk_02, hit, unk_05, kx, ky, kz }, see top of file), 10 records per enemy,
 // indexed (weaponAdj + enemyType * 10). One record per weapon slot, same
-// order as weapons_ranges: knife, handgun, shotgun, python (regular rounds),
-// python (magnum rounds), flamethrower, GL explosive, GL acid, GL flame,
-// rocket launcher.
+// order as weapons_ranges: knife, handgun, shotgun, python (DumDum),
+// python (magnum), flamethrower, GL explosive, GL acid, GL flame, rocket
+// launcher - see the item-id note on the first-playthrough table above.
 WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     // ---- 0x00 ENEMY_ZOMBIE ----
 //  { dmg, unk_02, hit, unk_05,    kx,     ky,  kz }
     {    8,    0,   1, 0,   100,  -2620,   0 },  // knife
     {    9,  256,   1, 0,   100,  -2500,   0 },  // handgun
     {   20,    4,   2, 0,   100,  -2620,   0 },  // shotgun
-    {   50,    4,   2, 0,   100,  -2620,   0 },  // python
-    {   60,    4,   2, 0,   150,  -1500,   0 },  // magnum
+    {   50,    4,   2, 0,   100,  -2620,   0 },  // python (DumDum)
+    {   60,    4,   2, 0,   150,  -1500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   150,  -1620,   0 },  // flamethrower
     {  201,    0,   2, 0,   150,  -1520,   0 },  // GL explosive
     {   70,    9,   1, 0,   150,  -1500,   0 },  // GL acid
@@ -803,8 +845,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    8,    0,   1, 0,   100,  -2620,   0 },  // knife
     {    9,  256,   1, 0,   100,  -2500,   0 },  // handgun
     {   20,    4,   2, 0,   100,  -2620,   0 },  // shotgun
-    {   50,    4,   2, 0,   100,  -2620,   0 },  // python
-    {   60,    4,   2, 0,   150,  -1500,   0 },  // magnum
+    {   50,    4,   2, 0,   100,  -2620,   0 },  // python (DumDum)
+    {   60,    4,   2, 0,   150,  -1500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   150,  -1620,   0 },  // flamethrower
     {  201,    0,   2, 0,   150,  -1520,   0 },  // GL explosive
     {   70,    9,   1, 0,   150,  -1500,   0 },  // GL acid
@@ -814,8 +856,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   30,    0,   1, 0,   100,  -1200,   0 },  // knife
     {   20,  256,   1, 0,   100,  -1200,   0 },  // handgun
     {   35,    4,   2, 0,   100,  -1200,   0 },  // shotgun
-    {   60,    4,   2, 0,   100,  -1200,   0 },  // python
-    {   60,    4,   2, 0,   100,      0,   0 },  // magnum
+    {   60,    4,   2, 0,   100,  -1200,   0 },  // python (DumDum)
+    {   60,    4,   2, 0,   100,      0,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   100,   -100,   0 },  // flamethrower
     {  200,    0,   2, 0,   100,      0,   0 },  // GL explosive
     {   90,    9,   1, 0,   100,      0,   0 },  // GL acid
@@ -825,8 +867,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   10, 2048,   1, 0,     0,  -1220,   0 },  // knife
     {   15, 2304,   1, 0,     0,  -1100,   0 },  // handgun
     {   24, 2048,   2, 0,     0,  -1220,   0 },  // shotgun
-    {   30, 2048,   2, 0,     0,  -1220,   0 },  // python
-    {   40, 2048,   2, 0,     0,  -1100,   0 },  // magnum
+    {   30, 2048,   2, 0,     0,  -1220,   0 },  // python (DumDum)
+    {   40, 2048,   2, 0,     0,  -1100,   0 },  // python (magnum)
     {   20, 1806,   1, 0,     0,  -1120,   0 },  // flamethrower
     {  100,    0,   2, 0,     0,  -1120,   0 },  // GL explosive
     {  100,    9,   1, 0,     0,  -1100,   0 },  // GL acid
@@ -836,8 +878,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   10, 2048,   1, 0,     0,   -920,   0 },  // knife
     {   12, 2304,   1, 0,     0,   -800,   0 },  // handgun
     {   20, 2048,   2, 0,     0,   -920,   0 },  // shotgun
-    {   50, 2048,   2, 0,     0,   -920,   0 },  // python
-    {   70, 2048,   2, 0,     0,   -800,   0 },  // magnum
+    {   50, 2048,   2, 0,     0,   -920,   0 },  // python (DumDum)
+    {   70, 2048,   2, 0,     0,   -800,   0 },  // python (magnum)
     {   20, 1806,   1, 0,     0,   -820,   0 },  // flamethrower
     {   50,    0,   2, 0,     0,   -820,   0 },  // GL explosive
     {   50,    9,   1, 0,     0,   -800,   0 },  // GL acid
@@ -847,8 +889,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   50,    0,   1, 0,     0,      0,   0 },  // knife
     {   26,    0,   1, 0,     0,      0,   0 },  // handgun
     {   50,    0,   2, 0,     0,      0,   0 },  // shotgun
-    {   50,    0,   2, 0,     0,      0,   0 },  // python
-    {   50,    0,   2, 0,     0,      0,   0 },  // magnum
+    {   50,    0,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   50,    0,   2, 0,     0,      0,   0 },  // python (magnum)
     {   20, 1294,   1, 0,     0,      0,   0 },  // flamethrower
     {  200,    0,   2, 0,     0,      0,   0 },  // GL explosive
     {   60,    9,   1, 0,     0,      0,   0 },  // GL acid
@@ -858,8 +900,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   16, 1545,   1, 0,     0,  -1500,   0 },  // knife
     {   14, 1545,   1, 0,     0,  -1500,   0 },  // handgun
     {   25, 1545,   2, 0,     0,  -1500,   0 },  // shotgun
-    {   40, 1545,   2, 0,     0,  -1500,   0 },  // python
-    {   80, 1545,   2, 0,   150,  -1500,   0 },  // magnum
+    {   40, 1545,   2, 0,     0,  -1500,   0 },  // python (DumDum)
+    {   80, 1545,   2, 0,   150,  -1500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   150,  -1500,   0 },  // flamethrower
     {   50,    0,   2, 0,   150,  -1500,   0 },  // GL explosive
     {   80,    9,   1, 0,   150,  -1500,   0 },  // GL acid
@@ -869,8 +911,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   20, 4096,   1, 0,     0,      0,   0 },  // knife
     {   30, 4352,   1, 0,     0,      0,   0 },  // handgun
     {   60, 4096,   2, 0,     0,      0,   0 },  // shotgun
-    {   70, 4096,   2, 0,     0,      0,   0 },  // python
-    {   70, 4096,   2, 0,     0,      0,   0 },  // magnum
+    {   70, 4096,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   70, 4096,   2, 0,     0,      0,   0 },  // python (magnum)
     {   20, 1038,   1, 0,     0,      0,   0 },  // flamethrower
     {  200,    0,   2, 0,     0,      0,   0 },  // GL explosive
     {   80,    9,   1, 0,     0,      0,   0 },  // GL acid
@@ -880,8 +922,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   15,    1,   1, 0,     0,   1000,   0 },  // knife
     {   10,    0,   1, 0,     0,   1500,   0 },  // handgun
     {   20,    0,   2, 0,     0,   1000,   0 },  // shotgun
-    {   38,    0,   2, 0,     0,   1000,   0 },  // python
-    {   20,    0,   2, 0,     0,   1500,   0 },  // magnum
+    {   38,    0,   2, 0,     0,   1000,   0 },  // python (DumDum)
+    {   20,    0,   2, 0,     0,   1500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,     0,   1500,   0 },  // flamethrower
     {   40,    2,   2, 0,     0,   1500,   0 },  // GL explosive
     {   40,    9,   1, 0,     0,   1500,   0 },  // GL acid
@@ -891,8 +933,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   10,    0,   1, 0,     0,      0,   0 },  // knife
     {   12,    1,   1, 0,     0,      0,   0 },  // handgun
     {   20,    1,   2, 0,     0,      0,   0 },  // shotgun
-    {   40,    1,   2, 0,     0,      0,   0 },  // python
-    {   41,    1,   2, 0,   150,  -1500,   0 },  // magnum
+    {   40,    1,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   41,    1,   2, 0,   150,  -1500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   150,  -1500,   0 },  // flamethrower
     {   60,    0,   2, 0,   150,  -1500,   0 },  // GL explosive
     {   60,    9,   1, 0,   150,  -1500,   0 },  // GL acid
@@ -902,8 +944,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   20,    0,   1, 0,     0,      0,   0 },  // knife
     {   20,    0,   1, 0,     0,      0,   0 },  // handgun
     {   40,    0,   2, 0,     0,      0,   0 },  // shotgun
-    {   50,    0,   2, 0,     0,      0,   0 },  // python
-    {   50,    0,   2, 0,     0,      0,   0 },  // magnum
+    {   50,    0,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   50,    0,   2, 0,     0,      0,   0 },  // python (magnum)
     {   30,  782,   1, 0,     0,      0,   0 },  // flamethrower
     {  200,    0,   2, 0,     0,      0,   0 },  // GL explosive
     {   60,    9,   1, 0,     0,      0,   0 },  // GL acid
@@ -913,8 +955,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    0,    1,   1, 0,     0,      0,   0 },  // knife (no damage)
     {    0,    1,   1, 0,     0,      0,   0 },  // handgun (no damage)
     {    0,    1,   1, 0,     0,      0,   0 },  // shotgun (no damage)
-    {    0,    1,   1, 0,     0,      0,   0 },  // python (no damage)
-    {    0,    1,   1, 0,     0,  -1500,   0 },  // magnum (no damage)
+    {    0,    1,   1, 0,     0,      0,   0 },  // python (DumDum, no damage)
+    {    0,    1,   1, 0,     0,  -1500,   0 },  // python (magnum, no damage)
     {    0, 1806,   1, 0,     0,  -1500,   0 },  // flamethrower (no damage)
     {    0,    0,   2, 0,     0,  -1500,   0 },  // GL explosive (no damage)
     {    0,    9,   1, 0,     0,  -1500,   0 },  // GL acid (no damage)
@@ -924,8 +966,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   10,    0,   1, 0,     0,      0,   0 },  // knife
     {   15,    1,   1, 0,     0,      0,   0 },  // handgun
     {   20,    1,   2, 0,     0,      0,   0 },  // shotgun
-    {   50,    1,   2, 0,     0,      0,   0 },  // python
-    {   40,    1,   2, 0,   150,  -2000,   0 },  // magnum
+    {   50,    1,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   40,    1,   2, 0,   150,  -2000,   0 },  // python (magnum)
     {   20, 1538,   1, 0,   150,  -2000,   0 },  // flamethrower
     {   35,    2,   2, 0,   150,  -2000,   0 },  // GL explosive
     {   35,    2,   1, 0,   150,  -2000,   0 },  // GL acid
@@ -935,8 +977,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   15, 2048,   1, 0,     0,      0,   0 },  // knife
     {   18,    1,   1, 0,     0,      0,   0 },  // handgun
     {    5,    1,   2, 0,     0,      0,   0 },  // shotgun
-    {   40,    1,   2, 0,     0,      0,   0 },  // python
-    {   60,    1,   2, 0,     0,      0,   0 },  // magnum
+    {   40,    1,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   60,    1,   2, 0,     0,      0,   0 },  // python (magnum)
     {   20, 1794,   1, 0,     0,      0,   0 },  // flamethrower
     {   60,    2,   2, 0,     0,      0,   0 },  // GL explosive
     {  120,    2,   1, 0,     0,      0,   0 },  // GL acid
@@ -946,8 +988,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    0,    1,   0, 0,     0,      0,   0 },  // knife (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // handgun (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // shotgun (no damage)
-    {    0,    1,   0, 0,     0,      0,   0 },  // python (no damage)
-    {    0,    1,   0, 0,     0,      0,   0 },  // magnum (no damage)
+    {    0,    1,   0, 0,     0,      0,   0 },  // python (DumDum, no damage)
+    {    0,    1,   0, 0,     0,      0,   0 },  // python (magnum, no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // flamethrower (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // GL explosive (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // GL acid (no damage)
@@ -957,8 +999,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    0,    1,   0, 0,     0,      0,   0 },  // knife (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // handgun (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // shotgun (no damage)
-    {    0,    1,   0, 0,     0,      0,   0 },  // python (no damage)
-    {    0,    1,   0, 0,     0,      0,   0 },  // magnum (no damage)
+    {    0,    1,   0, 0,     0,      0,   0 },  // python (DumDum, no damage)
+    {    0,    1,   0, 0,     0,      0,   0 },  // python (magnum, no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // flamethrower (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // GL explosive (no damage)
     {    0,    1,   0, 0,     0,      0,   0 },  // GL acid (no damage)
@@ -968,8 +1010,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   10,    0,   1, 0,     0,      0,   0 },  // knife
     {   15,    1,   1, 0,     0,      0,   0 },  // handgun
     {   20,    1,   2, 0,     0,      0,   0 },  // shotgun
-    {   50,    1,   2, 0,     0,      0,   0 },  // python
-    {   40,    1,   2, 0,   150,  -2000,   0 },  // magnum
+    {   50,    1,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   40,    1,   2, 0,   150,  -2000,   0 },  // python (magnum)
     {   20, 1538,   1, 0,   150,  -2000,   0 },  // flamethrower
     {   35,    2,   2, 0,   150,  -2000,   0 },  // GL explosive
     {   35,    2,   1, 0,   150,  -2000,   0 },  // GL acid
@@ -979,8 +1021,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    8,    0,   1, 0,   100,  -2620,   0 },  // knife
     {    9,  256,   1, 0,   100,  -1500,   0 },  // handgun
     {   20,    4,   2, 0,   100,  -2620,   0 },  // shotgun
-    {   50,    4,   2, 0,   100,  -2620,   0 },  // python
-    {   60,    4,   2, 0,   150,  -2500,   0 },  // magnum
+    {   50,    4,   2, 0,   100,  -2620,   0 },  // python (DumDum)
+    {   60,    4,   2, 0,   150,  -2500,   0 },  // python (magnum)
     {   20, 1550,   1, 0,   150,  -1620,   0 },  // flamethrower
     {  201,    0,   2, 0,   150,  -1520,   0 },  // GL explosive
     {   70,    9,   1, 0,   150,  -1500,   0 },  // GL acid
@@ -990,8 +1032,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {   15, 2048,   1, 0,     0,      0,   0 },  // knife
     {   18,    1,   1, 0,     0,      0,   0 },  // handgun
     {   15,    1,   2, 0,     0,      0,   0 },  // shotgun
-    {   40,    1,   2, 0,     0,      0,   0 },  // python
-    {   60,    1,   2, 0,     0,      0,   0 },  // magnum
+    {   40,    1,   2, 0,     0,      0,   0 },  // python (DumDum)
+    {   60,    1,   2, 0,     0,      0,   0 },  // python (magnum)
     {   20, 1794,   1, 0,     0,      0,   0 },  // flamethrower
     {   60,    2,   2, 0,     0,      0,   0 },  // GL explosive
     {  120,    2,   1, 0,     0,      0,   0 },  // GL acid
@@ -1001,8 +1043,8 @@ WeaponHitRecordSecondRun g_weaponHitRecordsSecondRun[200] = {
     {    6,    1,   1, 0,     0,      0,   0 },  // knife (burns it)
     {    0,    1,   1, 0,     0,      0,   0 },  // handgun (no damage)
     {    0,    1,   2, 0,     0,      0,   0 },  // shotgun (no damage)
-    {    0,    1,   2, 0,     0,      0,   0 },  // python (no damage)
-    {    0,    1,   2, 0,     0,      0,   0 },  // magnum (no damage)
+    {    0,    1,   2, 0,     0,      0,   0 },  // python (DumDum, no damage)
+    {    0,    1,   2, 0,     0,      0,   0 },  // python (magnum, no damage)
     {    2, 1794,   1, 0,     0,      0,   0 },  // flamethrower (burns it)
     {   10,    2,   2, 0,     0,      0,   0 },  // GL explosive (burns it)
     {   20,    2,   1, 0,     0,      0,   0 },  // GL acid (burns it)
@@ -1121,12 +1163,28 @@ static void enemy_hit_reaction_blood(Entity* enemy)
 // head off (instant kill + death event + head explosion effects)
 static void enemy_hit_reaction_zombie(Entity* enemy)
 {
+    // The guaranteed head-explode: the shotgun inside 3000 units with the aim
+    // off level, and weapon IDs 4 and 5 - the Colt Python, and in a DC
+    // session the Beretta M92FS custom that shares slot 4 - on ANY level-aim
+    // hit, whatever the enemy's health. This is the retail Python's signature
+    // and it is why the DC's custom Beretta one-shots every standing zombie.
+    //
+    // The DC adds exactly one exception, and only in ADVANCED: stage 6 Mansion 
+    // Kitchen is excluded (SLUS_005.51 0x80013938, testing g_status_flags 0x20000
+    // and then the two bytes at 0x800c8660/61 against 6 and 0x1C - the same
+    // g_stageId/g_roomId pair FUN_80043fb4, the arrange-file lookup, reads).
+    // Everything else about the block is unchanged from the USA build.
+    const int dcHeadExplodeSuppressed =
+        g_bDcMode && (g_main_state_flags2 & MSF2_DC_ADVANCED) != 0
+        && g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_MANSION_KITCHEN;
+
     if (g_weaponHitEnemyType != ENEMY_CERBERUS) {
-        if (((g_scaled_down_dist == 2 && g_playerDisplacement < 3000)
-             && (g_playerEntityPointer.flags & 0xC0) != 0)
-            || ((g_scaled_down_dist == 3 || g_scaled_down_dist == 4)
-                && (g_playerEntityPointer.flags & 0x40) != 0)) {
-            enemy->health = 0xfed4;    // -300: instant kill
+        if ((((g_scaled_down_dist == 2 && g_playerDisplacement < 3000)
+              && (g_playerEntityPointer.flags & 0xC0) != 0)
+             || ((g_scaled_down_dist == 3 || g_scaled_down_dist == 4)
+                 && (g_playerEntityPointer.flags & 0x40) != 0))
+            && !dcHeadExplodeSuppressed) {
+            enemy->health = -300;    // instant kill
             // 0x0043d0c5-0x0043d10c: the original swaps ENTITY to the hit enemy
             // for these three calls and restores it before the billboards.
             // joint_setup_attack_effect reads ENTITY->id for the effect size and
@@ -1159,6 +1217,10 @@ static void enemy_hit_reaction_zombie(Entity* enemy)
             && (g_playerPosScratch.y = -600, (enemy->behavior_flags & 2) != 0)) {
             g_playerPosScratch.y = -500;
         }
+    }
+
+    if (g_bDcMode && (g_main_state_flags2 & MSF2_ATTRACT_DEMO) != 0) {
+        enemy->health = (short)(enemy->health + 1);
     }
 
     // Jill + handgun: extra chip damage (cerberus takes a fixed -7)

@@ -108,6 +108,7 @@ Code-verified bits have named constants in
 | Bit | Meaning | Set by | Read by |
 |---|---|---|---|
 | `0x7B` | **Second playthrough** ("hard mode"). Set once a run is cleared; every enemy AI (Cerberus, Chimera, Crow, Hunter, Neptune, Plant 42, Tyrant, Wasp, WebSpinner, Yawn, Zombie), the `WeaponDamage` hit tables and the endings select their second-playthrough variant from it | `EndingScreen` after the clear | all of the above |
+| `0x7A` | **Director's Cut: ADVANCED cleared with the best ending** (ending 6/7). The next cycle's Colt Python becomes unlimited — it refills to 6 when empty, draws the infinity glyph and drops the empty click. DC mode only; the USA build never sets or reads it | `EndingScreen` (DC mode only) | `dc_is_infinite_colt_python` (`PlayerAnimations`, `MainMenu`) |
 | `0x7D` | Fade/menu latch — picks the fade-in counter at gameplay entry; cleared when the menu closes | menu flow | `game_loop` |
 | `0x00` | Scenario stage-variant bit — stage changes remap stages 0/1 to their `+5` variants while set (uses the heavier `init_room` path) | room SCD scripts / save data (never ported code) | `DoorSystem` stage transition, item-menu use check |
 

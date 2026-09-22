@@ -444,6 +444,126 @@ extern DWORD         g_MainStateFlagBank[2];           // 0x00be41c0
 #define MSF2_ROOM_RESET_MASK         0x0000000Fu  // room_set clears the low nibble, same as msf
 #define MSF2_RESET_KEEP_MASK         0x20080000u  // what game_start / char select / F9 preserve
 
+// --- Content mode (port-added steering globals; no original address) ---
+// g_GameMode mirrors [Game] Mode in config.ini and is the SINGLE switch that
+// says which release this session is running. It drives two things that must
+// never disagree: the code branches below, and the asset overlay folder that
+// ResolveAssetRoot searches ahead of the base tree (SetAssetMode in
+// system/AssetPath.h). Having one knob for both is deliberate - two settings
+// would let the executable boot DC code against OG assets, which looks like a
+// content bug and is not one.
+//
+// GAME_MODE_OG is the PC release, which is the original PS1 game's content; it
+// uses no overlay at all, so every path resolves exactly as it did before modes
+// existed. SATURN and NDS are placeholders: their names reserve the folder and
+// the enum value, and neither has any code behind it yet.
+#define GAME_MODE_OG                 0   // PC / original PS1 content (default)
+#define GAME_MODE_DC                 1   // Director's Cut (SLUS_005.51)
+#define GAME_MODE_SATURN             2   // reserved, not implemented
+#define GAME_MODE_NDS                3   // reserved, not implemented
+
+extern int           g_GameMode;               // [Game] Mode -> GAME_MODE_*
+
+// Every "are we in Director's Cut mode" test in the port. Deliberately a macro
+// over g_GameMode rather than a second global: there is one stored value, so
+// the two cannot drift, and an accidental assignment fails to compile.
+#define g_bDcMode                    (g_GameMode == GAME_MODE_DC)
+
+// g_DcDifficulty is the DC title screen's choice (PS1 g_abDcGameMode
+// 0x800c8693); it is also stored in the save block, so a DC save reloads as its
+// own mode.
+//
+// The PS1 carries the mode in three otherwise-free g_status_flags bits, and the
+// DC's repurposed RDT scripts test them (190 sites test ADVANCED, 3 TRAINING)
+// while the health and weapon-damage code selects on them. The port derives the
+// same bits from g_DcDifficulty with dc_apply_mode_flags() so the replaced RDTs
+// take the right branch. See docs/PSX_DC_TITLE_OVERLAY.md.
+#define DC_DIFFICULTY_STANDARD       0           // the original game
+#define DC_DIFFICULTY_TRAINING       1           // more starting health
+#define DC_DIFFICULTY_ADVANCED       2           // Arrange mode (STAGE8-E)
+#define DC_DIFFICULTY_ADVANCED_HOLD  3           // Same arrange mode, but with double ammo (selected by holding right)
+#define MSF2_DC_ADVANCED_HOLD        0x00010000u // bit 16 - ADVANCED* (double ammo)
+#define MSF2_DC_ADVANCED             0x00020000u // bit 17 - ADVANCED
+#define MSF2_DC_TRAINING             0x00040000u // bit 18 - TRAINING
+#define MSF2_DC_MODE_MASK            0x00070000u // all three
+
+extern int           g_DcDifficulty;           // DC_DIFFICULTY_*
+
+// The game's random stream, mode-aware (Globals.cpp). The PC release recorded
+// its demo reels against the CRT rand; the PS1 DC uses its own LCG, so DC
+// sessions must roll the PS1 sequence for demo playback to line up. Every
+// game-code call site goes through the rand()/srand() macros below. C linkage:
+// the macros also rewrite the CRT's own extern "C" rand/srand declarations,
+// so the port functions must match or the link fails.
+extern "C" {
+void re1_srand(unsigned int seed);
+int  re1_rand(void);
+}
+#define rand  re1_rand
+#define srand re1_srand
+
+// --- Arrange stages (Director's Cut STAGE8-E) -----------------------------
+// Stage ids 0-6 are the base game's seven stages (STAGE1-7). The DC adds seven
+// ARRANGE stages, STAGE8-E = ids 7-13, and each is a re-dressed copy of the
+// base stage seven ids below it: arrange stage S holds the same physical rooms
+// as base stage S-7. Verified against the shipped RDTs - 62 of the 66 arrange
+// rooms carry a room id that also exists in their base stage, and the other
+// four differ only in the character-variant digit, which is not part of
+// g_roomId.
+//
+// So every table indexed by the stage - BGM state, room effect sprites, room
+// sprites, camera light index, fade-sprite params, voice offsets, enemy sound
+// banks - is read with the BASE row and none of them has to grow. That matters
+// for more than tidiness: g_roomBgmState lives inside g_BioCard, so widening it
+// would move every field after it and change the save format.
+//
+// FILE PATHS keep the raw g_stageId, because the arrange stages ship their own
+// RDTs and backgrounds under STAGE8-E - with one exception, which caught the
+// first pass out. STAGED and STAGEE carry NO backgrounds at all: they are the
+// arrange versions of the mansion-revisit stages and reuse STAGE8/STAGE9's art,
+// exactly as base stages 6 and 7 reuse stage 1 and 2's. Their room ids match
+// their source stage's exactly, so the existing `g_stageId > 4` revisit fold is
+// still the right rule on a path - it just has to see the FOLDED row, so that
+// it fires for base 5/6 and arrange 12/13 and not for arrange 7-11.
+//
+// In short, every one of these sites - row or path - wants get_stage_id().
+// What differs is the arithmetic afterwards: the original folds a path by
+// subtracting 5 from the stage CHARACTER, which only works inside the run of
+// decimal digits, so an arrange stage has to recompute from the id instead.
+// See load_room_bg in Room.cpp.
+//
+// get_stage_id() is the identity for stages 0-6, so nothing changes with
+// Mode=OG.
+#define STAGE_ARRANGE_FIRST  7   // first DC arrange stage id (STAGE8)
+#define STAGE_COUNT_BASE     7   // STAGE1-7
+
+// A macro rather than an inline function because g_stageId is itself a macro
+// over g_BioCard, which is declared further down this header. It reads the
+// field twice, which is safe - it is a plain byte with no side effects.
+#define get_stage_id() STAGE_DATA_ROW_OF(g_stageId)
+
+// The same fold applied to a stage id that is not g_stageId - the one the FILE
+// paths use, which in ADVANCED can be the arrange twin of the stage the game
+// thinks it is in (room_file_stage(), src/game/dc/ArrangeStages.h).
+#define STAGE_DATA_ROW_OF(s) \
+    ((unsigned int)(s) >= STAGE_ARRANGE_FIRST \
+        ? (unsigned int)(s) - STAGE_ARRANGE_FIRST \
+        : (unsigned int)(s))
+
+// Set the DC mode bits in g_main_state_flags2 from g_DcDifficulty. Clears them
+// first, so it is safe on every game start (they are not in
+// MSF2_RESET_KEEP_MASK, so a stale value must not leak into a non-DC game).
+// GameStart.cpp.
+void dc_apply_mode_flags(void);
+
+// Swap in the Director's Cut item tables (GameStart.cpp). No-op when
+// g_bDcMode is off.
+void dc_apply_item_tables(void);
+
+// Install the Director's Cut's one zombie dispatch-table edit - the extra entry
+// that lands on behaviour 11 (Zombie.cpp). No-op when g_bDcMode is off.
+void dc_apply_zombie_tables(void);
+
 extern WORD          g_message_flags;                  // 0x00bebcc0
 
 // Message display system
@@ -547,7 +667,7 @@ int debug_menu_overlay(void);                     // DebugMenu.cpp - F1 overlay;
 void DebugRoomChange_ApplyPendingPlacement(void); // DebugMenu.cpp - post room_transition_load placement
 extern int           g_debugLoadSlot;             // quick access load: selected slot index (0-7)
 void DebugQuick_SaveSlot(int slot);               // DebugSaveLoad.cpp - write a full save to savedat<slot+1>.dat
-void DebugQuick_LoadSlot(int slot);               // DebugSaveLoad.cpp - restore savedat<slot+1>.dat and arm the continue path
+int  DebugQuick_LoadSlot(int slot);               // DebugSaveLoad.cpp - restore savedat<slot+1>.dat and arm the continue path; 0 = refused
 
 // Room interaction state (0x00be9616-0x00be9618, adjacent to g_eventItemUsedFlag)
 extern unsigned char g_typewriter_state;               // 0x00be9616 - typewriter save-flow state machine
@@ -706,7 +826,9 @@ extern DWORD         g_ItemSlotsBitmask;               // 0x00d22734
 extern unsigned char g_defaultItemSlot;                // 0x00be41e0 [.gwipe start marker]
 extern unsigned char DAT_00be41e1;                     // 0x00be41e1 [.gwipe]
 extern unsigned char DAT_00be9614;                     // 0x00be9614 - death/timeout state machine byte [.gwipe]
-extern const unsigned char g_ItemImageLookupTable[459];// 0x004bd81d
+// Not const: dc_apply_item_tables() replaces these with the Director's Cut
+// tables when g_bDcMode is on (see ItemTables.cpp).
+extern unsigned char g_ItemImageLookupTable[459];      // 0x004bd81d
 
 // Active character item slots pointer (points to g_ItemsSlots or g_RebeccaItemSlots)
 extern void*         g_ItemSlotsPointer;               // 0x00d22768
@@ -962,13 +1084,27 @@ extern const unsigned char* g_UnknownItemNamePointers[16]; // 0x004bf260
 // [112..127] overlap between the two tables that the originals have.
 extern const unsigned char* g_ItemNamePointersJpn[128];    // 0x004cd388 (JPN)
 extern const unsigned char* g_UnknownItemNamePointersJpn[16]; // 0x004cd548 (JPN)
-extern const unsigned char g_ItemModelFileNames[75][8]; // 0x004bd348 (75 x 8-byte names)
+// Records in g_ItemModelFileNames, i.e. the highest usable item image type + 1.
+// Byte 0 of an item's g_ItemImageLookupTable record indexes this table, and the
+// DC's lookup reaches 0x4B (see ItemModels.h), so a DC image type at or past
+// this count must be overridden and never read straight from the table.
+#define ITEM_MODEL_NAME_COUNT 75
+extern const unsigned char g_ItemModelFileNames[ITEM_MODEL_NAME_COUNT][8]; // 0x004bd348 (75 x 8-byte names)
 extern const unsigned char g_ItemModelFileNameING[8];  // 0x004bd5a0
 extern const unsigned char g_ItemModelFileNameMINI[8]; // 0x004bd5a8
-extern const unsigned char* g_ItemCombinePtrs[35];     // 0x004bd768
-extern const unsigned char g_ItemCombineData[440];     // 0x004bd5b0
-extern const unsigned char g_ItemMaxQty[448];          // 0x004bd81c
-extern const unsigned char g_ItemImageTypeTable[35];   // 0x004bd7f8
+// Sized for the Director's Cut (38 entries / 454 bytes); the USA data fills the
+// first 35 / 440 and the spare tail stays zero. See dc_apply_item_tables().
+extern unsigned char* g_ItemCombinePtrs[38];           // 0x004bd768
+extern unsigned char g_ItemCombineData[454];           // 0x004bd5b0
+// Not const: dc_apply_item_tables() shifts the DC lookup into this when g_bDcMode
+// is on (the two tables overlap by one byte, as on the PS1).
+extern unsigned char g_ItemMaxQty[448];                // 0x004bd81c
+// Combine index -> the 1-based ITEM_MIX.PIX row holding that item's sprite, read
+// by menu_item_combine_refresh. Not const and sized for the DC (38 combine
+// entries, 0x8008E164): dc_apply_item_tables() copies the DC's table in, so a
+// combine into the assembled MOON CREST reloads the crest icon rather than
+// leaving the pre-combine half in place. The USA data fills the first 35.
+extern unsigned char g_ItemImageTypeTable[38];         // 0x004bd7f8
 extern const unsigned char g_ItemModelExtIVM[8];       // 0x004c29a0 ".ivm"
 extern const unsigned char g_ItemModelDir[24];         // 0x004c29a8 "./usa/item_m2/"
 extern const unsigned char g_ItemMixPixPath[32];       // 0x004b10d4
@@ -990,6 +1126,10 @@ extern unsigned char g_titleMode;                      // 0x00d22775
 extern unsigned char g_titleOptionsFading;             // 0x00d22776
 extern unsigned char g_titleSelectionId;               // 0x00d22774
 extern short         g_titleDemoTime;                  // 0x00d22788
+// Port-added (Director's Cut): frames the confirm button has been held on the
+// ADVANCED option - the PS1 overlay's g_titleHoldTimer (0x800e16ca), which the
+// PC build has no equivalent of because it has no submenu.
+extern unsigned char g_titleHoldTimer;
 extern short         g_titleTexturePageData[8];       // 0x00d22778 - per-selection tpage
 extern int           g_sceneRenderParam;               // 0x004d6300
 extern DWORD         g_titlePrimType;                  // 0x004d6398
@@ -1487,7 +1627,9 @@ extern int g_fixedPointPipeTranslation[3];   // 0x004c37b8: t0..t2
 // SECTION 17: Large data buffers
 // ============================================================================
 
-extern BYTE        g_ItemsImageBuffer[86400];        // 0x00bcb430 (.items section)
+// 0x00bcb430 - item sprite sheet (data\item_all.pix). Sized for the Director's
+// Cut's 76-row sheet (91200 B); the USA one is 72 rows (86400 B). See Globals.cpp.
+extern BYTE        g_ItemsImageBuffer[91200];        // 0x00bcb430
 
 
 // DAT_00be05b0 // 0x00be05b0

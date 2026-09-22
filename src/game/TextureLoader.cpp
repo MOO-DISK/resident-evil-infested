@@ -59,9 +59,38 @@ void LoadEffectTextureSheet(int slot, void* timData)
             DWORD r = ((clr >> 0)  & 0x1F) * 255 / 31;
             DWORD g = ((clr >> 5)  & 0x1F) * 255 / 31;
             // STP (bit 15) is NOT a per-texel alpha - the PC build has no such
-            // thing, only a black colour key. Translucency is per primitive; see
-            // the long note in the CLUT loop of LoadTexturePage.
-            DWORD a = (c == 0) ? 0x00 : 0xFF;
+            // thing. Translucency is per primitive; see the long note in the
+            // CLUT loop of LoadTexturePage.
+            //
+            // The key is the COLOUR, and it is 0x0000 EXACTLY - not the index,
+            // and not "black with the STP bit masked off". This is the PS1
+            // GPU's own rule for an opaque textured primitive: a texel of
+            // 0x0000 is not drawn, and every other value is, STP-black 0x8000
+            // included, which is how the art asks for a genuinely black texel.
+            //
+            // Both halves of that matter, and each one was a visible bug:
+            //
+            //  - Keying on the INDEX (`c == 0`) is right for every asset the PC
+            //    release ships - all 872 objspr mask pages have exactly one
+            //    black entry and it is index 0 - but not for the Director's
+            //    Cut's arrange rooms, whose mask TIMs live inside the RDT and
+            //    put the cut-out on a different index: 0x88 in ROOM80B0 camera
+            //    1, 61.6% of the page, with index 0 unused. That field drew as
+            //    opaque black rectangles across the stairway. 256 of the 289
+            //    arrange mask cameras carry such an index.
+            //
+            //  - Keying on `(clr & 0x7FFF) == 0` then cut out the STP-black
+            //    entries too - another 4.3% of that same page, and 11.1% of
+            //    camera 3 - which is the banister's dark wood. The rail and
+            //    spindles turned into holes and stopped occluding the player.
+            //
+            // The PC's own CMarniDirect3D::CreateTextureHandle (0x0044c900)
+            // does mask the top bit off, because it tests the already-converted
+            // 24-bit colour. That is indistinguishable on PC art (no shipped
+            // page uses 0x8000) and wrong on PS1 art, so the GPU rule is the
+            // one to keep. Verified: against the original index-0 rule this
+            // changes not one texel in any of the 954 PC pages and sheets.
+            DWORD a = (clr == 0x0000) ? 0x00 : 0xFF;
             DWORD b = ((clr >> 10) & 0x1F) * 255 / 31;
             clutRGBA[c] = (a << 24) | (b << 16) | (g << 8) | r;
         }

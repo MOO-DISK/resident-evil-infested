@@ -2,6 +2,7 @@
 // Implements room_events_check and all direct dependencies.
 #include "../Globals.h"
 #include "../DebugPrint.h"
+#include "dc/Items.h"    // lockpick item id the DC moved to 0x0D
 #include <cstring>
 
 // Forward declaration
@@ -913,6 +914,10 @@ void room_event_item_pickup(void)
     if (itemId == ITEM_INK_RIBBONS) {
         quantity = 3;
     }
+    // DC TRAINING and ADVANCED* double the pick-up: the DC's IncludeCurrentItem
+    // (SLUS_005.51 0x8002ce28) shifts the record quantity left once for ammo and
+    // ink ribbons when the mode bits are set. The USA build has no such branch.
+    quantity = dc_item_pickup_quantity(g_selectedItemId, quantity);
 
     // if ammo or ink ribbon
     if (((ITEM_ROCKET_LAUNCHER < g_selectedItemId) && (g_selectedItemId < ITEM_EMPTY_BOTTLE)) ||
@@ -1073,7 +1078,8 @@ void check_desk_state(void)
         // global (has_desk_key @ 0x004d6eb4); the call itself is kept for its
         // g_pCurrentItemSlot side effect.
         (void)get_item_slot(ITEM_DESK_KEY);
-        g_selectedItemId = Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_HAS_LOCKPICK) ? ITEM_LOCK_PICK : ITEM_DESK_KEY;
+        g_selectedItemId = Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_HAS_LOCKPICK) ?
+                           lockpick_item_id() : (unsigned char)ITEM_DESK_KEY;
         set_message_display(0xd9, 0xff);
         g_desk_check_state = 3;
         return;
@@ -1083,7 +1089,8 @@ void check_desk_state(void)
                 // "Yes": unlock and show the key-turned message.
                 Flg_on((int)g_LocksFlags, *(unsigned short*)((char*)g_pRoomActionEntry + 2));
                 play_sfx(2, 0x26, 0);
-                g_selectedItemId = Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_HAS_LOCKPICK) ? ITEM_LOCK_PICK : ITEM_DESK_KEY;
+                g_selectedItemId = Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_HAS_LOCKPICK) ?
+                                   lockpick_item_id() : (unsigned char)ITEM_DESK_KEY;
                 set_message_display(0xc3, 0xff);
             }
             g_desk_check_state = 0;

@@ -409,6 +409,32 @@ void FlushTmdObjects(void)
         float nearZ = 2.0f * (float)g_sceneRenderParam;
         if (nearZ < TMD_NEAR_Z) nearZ = TMD_NEAR_Z;   // fov never read / zero
 
+        // Is the original's OWN per-texel path aimed at something this frame?
+        // FUN_00484c40 knocks the STP texels out of a COPY of the page and
+        // FUN_00484dc0 draws the model through g_renderStateTMD unblended - a
+        // whole mechanism with exactly ONE call site in the game, the
+        // aquarium's tank shell (cmd_omodel_set, MANSION_2F / ROOM_STUDY_2F
+        // slot 0).
+        //
+        // What the original gives that object is an UNBLENDED draw, so the
+        // shell's authored look is full-bright (its USA counterpart, which has
+        // no ABE prims at all, renders exactly that way in Mode=OG). Relighting
+        // the shell through the generic twin therefore fights the original:
+        // measured, it came out dark brown against the PS1's cream.
+        //
+        // The TWIN itself must stay, though, and this is the important half: in
+        // this port that render-state pass is not covering the shell at all
+        // (suppressing the twin left the tank fully see-through), so the twin's
+        // opaque copy is the only thing making the DC shell solid. Without it,
+        // the shell's own ABE blend at +0x68 = 0.5 is all there is.
+        bool renderStateModelActive = false;
+        for (int i = 0; i < queued; i++) {
+            if (g_tmdQueue[i].slot == g_renderStateTMD) {
+                renderStateModelActive = true;
+                break;
+            }
+        }
+
         // Triangles are collected across every queued object and submitted only
         // after a per-triangle depth sort. The original inserts each TMD object
         // into the ordering table at a single depth and lets the D3D depth
@@ -502,6 +528,46 @@ void FlushTmdObjects(void)
                 float bgWeight = *(float*)(e->objData + 0x68);
                 if (bgWeight > 0.0f && bgWeight <= 1.0f) triAlpha = 1.0f - bgWeight;
             }
+
+            // Per-texel semi-transparency. The PS1 blends a texel only when its
+            // palette entry carries the STP bit, so a model whose primitives are
+            // all ABE-flagged still has opaque parts - room 107's display case
+            // is 80 ABE prims over a palette with just two STP entries, so its
+            // glass top blends and its wooden frame must not. Blending the whole
+            // record at `triAlpha` (what this did) washes the frame out.
+            //
+            // MarniStpKnockoutTwin hands back a copy of the same texture holding
+            // only the opaque texels, so the geometry can be emitted a second
+            // time at full alpha: that pass covers the blended one wherever the
+            // texture is opaque, leaving the blend visible only where the PS1
+            // would have blended it. Both passes carry the same vertices and so
+            // a bit-identical depth; the LESS_EQUAL depth test lets the opaque
+            // copy through because the blended one wrote no depth, and the sort
+            // keeps each opaque copy immediately after the blended copy it
+            // covers - the ordering matters where a translucent part of the
+            // model sits in front of an opaque one, as the case's glass top
+            // does. Room 107's display case is the model this exists for.
+            MarniHandle knockTex = MARNI_NULL_HANDLE;
+            if (triAlpha < 0.999f)
+                knockTex = MarniStpKnockoutTwin((MarniHandle)tex);
+
+            // The same ABE path also forces the model full-bright - bit 2 IS the
+            // renderer's unlit path (0x00446e99 skips the light transform,
+            // 0x00447043 skips the accumulation), and CreateTmdObjectInternal ORs
+            // it into all 32 records of a transparent TMD at 0x00483c43. The PS1
+            // shades those polygons normally.
+            //
+            // Where the knock-out pass exists the model is a lit object with a
+            // glass insert - the case in rooms 107/108, whose TMD carries 41
+            // gouraud normals that nothing was using - so follow the PS1 and
+            // shade it. Doors and the uniformly-blended washes are unaffected:
+            // a door's +0x68 is 0 and an all-STP palette gets no twin, so
+            // neither reaches here, and bit 2 keeps its original meaning for
+            // them - as it does for the tank shell, whose unblended
+            // render-state draw means full-bright is the authored look (see the
+            // note on renderStateModelActive above).
+            if (knockTex != MARNI_NULL_HANDLE && !renderStateModelActive)
+                unlit = false;
 
             // Transform + project + light every vertex
             // (heap-allocate per object; vertex counts are small)
@@ -662,6 +728,38 @@ void FlushTmdObjects(void)
                     t3->otDepth = e->depth;
                     g_tmdTriOrder[collected] = collected;
                     collected++;
+
+                    // Second, opaque pass over the same geometry with the STP
+                    // texels knocked out (see knockTex above). It carries the
+                    // same depth and the same otDepth as its blended copy, so
+                    // the sort's `a < b` tail places it immediately after it -
+                    // nothing else can fall between two adjacent collection
+                    // indices.
+                    //
+                    // `alpha` is the DEPTH-WRITE class, not the opacity: the VS
+                    // takes the opacity from each vertex's own alpha, and the
+                    // two are deliberately split here. This copy must inherit
+                    // its blended partner's class (`triAlpha`, always < 1 on
+                    // this path) and write NO depth. It is a colour-only overlay
+                    // of geometry that is already in the buffer at the same Z -
+                    // giving it a depth footprint would let a model that never
+                    // wrote depth start occluding whatever the painter walk
+                    // reaches later, and the interior of a case this size is
+                    // exactly where a mis-ordered triangle would then punch a
+                    // hole instead of just painting in the wrong order.
+                    if (knockTex != MARNI_NULL_HANDLE &&
+                        collected < TMD_MAX_TRIS_COLLECT) {
+                        TmdTri* k3 = &g_tmdTris[collected];
+                        memcpy(k3->v, t3->v, sizeof(k3->v));
+                        for (int v = 0; v < 3; v++)
+                            k3->v[v * TMD_VERT_FLOATS + 9] = 1.0f;
+                        k3->depth   = t3->depth;
+                        k3->tex     = (DWORD)knockTex;
+                        k3->alpha   = triAlpha;
+                        k3->otDepth = e->depth;
+                        g_tmdTriOrder[collected] = collected;
+                        collected++;
+                    }
                 }
             }
 
@@ -853,7 +951,7 @@ void render_entity(Entity* ent)
             if (g_animFrameIdSave == 0) {
                 if ((jointFlags & 0x74) != 0) goto checkSwitchZone;
 doRender:
-                if (((entBytes[1] != 18) || (g_stageId != STAGE_MANSION_RETURN_2F)) ||
+                if (((entBytes[1] != 18) || (get_stage_id() != STAGE_MANSION_RETURN_2F)) ||
                     ((g_roomId != ROOM_LESSON_ROOM) || (g_roomCameraId != 3))) {
                     g_entityJointPosX = pJoint->t[0];
                     SetLightMatrix(&g_matrixScratch);

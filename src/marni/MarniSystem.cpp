@@ -273,6 +273,87 @@ static int VTable_HandleWindowMessage(void* self, HWND hwnd, UINT msg,
     }
 }
 
+// ============================================================================
+// STP knock-out twins — per-texel semi-transparency for TMD models.
+//
+// The PS1 GPU blends PER TEXEL: on a polygon with ABE set, a texel whose
+// palette entry carries the STP bit blends with the framebuffer, and a texel
+// whose entry does not carry it draws opaque. The DC/PS1 room models rely on
+// this - room 107's display case is 80 ABE-flagged primitives over a palette
+// where only entries 63 and 66 are STP, so its glass top blends and its wooden
+// frame stays solid. This build has no per-texel mode, and it cannot use the
+// item viewer's trick of knocking the STP texels out of the page itself
+// (FUN_004842c0 / ItemStpPage_KnockOutStpTexels, MainMenu.cpp): a model page is
+// shared, and every other primitive drawn from it wants those texels intact.
+//
+// So the knock-out becomes a SECOND TEXTURE rather than a second page. For a
+// material whose palette marks some - but not most - of its used texels STP,
+// [6] CreateTextureHandle also builds a copy of the texture holding only the
+// opaque texels, every STP texel forced to palette index 0 - which the
+// conversion below already maps to alpha 0, exactly as the item page's knock-out
+// relies on. Both bounds matter:
+//
+//   no STP texels at all      nothing to knock out, and nothing to blend;
+//   ALL used texels STP       the whole primitive blends uniformly, which the
+//                             record's blend weight (+0x68) already reproduces
+//                             and whose no-depth-write it depends on. The twin
+//                             would be an EMPTY copy that the opaque pass would
+//                             then depth-write on behalf of a surface that had
+//                             never written depth - the flooded-room water
+//                             regression in reverse. (Scanned every shipped
+//                             RDT: the all-STP models are ROOM10D0/60D0/80D0/
+//                             D0D0 omodel[2] and ROOM7150 item[2], 32761 of
+//                             32768 texels STP, plus ROOM2050/7050 omodel[0] at
+//                             60%.)
+//
+// With both bounds the only model in the game that gains a pass is room 107's
+// display case and its counterparts in rooms 108/607/608/807/D07 - and the
+// aquarium shell in room 20A0, which already draws unblended through
+// g_renderStateTMD (FUN_00484c40's punched page), so its pixels do not move
+// either.
+//
+// FlushTmdObjects then draws a semi-transparent TMD object twice - the whole
+// model through the texture at its blend weight, then the same geometry through
+// this twin at full alpha. The opaque pass covers the blended one everywhere
+// the texture is opaque, so the blend survives only where the PS1 would have
+// blended: the arrangement FUN_004844c0 uses for the examine screen.
+//
+// Registration is by public handle, so a twin is destroyed with its source
+// texture in vtable[8]. The table is a heap array rather than .bss for the same
+// reason as g_tmdLight in TmdRenderer.cpp: a static this size shifts every
+// global that follows it in the link.
+// ============================================================================
+#define MARNI_HANDLE_MAX 2048            // == MarniDX.cpp's MARNI_MAX_TEXTURES
+static unsigned int* s_stpKnock = NULL;  // [MARNI_HANDLE_MAX], lazily allocated
+
+static void MarniStpKnock_Set(unsigned int src, unsigned int twin)
+{
+    if (src == 0 || src >= MARNI_HANDLE_MAX) return;
+    if (s_stpKnock == NULL) {
+        s_stpKnock = (unsigned int*)calloc(MARNI_HANDLE_MAX, sizeof(unsigned int));
+        if (s_stpKnock == NULL) return;
+    }
+    s_stpKnock[src] = twin;
+}
+
+// Detach the twin of `src` and return it (0 if none). The caller destroys it:
+// this file has no back-pointer from a handle to the MarniDX that owns it.
+static unsigned int MarniStpKnock_Take(unsigned int src)
+{
+    if (s_stpKnock == NULL || src == 0 || src >= MARNI_HANDLE_MAX) return 0;
+    unsigned int twin = s_stpKnock[src];
+    s_stpKnock[src] = 0;
+    return twin;
+}
+
+MarniHandle MarniStpKnockoutTwin(MarniHandle tex)
+{
+    if (s_stpKnock == NULL) return MARNI_NULL_HANDLE;
+    if ((unsigned int)tex == 0 || (unsigned int)tex >= MARNI_HANDLE_MAX)
+        return MARNI_NULL_HANDLE;
+    return (MarniHandle)s_stpKnock[(unsigned int)tex];
+}
+
 // [6] CreateTextureHandle — 0x0044c900
 // Converts a CMarniBits surface (PSX VRAM-format pixel data + RGB555 CLUT)
 // into a D3D11 texture and returns its MarniHandle (>= 1), exactly how the
@@ -350,6 +431,40 @@ static int VTable_CreateTextureHandle(void* self, void* texDesc,
         }
     }
 
+    // --- STP accounting for the knock-out twin (see the note above) ---
+    // Index-only. The colour conversion below is left alone and the twin is
+    // then built from the finished RGBA by clearing the alpha of the texels
+    // this marks, so the two can never disagree about a texel's colour.
+    const bool clutKeyed = (clut != NULL) && (bpp == 4 || bpp == 8);
+    int  stpTexels = 0, opaqueTexels = 0;
+    BYTE stpIndex[256];
+    memset(stpIndex, 0, sizeof(stpIndex));
+    if (clutKeyed) {
+        const int entries = (bpp == 4) ? 16 : 256;
+        for (int i = 0; i < entries; i++)
+            stpIndex[i] = (clut[i] & 0x8000) ? 1 : 0;
+        for (int y = 0; y < h; y++) {
+            const BYTE* row = base + (size_t)y * pitch;
+            if (bpp == 8) {
+                for (int x = 0; x < w; x++) {
+                    int idx = row[x];
+                    if (stpIndex[idx])   stpTexels++;
+                    else if (idx != 0)   opaqueTexels++;
+                }
+            }
+            else {
+                for (int x = 0; x < w; x += 2) {
+                    int lo = row[x >> 1] & 0x0F;
+                    int hi = (row[x >> 1] >> 4) & 0x0F;
+                    if (stpIndex[lo]) stpTexels++; else if (lo != 0) opaqueTexels++;
+                    if (x + 1 < w) {
+                        if (stpIndex[hi]) stpTexels++; else if (hi != 0) opaqueTexels++;
+                    }
+                }
+            }
+        }
+    }
+
     // Output is uploaded as DXGI_FORMAT_R8G8B8A8_UNORM, so each DWORD must be
     // 0xAABBGGRR - red in the lowest byte. PS1 15-bit source colour is
     // MBBBBBGGGGGRRRRR, i.e. red in bits 0-4. Packing 0xAARRGGBB here (the
@@ -392,9 +507,36 @@ static int VTable_CreateTextureHandle(void* self, void* texDesc,
     }
 
     MarniHandle tex = pD3D->m_pDX->CreateTexture(w, h, 32, rgba, NULL, NULL);
-    operator_delete(rgba);
+    if (tex == MARNI_NULL_HANDLE) { operator_delete(rgba); return 0; }
 
-    if (tex == MARNI_NULL_HANDLE) return 0;
+    // Knock-out twin - the same image with every STP texel made fully
+    // transparent, i.e. holding only the opaque texels. Built from the finished
+    // RGBA so the colours are identical by construction; only the alpha moves.
+    // Built only when the knock-out still carries MOST of the material, which
+    // is the glass-pane shape this emulates - see the note above.
+    if (clutKeyed && stpTexels > 0 && opaqueTexels > stpTexels) {
+        DWORD* knock = (DWORD*)operator_new((size_t)w * h * sizeof(DWORD));
+        if (knock != NULL) {
+            for (int y = 0; y < h; y++) {
+                const BYTE* row = base + (size_t)y * pitch;
+                for (int x = 0; x < w; x++) {
+                    int idx;
+                    if (bpp == 8)   idx = row[x];
+                    else if (x & 1) idx = (row[x >> 1] >> 4) & 0x0F;
+                    else            idx = row[x >> 1] & 0x0F;
+                    DWORD c = rgba[y * w + x];
+                    if (stpIndex[idx]) c &= 0x00FFFFFFu;   // alpha 0, colour kept
+                    knock[y * w + x] = c;
+                }
+            }
+            MarniHandle twin = pD3D->m_pDX->CreateTexture(w, h, 32, knock, NULL, NULL);
+            operator_delete(knock);
+            if (twin != MARNI_NULL_HANDLE)
+                MarniStpKnock_Set((unsigned int)tex, (unsigned int)twin);
+        }
+    }
+
+    operator_delete(rgba);
     if (outHandle) *(unsigned int*)outHandle = 1;
     return (int)tex;
 }
@@ -419,7 +561,14 @@ static int VTable_DeleteTextureHandle(void* self, int handle)
 {
     CMarniDirect3D* pD3D = (CMarniDirect3D*)self;
     if (!pD3D || !pD3D->m_pDX) return 1;
-    if (handle > 0) pD3D->m_pDX->DestroyTexture((MarniHandle)handle);
+    if (handle > 0) {
+        // The knock-out twin is not reachable from its source texture, so it
+        // has to die with it here. Without this its slot leaks AND a later
+        // texture allocated the same handle would inherit the stale twin.
+        unsigned int twin = MarniStpKnock_Take((unsigned int)handle);
+        if (twin != 0) pD3D->m_pDX->DestroyTexture((MarniHandle)twin);
+        pD3D->m_pDX->DestroyTexture((MarniHandle)handle);
+    }
     return 1;
 }
 

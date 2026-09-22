@@ -1,10 +1,13 @@
 // EntityModelLoader.cpp - Entity/player model and animation loading (decompiled)
 #include "../Globals.h"
+#include "../DebugPrint.h"   // dbg_printf
 #include "../marni/MarniSystem.h"
 #include "../marni/PSXTexture.h"
 #include "FileLoader.h"
 #include <cstdio>
 #include "../system/AssetPath.h"
+#include "dc/EntityModels.h"
+#include "dc/Items.h"        // DC_ITEM_BERETTA_CUSTOM
 
 // ============================================================================
 // Extern data declarations (not yet extracted to Globals.h)
@@ -480,9 +483,23 @@ void LoadEntityEMD(Entity* em, unsigned char entity_id)
         entity_id = (unsigned char)g_bCostumeVariant + 0x33;
     }
 
-    sprintf(FILE_PATH, "%s%s",
-            GAME_DATA_ROOT,
-            g_emdPathTable[(g_playerEntity.id & 1) * 53 + entity_id]);
+    // DC ADVANCED remaps the player and three cutscene NPCs onto its own
+    // outfit models, after the costume fixup exactly as the PS1 orders it.
+    if (g_bDcMode) {
+        entity_id = dc_emd_advanced_index(entity_id);
+    }
+
+    // The port's table is the OG's; in DC mode a handful of indices name a
+    // different file (dc/EntityModels.cpp). NULL = the table entry stands.
+    const char* emdPath = g_emdPathTable[(g_playerEntity.id & 1) * 53 + entity_id];
+    if (g_bDcMode) {
+        const char* dcPath = dc_emd_path(entity_id, (unsigned char)(g_playerEntity.id & 1));
+        if (dcPath != NULL) {
+            emdPath = dcPath;
+        }
+    }
+
+    sprintf(FILE_PATH, "%s%s", GAME_DATA_ROOT, emdPath);
     SetSpriteBufferFlag();
 
     unsigned int fileSize = LoadFile(FILE_PATH, g_loadDataDestPointer, 32);
@@ -490,6 +507,12 @@ void LoadEntityEMD(Entity* em, unsigned char entity_id)
 
     if ((g_main_state_flags2 & MSF2_COSTUME_VARIANT) != 0 && (unsigned int)g_bCostumeVariant - entity_id == -51) {
         entity_id = g_playerEntity.id & 1;
+    }
+
+    // The DC's post-load half of the same ADVANCED block: it can rewrite the
+    // entity's id, and does so before the id is read just below.
+    if (g_bDcMode) {
+        dc_emd_post_load(entity_id);
     }
 
     unsigned int* puVar2 = (unsigned int*)(((fileSize & 0xFFFFFFFC) - 0x14) + data_pointer);
@@ -577,9 +600,45 @@ void LoadEquippedWeaponAnimation(unsigned char weapon_id, unsigned char param_2,
         weapon_id = 0xd - (weapon_id == 0x6f);
     }
 
+    // The Director's Cut's ADVANCED handgun remap (PS1 0x80023e38):
+    //
+    //     if ((g_status_flags & 0x20000) && (player.id & 3) < 2
+    //         && (param_1 == 2 || param_1 == 4)) { param_1 = 0xc; equipped = 2; }
+    //
+    // In ADVANCED, for Chris and Jill, the plain Beretta (2) AND the Beretta
+    // M92FS custom (4) both load the custom's in-hand model - the DC's weapon
+    // table index 0xC, i.e. Players/W0F.EMW / W1F.EMW - and the equipped weapon
+    // id is forced to 2.
+    //
+    // That second half is the load-bearing part, and the port was missing it.
+    // equippedWeaponId feeds EVERY per-weapon lookup downstream, so leaving it
+    // at 4 sent the custom Beretta through weapon slot 3 - the USA's DumDum
+    // Python row: 50 damage instead of the handgun's 9, the Python's ejected
+    // case, the Python's fire frames, and the slot-3 guaranteed head-explode in
+    // enemy_hit_reaction_zombie, which killed every standing zombie outright.
+    // With the remap it is weapon 2 throughout, and the ONLY thing that makes
+    // it a custom Beretta is the ~1/8 roll in apply_weapon_damage that promotes
+    // weaponAdj 1 to slot 3 for a single shot. That roll is also why the remap
+    // has to exist: it tests weaponAdj == 1 under the same ADVANCED gate, and
+    // would be unreachable code if ADVANCED only ever held weapon 4.
+    //
+    // The PS1 substitutes model index 0xC and keeps using it for the rest of
+    // the function; the port names the file directly (the PC's index 0xC is a
+    // special weapon) and carries weapon_id 2 on, which leaves the remaining
+    // `weapon_id == 0` / `> 0xb` tests behaving exactly as the PS1's 0xC does.
+    const char* weaponModel = 0;
+    if (g_bDcMode && (g_main_state_flags2 & MSF2_DC_ADVANCED) != 0
+        && (g_playerEntity.id & 3) < 2
+        && (weapon_id == ITEM_BERETTA || weapon_id == DC_ITEM_BERETTA_CUSTOM)) {
+        weaponModel = dc_weapon_model_path(g_playerEntity.id & 3,
+                                           (unsigned char)DC_ITEM_BERETTA_CUSTOM);
+        weapon_id = ITEM_BERETTA;
+        g_playerEntity.equippedWeaponId = ITEM_BERETTA;
+    }
     sprintf(FILE_PATH, "%s%s",
             GAME_DATA_ROOT,
-            g_weaponPathTable[g_playerEntity.id & 3][weapon_id]);
+            weaponModel != 0 ? weaponModel
+                             : g_weaponPathTable[g_playerEntity.id & 3][weapon_id]);
     SetSpriteBufferFlag();
 
     unsigned int fileSize = LoadFile(FILE_PATH, (void*)anim_buffer, 32);

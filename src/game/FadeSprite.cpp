@@ -284,8 +284,8 @@ static const FadeSprParam g_FadeSprParams[20] = {
 // ============================================================================
 static unsigned int fade_spr_param_index(void)
 {
-    unsigned int stage = (unsigned int)g_stageId;
-    if (g_stageId > 4) {
+    unsigned int stage = get_stage_id();
+    if (stage > 4) {
         stage -= 5;
     }
     unsigned int i = ((unsigned int)g_roomId + stage * 0x20) * 8 + (unsigned int)g_roomCameraId;

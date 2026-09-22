@@ -137,7 +137,14 @@ LAB_00480c33:
                     // Title load flow (TitleScreen.cpp cases 2/3): the restored
                     // card carries 0x10000000 in g_main_state_flags, so
                     // InitializeGame's continue branch rebuilds the saved stage
-                    DebugQuick_LoadSlot(g_debugLoadSlot);
+                    //
+                    // Port-only: a refused slot (DC TRAINING/ADVANCED in OG
+                    // mode, or a vanished file) must NOT chain game_start - the
+                    // debug list already greys those out, this is the backstop.
+                    if (!DebugQuick_LoadSlot(g_debugLoadSlot)) {
+                        g_debugLoadScreenState = 0;
+                        break;
+                    }
                     g_loadSaveStateFlag = 0;
                     Game_timer = g_gameTimerSnapshot;
                     g_main_state_flags = (g_main_state_flags & ~MSF_SCREEN_MODE_MASK) | MSF_SCREEN_STANDALONE;

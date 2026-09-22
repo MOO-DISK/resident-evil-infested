@@ -41,14 +41,18 @@ sources for this repo:
 |---|---|---|
 | `ResidentEvil.exe` | USA PC release (1997 / GOG) | the primary source — every address, function and global already in this repo comes from it |
 | `Biohazard.exe` | Japanese MediaKite PC release | the features, text and data the USA build does not have; the JPN tables in `src/game/JpnTextTables.cpp` were generated from it |
+| `SLUS_001.70` | original PS1 USA release (1997) | PS1-side engine/format analysis; names were aligned to the PC decomp |
+| `SLUS_005.51` | PS1 Director's Cut (1997) | Arrange mode, new rooms/enemies/items and other DC-only data; functions/globals named from `SLUS_001.70`. See `docs/PSX_DIRECTORS_CUT_ANALYSIS.md` |
 
 - Query code through the MCP Ghidra server. **If the server is unavailable,
   stop and ask the user for help — do not guess code from memory.**
-- Addresses differ between the two programs. If an address does not match what
+- Addresses differ between the programs. If an address does not match what
   you expect, ask the user which program is currently loaded.
 - When you port something from `Biohazard.exe`, name the program in the comment
   so it is not mistaken for a USA address, e.g. `// 0x004912C0 (Biohazard.exe)`.
 - The entry point in the USA program is `main` at `0x00441350`.
+- The two PS1 builds are different compilations: their addresses do **not**
+  map by a constant offset. Use `tools/psx_align.py` for cross-build mapping.
 
 ## Reverse engineering rules
 
@@ -96,9 +100,14 @@ of guessed. Run them from the repo root.
 **Verifiers — run them after touching what they cover**
 - `verify_msg_encoding.py` — replicates the `STR()` `Encoded` constructor and compares the encoded global messages against the original bytes.
 - `verify_msg_fixes.py` — same idea for the fixed `STR()` sources, byte for byte.
+- `verify_dc_item_models.py` — cross-checks the Director's Cut item-view mapping (`ItemModels.cpp`) against the generated DC item lookup and the shipped `ITEM_M2` art, and checks `g_ItemsImageBuffer` covers the DC sprite sheet.
+- `verify_dc_entity_models.py` — the DC model table (`0x8008d03c`, via the Ghidra bridge) resolved to file names through the disc's ENEMY directory, entity id `0x16`'s handler read out of all 14 PS1 stage overlays, and the models `dc/EntityModels.cpp` names against the overlay.
+- `verify_dc_save_mode.py` — recomputes every `BioCardLayout` offset from the struct and checks it against each field's own comment, the DC mode byte → flag-bit mapping against the PS1 load path, and the overlay font's four CLUT rows against the base glyph block and the PS1 colour columns.
 
 **Asset and file inspection**
 - `dump_tim.py` — parse a PSX TIM and write a viewable PPM.
+- `dump_ivm.py` — parse an `.IVM` item view (TIM + TMD), render its texture page to a PNG and print both headers.
+- `dump_item_pix.py` — render rows of an item sprite sheet (`ITEM_ALL.PIX` / `Item_all_dc.pix`) through `STATUS.TIM`'s palette as a PNG grid.
 - `dump_esp_sprite.py` — decode a sprite region of an effspr TIM (pixels + CLUT, with the STP bit).
 - `pak_view.py` — view `.pak` background images (LZW → TIM → PNG/PPM).
 - `dump_room_masks.py` — per-camera room-mask (overlay) sprite tables from RDTs.

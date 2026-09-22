@@ -4,6 +4,7 @@
 #include "../marni/PSXTexture.h"
 #include "FileLoader.h"
 #include "SpriteRenderer.h"
+#include "dc/ItemDescriptions.h"
 #include "../system/AssetPath.h"
 #include <cstdio>
 
@@ -25,6 +26,8 @@ extern void check_camera_switch(int param);
 extern void display_room_camera_bg(void);
 extern void Room_SetupCollisionCallbacks(void);
 extern void Room_LoadEnemySoundBanks(void);
+
+#include "dc/ArrangeStages.h"   // room_file_stage()
 
 // Entity model loading functions from EntityModelLoader.cpp
 extern void LoadEntityEMD(Entity* em, unsigned char entity_id);
@@ -103,6 +106,28 @@ unsigned int set_message_display(unsigned short msg_id, unsigned short pause_gam
     return 0;
 }
 
+// DC + JPN description table. The Japanese release has no Director's Cut table
+// of its own, and the DC's is English, so in DC + JPN the DC's edits are
+// applied to the Japanese table instead: item 0x04 takes the Japanese Beretta
+// text (there is no JPN "custom edition" wording in the port's data) and the
+// two MOON CREST halves take the Japanese "nothing important" string, which is
+// exactly what the DC uses there. Built once, on first use.
+static unsigned char** dc_jpn_item_descriptions(void)
+{
+    static unsigned char* table[79];
+    static int built = 0;
+    if (!built) {
+        for (int i = 0; i < 79; ++i) {
+            table[i] = g_ItemDescriptionsJpn[i];
+        }
+        table[0x04 - 1] = g_ItemDescriptionsJpn[0x02 - 1];   // Beretta
+        table[0x31 - 1] = g_ItemDescriptionsJpn[0x1d - 1];   // Nothing important
+        table[0x32 - 1] = g_ItemDescriptionsJpn[0x1d - 1];   // Nothing important
+        built = 1;
+    }
+    return table;
+}
+
 // ============================================================================
 // set_item_description_message (0x00455730)
 // The item viewer's own message setter: shows the examine description of the
@@ -123,9 +148,22 @@ unsigned int set_item_description_message(unsigned short descIndex, unsigned sho
     }
 
     // The Japanese release keeps its own description table (0x004c9370, read
-    // by its set_item_description_message at 0x00491a40).
-    unsigned char** descriptions = (GetAssetVersion() != 0) ? g_ItemDescriptionsJpn
-                                                            : g_ItemDescriptions;
+    // by its set_item_description_message at 0x00491a40). The Director's Cut has
+    // its own too (SLUS_005.51 0x8008E9C4): item 0x04 reads "A beretta M92FS
+    // Automatic. / Custom edition." and the two MOON CREST halves read
+    // "Nothing important.".
+    //
+    // Its strings must use STR()'s DOUBLED parser escapes (see
+    // tools/gen_dc_item_descriptions.py); a single "\n" became raw 0x0A and hung
+    // the message renderer on 2026-09-14.
+    //
+    // The version picks the language first, so DC + JPN applies the DC's edits
+    // to the Japanese table rather than switching to the English one.
+    const int jpn = (GetAssetVersion() != 0);
+    unsigned char** descriptions = jpn
+        ? (g_bDcMode ? dc_jpn_item_descriptions() : g_ItemDescriptionsJpn)
+        : g_bDcMode ? g_dcItemDescriptions
+                    : g_ItemDescriptions;
 
     // The original indexes the table unchecked; the entries past the last item
     // are the zero padding that follows it, so an out-of-range id would set a
@@ -184,9 +222,13 @@ void init_room(void)
     g_AttractMode_RoomCameraId = 0x1f;
     g_BGM_STATE = 0xFF;
     g_loadDataDestPointer = g_DataBuffer;
-    g_StageDataPtr = (void*)g_StageVoiceOffsetTable[g_stageId];
-    // Set pointer to current stage's 32-room BGM state block (used by update_room_bgm)
-    g_RoomBgmStatePtr = &g_roomBgmState[g_stageId * 32];
+    // Both tables are indexed by the BASE stage row, so a DC arrange stage
+    // (id 7-13) shares its base stage's voice offsets and BGM state rather than
+    // running off the end of either. g_roomBgmState is 224 bytes inside
+    // g_BioCard, so an unfolded stage 7 would have written into the save block's
+    // next field. (Globals.h, get_stage_id)
+    g_StageDataPtr = (void*)g_StageVoiceOffsetTable[get_stage_id()];
+    g_RoomBgmStatePtr = &g_roomBgmState[get_stage_id() * 32];
 
     set_player_animations_functions();
 
@@ -351,6 +393,17 @@ void room_set(void)
                     HEALTH_BKP = g_playerEntity.health;
                     g_playerEntity.health = 88;
                     g_playerEntity.maxHealth = 88;
+                    if (g_bDcMode) {
+                        // DC room_set: Rebecca gets the mode's own health too
+                        // (PS1 0x8c / 0x40), health and max together.
+                        if (g_DcDifficulty == DC_DIFFICULTY_TRAINING) {
+                            g_playerEntity.health = 140;
+                            g_playerEntity.maxHealth = 140;
+                        } else if (g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+                            g_playerEntity.health = 64;
+                            g_playerEntity.maxHealth = 64;
+                        }
+                    }
                     g_RoomItemBackup = g_EquippedItemId;
                     g_playerEntity.healthStatusFlags = 0;
                     g_EquippedItemId = 0;
@@ -361,6 +414,17 @@ void room_set(void)
                     g_playerEntity.healthStatusFlags = (unsigned char)HEALTH_STATUS_BKP;
                     g_EquippedItemId = g_RoomItemBackup;
                     g_playerEntity.maxHealth = 140;
+                    if (g_bDcMode) {
+                        // Restore to the mode's max, not the stock 140. The DC
+                        // uses the flat per-mode value here (no character
+                        // adjust) exactly as the original does - only Chris's
+                        // scenario reaches the Rebecca swap.
+                        if (g_DcDifficulty == DC_DIFFICULTY_TRAINING) {
+                            g_playerEntity.maxHealth = 180;
+                        } else if (g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+                            g_playerEntity.maxHealth = 100;
+                        }
+                    }
                     g_ItemSlotsPointer = g_ItemsSlots;
                     g_RoomItemBackup = 0;
                 }
@@ -591,16 +655,44 @@ void LoadRoomRdt(void)
 
     // 0x00477da4-0x00477e02: Build RDT file path
     // Format: ./usa/stageX/roomXYYZ.rdt where X=stage, YY=room, Z=flag
+    //
+    // The stage digit is room_file_stage(), not g_stageId: in ADVANCED a room
+    // that has an arrange version loads it out of STAGE8-E instead (PS1
+    // 0x80043fb4, whose LoadRoomRdt calls it for exactly this). The identity
+    // otherwise, so OG and the other two difficulties build the path they
+    // always did.
+    const unsigned char fileStage = room_file_stage();
+
+    // The variant digit. The PC release ships a `...1` file for every room, so
+    // this build could always append the character bit and find something; the
+    // DC shares one file wherever the PS1 does and its own table says which
+    // (SLUS_005.51 0x80090f48, read by its LoadRoomRdt for exactly this). Jill
+    // entering arrange 2F asked for a ROOM9011 that is not on the disc.
+    int variant = (g_main_state_flags & MSF_CHAR_VARIANT) ? 1 : 0;
+    if (g_bDcMode && !dc_room_has_char_variant(fileStage, g_roomId)) {
+        variant = 0;
+    }
+
     sprintf(FILE_PATH, GAME_DATA_ROOT "stage%c\\room%c%c%c%c.rdt",
-            hexDigits[g_stageId + 1],
-            hexDigits[g_stageId + 1],
+            hexDigits[fileStage + 1],
+            hexDigits[fileStage + 1],
             hexDigits[g_roomId >> 4],
             hexDigits[g_roomId & 0xF],
-            hexDigits[(g_main_state_flags & MSF_CHAR_VARIANT) ? 1 : 0]);
+            hexDigits[variant]);
 
     SetSpriteBufferFlag();
 
-    LoadFile(FILE_PATH, g_RdtPointer, 1);
+    // A failed load leaves the buffer holding the PREVIOUS room, and everything
+    // below relocates pointers through it: counts come out of stale bytes and
+    // the omodel walk runs off into unmapped memory, which is the access
+    // violation a missing RDT produced rather than a clean error. The original
+    // never meets one; an overlay can (§0 of the DC port plan calls a
+    // half-populated mode tree out as a hazard), so it is checked here.
+    if (LoadFile(FILE_PATH, g_RdtPointer, 1) == (size_t)-1) {
+        dbg_printf("[room] %s could not be loaded - keeping the previous room's"
+                   " RDT rather than relocating through it\n", FILE_PATH);
+        return;
+    }
 
     // 0x00477e2a-0x00477e46: Resolve camera pointers
     // Each camera has 2 relative pointer fields (mask_pointer, tim_mask_pointer)

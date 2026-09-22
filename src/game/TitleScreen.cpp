@@ -8,6 +8,7 @@
 #include "SFXIds.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>          // memcpy, for the DC title sheet assembly
 #include "../system/AssetPath.h"
 
 extern void logos_state(void);
@@ -87,6 +88,99 @@ void title_setup_texture_pages(int slot, int mode)
 
 // ============================================================================
 // init_title_screen (0x004306e0)
+
+// ============================================================================
+// Director's Cut title option sheets, assembled from the disc's own
+// DATA/BT367OAB.TIM.
+//
+// The DC keeps its seven 256x80 option cells in one file, 0x2840 bytes each:
+//
+//   +0x00  u32 0x10, u32 8            magic, then 4bpp-with-CLUT
+//   +0x08  u32 44, s16 x, s16 y,      CLUT block: 16 entries, one row
+//          u16 16, u16 1, 16 x u16
+//   +0x34  u32 10252, s16 x, s16 y,   image block: width is in 16-bit units,
+//          u16 64, u16 80             so 64 means 256 pixels
+//   +0x40  10240 bytes                4bpp pixels, two per byte, low nibble
+//                                     is the left pixel
+//
+// 7 x 80 = 560 rows cannot live on one texture page - TextureDesc.texV is a
+// byte, so a page tops out at 256 rows. The cells are therefore split across
+// two pages. That split used to happen offline, in tools/port_dc_assets.py,
+// which wrote t_dc.tim and t_dc2.tim; doing it here instead means the DC asset
+// tree holds the file the player's own disc has rather than two invented ones.
+//
+//   page A (slot 12)  cells 0,1,2 at full height  -> 256x240, the main menu
+//   page B (slot 13)  cells 3,4,5,6 cropped to 64 -> 256x256, the difficulty
+//                                                    submenu
+//
+// The crop keeps each cell's row 0, so drawing every row at screenY 0 (plus the
+// port's +38) lands where the PS1 draws it. Cell 6 is the ADVANCED* frame: the
+// same art as cell 5 but green, and since the port keeps ONE palette per page,
+// its colour 1 is remapped onto the shared palette's unused entry 5 rather than
+// carried as a second CLUT row.
+// ============================================================================
+#define DC_TITLE_CHUNK      0x2840
+#define DC_TITLE_CELL_W     256
+#define DC_TITLE_CELL_H     80
+#define DC_TITLE_ROW_BYTES  (DC_TITLE_CELL_W / 2)   /* 4bpp: 128 B per row */
+#define DC_TITLE_CLUT_OFF   0x14
+#define DC_TITLE_PIX_OFF    0x40
+#define DC_TITLE_GREEN_SLOT 5
+
+// Build one 4bpp TIM page into `out`. `cells` lists the source cell indices,
+// `rows` how many rows of each to take, `palFrom` which of them supplies the
+// page palette, and `greenFrom` which (an index INTO cells, or -1) needs the
+// colour-1 -> colour-5 remap described above. Returns the bytes written.
+static unsigned int dc_title_build_page(const unsigned char* file,
+                                        const int* cells, int count, int rows,
+                                        int palFrom, int greenFrom,
+                                        unsigned char* out)
+{
+    const int h = rows * count;
+    const unsigned int pixBytes = (unsigned int)(DC_TITLE_CELL_W * h / 2);
+    unsigned char* p = out;
+
+    *(unsigned int*)p = 0x10;      p += 4;
+    *(unsigned int*)p = 8;         p += 4;      // 4bpp + CLUT
+    *(unsigned int*)p = 12 + 32;   p += 4;      // CLUT block length
+    *(short*)p = 0;                p += 2;
+    *(short*)p = 0x1E0;            p += 2;      // the PS1's own clutY
+    *(unsigned short*)p = 16;      p += 2;
+    *(unsigned short*)p = 1;       p += 2;
+    memcpy(p, file + cells[palFrom] * DC_TITLE_CHUNK + DC_TITLE_CLUT_OFF, 32);
+    if (greenFrom >= 0) {
+        // the ADVANCED* cell's own colour 1 - pure green - into the spare slot
+        *(unsigned short*)(p + DC_TITLE_GREEN_SLOT * 2) =
+            *(const unsigned short*)(file + cells[greenFrom] * DC_TITLE_CHUNK
+                                     + DC_TITLE_CLUT_OFF + 2);
+    }
+    p += 32;
+
+    *(unsigned int*)p = 12 + pixBytes;                     p += 4;
+    *(short*)p = 0;                                        p += 2;
+    *(short*)p = 0;                                        p += 2;
+    *(unsigned short*)p = (unsigned short)(DC_TITLE_CELL_W / 4); p += 2;
+    *(unsigned short*)p = (unsigned short)h;               p += 2;
+
+    for (int i = 0; i < count; i++) {
+        const unsigned char* cell =
+            file + cells[i] * DC_TITLE_CHUNK + DC_TITLE_PIX_OFF;
+        unsigned int n = (unsigned int)(rows * DC_TITLE_ROW_BYTES);
+        memcpy(p, cell, n);
+        if (i == greenFrom) {
+            for (unsigned int k = 0; k < n; k++) {
+                unsigned char lo = (unsigned char)(p[k] & 0xF);
+                unsigned char hi = (unsigned char)(p[k] >> 4);
+                if (lo == 1) lo = DC_TITLE_GREEN_SLOT;
+                if (hi == 1) hi = DC_TITLE_GREEN_SLOT;
+                p[k] = (unsigned char)(lo | (hi << 4));
+            }
+        }
+        p += n;
+    }
+    return (unsigned int)(p - out);
+}
+
 // ============================================================================
 void init_title_screen(void)
 {
@@ -95,6 +189,9 @@ void init_title_screen(void)
 
     g_roomCameraId = 0;
 
+    // The Director's Cut's own title art ("DIRECTOR'S CUT") is its overlay's
+    // title.pix, so this stays one unconditional load - the base tree's file is
+    // never touched and OG still gets today's screen.
     LoadFile(GAME_DATA_ROOT "data\\title.pix", g_TimImageBuffer__bitmap, 0x20);
     display_image(0, g_TimImageBuffer__bitmap, 320, 240);
 
@@ -102,13 +199,19 @@ void init_title_screen(void)
 
     //empty_00470960(0);
 
-    const char* buttonTexPath;
-    if (!g_bPadConnected) {
-        buttonTexPath = GAME_DATA_ROOT "data\\t_press.tim";
+    // The DC's cells come from one file; stage it whole, because page B below
+    // needs it again. Everything else loads a ready-made sheet.
+    if (g_bDcMode) {
+        static const int kTitlePageA[3] = { 0, 1, 2 };
+        LoadFile(GAME_DATA_ROOT "data\\bt367oab.tim", g_bgPakLoadBuffer, 0x20);
+        dc_title_build_page(g_bgPakLoadBuffer, kTitlePageA, 3, DC_TITLE_CELL_H,
+                            1, -1, g_TimImageBuffer__bitmap);
     } else {
-        buttonTexPath = GAME_DATA_ROOT "data\\t_start.tim";
+        const char* buttonTexPath = !g_bPadConnected
+            ? GAME_DATA_ROOT "data\\t_press.tim"
+            : GAME_DATA_ROOT "data\\t_start.tim";
+        LoadFile(buttonTexPath, g_TimImageBuffer__bitmap, 0x20);
     }
-    LoadFile(buttonTexPath, g_TimImageBuffer__bitmap, 0x20);
 
     g_titleTexturePageData[4] = 26;
     g_titleTexturePageData[0] = 8;
@@ -121,6 +224,19 @@ void init_title_screen(void)
     g_titleTexturePageData[5] = g_TextureCurrentPage;
     g_titleTexturePageData[2] = g_titleTexturePageData[1];
     g_titleTexturePageData[6] = g_titleTexturePageData[5];
+
+    // The DC submenu sheet is a second texture page: slot 13 -> SRV 28, beside
+    // the main sheet's slot 12 -> SRV 27. Rows 3-6 draw from it (see the table).
+    if (g_bDcMode) {
+        static const int kTitlePageB[4] = { 3, 4, 5, 6 };
+        dc_title_build_page(g_bgPakLoadBuffer, kTitlePageB, 4, 64, 0, 3,
+                            g_TimImageBuffer__bitmap);
+        LoadTexturePage(g_TimImageBuffer__bitmap, 9, 0, 13, 0, 0, 0, 0);
+        g_titleTexturePageData[3] = 9;
+        g_titleTexturePageData[4] = 9;
+        g_titleTexturePageData[5] = 9;
+        g_titleTexturePageData[6] = 9;
+    }
 
     {
         char dbg[256];
@@ -185,12 +301,33 @@ struct TitleTextPosData {
     int vramY;
     int sprHeight;
     int screenY;
+    int slot;       // display_texture SRV slot (12 = the main sheet, 13 = the DC submenu sheet)
 };
 
-static const TitleTextPosData g_titleTextPosTable[3] = {
-    { 0,  54, 24 },  // index 0: "PRESS ANY BUTTON"
-    { 83, 70,  8 },  // index 1: "NEW GAME"
-    { 175,70,  8 },  // index 2: "LOAD GAME"
+// USA sheet (data\t_press.tim / data\t_start.tim, 256x256): the PC build
+// re-cropped the three frames out of the PS1's 80-row cells, hence the per-row
+// screenY and the shorter heights.
+static const TitleTextPosData g_titleTextPosTableUsa[3] = {
+    { 0,  54, 24, 12 },  // index 0: "PRESS ANY BUTTON" / "PRESS START BUTTON"
+    { 83, 70,  8, 12 },  // index 1: "NEW GAME"
+    { 175,70,  8, 12 },  // index 2: "LOAD GAME"
+};
+
+// Director's Cut (data\t_dc.tim + data\t_dc2.tim, built by
+// tools/port_dc_assets.py). The PS1 draws every option as a whole 256x80 cell at
+// a fixed screenX -130 / screenY 38 (title_draw_option, TITLE.EXE 0x800e14d8),
+// so screenY is 0 here and the +38 in UpdateTitleTextSprite supplies it; the
+// cells keep their internal offsets. Rows 0-2 are the main menu (t_dc.tim);
+// 3-6 are the STANDARD/TRAINING/ADVANCED submenu (t_dc2.tim, cropped to 64 rows
+// per cell) - row 6 is ADVANCED held, drawn with the green palette entry.
+static const TitleTextPosData g_titleTextPosTableDc[7] = {
+    {   0, 80, 0, 12 },  // 0: PRESS ANY BUTTON
+    {  80, 80, 0, 12 },  // 1: NEW GAME
+    { 160, 80, 0, 12 },  // 2: LOAD GAME
+    {   0, 64, 0, 13 },  // 3: STANDARD
+    {  64, 64, 0, 13 },  // 4: TRAINING
+    { 128, 64, 0, 13 },  // 5: ADVANCED
+    { 192, 64, 0, 13 },  // 6: ADVANCED, confirm held
 };
 
 // ============================================================================
@@ -205,7 +342,14 @@ void UpdateTitleTextSprite(unsigned char brightness, unsigned char selectionId)
         td->flags = 0x40000000;
     }
 
-    const TitleTextPosData* entry = &g_titleTextPosTable[selectionId];
+    const TitleTextPosData* entry;
+    if (g_bDcMode) {
+        if (selectionId > 6) selectionId = 0;
+        entry = &g_titleTextPosTableDc[selectionId];
+    } else {
+        if (selectionId > 2) selectionId = 0;
+        entry = &g_titleTextPosTableUsa[selectionId];
+    }
 
     td->texU = 0;
     td->screenX = -130;
@@ -225,7 +369,7 @@ void UpdateTitleTextSprite(unsigned char brightness, unsigned char selectionId)
 
     td->clutY = 0x1E0;
 
-    display_texture(td, 2, 12, 1);
+    display_texture(td, 2, entry->slot, 1);
 }
 
 // ============================================================================
@@ -245,6 +389,68 @@ void update_title_options(void)
         if (g_titleMode != 1) return;
 
         switch (g_titleOptionsFading) {
+        case 10:
+            // DC difficulty submenu (PS1 TITLE.EXE g_titleState 10). Up/down cycle
+            // STANDARD(3) / TRAINING(4) / ADVANCED(5); holding confirm on
+            // ADVANCED shows the green ADVANCED*(6) cell; confirm writes
+            // g_DcDifficulty and then runs the original new-game exit.
+            if (g_PlayerPadPressed & 0x5100) {
+                if (!(g_PlayerPadPressed & 0x1000)) {
+                    if (g_titleSelectionId < 5) g_titleSelectionId++;
+                    else g_titleSelectionId = 3;
+                } else {
+                    if (g_titleSelectionId < 4) g_titleSelectionId = 5;
+                    else g_titleSelectionId--;
+                }
+                g_titleHoldTimer = 0x5A;
+                g_titleDemoTime = 0x708;
+            }
+
+            if ((g_PlayerPadPressed & 0xeff) || sidewinderPress) {
+                play_sfx(SFX_BANKS, SFX_TITLE_EVIL01);
+                play_sfx(SFX_BANKS, 1); // null sfx
+                // The PS1 keys ADVANCED* off the hold timer, not the choice (it
+                // drops the choice back to 5 after drawing the green cell).
+                if (g_titleSelectionId == 5) {
+                    g_DcDifficulty = (g_titleHoldTimer == 0) ? DC_DIFFICULTY_ADVANCED_HOLD
+                                                            : DC_DIFFICULTY_ADVANCED;
+                } else {
+                    g_DcDifficulty = g_titleSelectionId - 3;   // 3 -> STANDARD, 4 -> TRAINING
+                }
+                // Keep the submenu choice: the PS1 leaves g_titleMenuChoice at
+                // 3..5, so the exit fade-out keeps drawing the difficulty cell.
+                // The exit switch maps 3..6 to the new-game action.
+                g_titleOptionsFading = 6;
+                g_fade_type_id = 1;
+                g_fading_counter = 0x7F00;
+                fade_update();
+                g_bGameActive = 2;
+                return;
+            }
+
+            // Hold Right on ADVANCED to reach the green ADVANCED* cell; the PS1
+            // draws the green cell once and drops back to 5 so the mode stays
+            // ADVANCED until confirm. The DC reads the *held* pad word
+            // (0x800cf844); g_PlayerPadHeld is the edge-detected word here, so
+            // use g_button_pressed_id (== g_RawPadHeld, continuous) with the raw
+            // d-pad layout: 0x1000 up, 0x2000 right, 0x4000 down, 0x8000 left.
+            if (g_titleSelectionId == 5 && (g_button_pressed_id & 0x2000)) {
+                if (g_titleHoldTimer != 0) g_titleHoldTimer--;
+            }
+            if (g_titleHoldTimer == 0) g_titleSelectionId = 6;
+
+            UpdateTitleTextSprite(128, g_titleSelectionId);
+            if (g_titleSelectionId == 6) g_titleSelectionId = 5;
+
+            g_titleDemoTime--;
+            if (g_titleDemoTime == 0) {
+                g_titleOptionsFading = 3;
+                g_fade_type_id = 2;
+                g_fading_counter = 0x400;
+                fade_update();
+            }
+            return;
+
         case 0:
             g_titleOptionsFading = 1;
             g_fade_type_id = 2;
@@ -263,6 +469,19 @@ void update_title_options(void)
 
 	case 2:
 		UpdateTitleTextSprite(128, g_titleSelectionId);
+
+		// DC: confirming NEW GAME opens the STANDARD/TRAINING/ADVANCED submenu
+		// (state 10 below) instead of starting the game. The PS1 is silent here:
+		// the title sfx plays on the *submenu* confirm, or on LOAD GAME, which
+		// falls through to the original path below.
+		if (g_bDcMode && ((g_PlayerPadPressed & 0xeff) || sidewinderPress) &&
+		    g_titleSelectionId == 1) {
+			g_titleOptionsFading = 10;
+			g_titleSelectionId = 3;          // STANDARD
+			g_titleDemoTime = 0x708;
+			g_titleHoldTimer = 0x5A;
+			return;
+		}
 
 		if ((g_PlayerPadPressed & 0xeff) || sidewinderPress) {
 			play_sfx(SFX_BANKS, SFX_TITLE_EVIL01);
@@ -503,6 +722,17 @@ void title_state(void)
 
     cleanup_texture_slot(12);
 
+    // DC: the difficulty submenu leaves the choice at 3..5 (and 6 for ADVANCED*
+    // while the green cell is drawn). The PS1's title_state groups 1 and 3..6
+    // together - chain the character select and let it start the game, exactly
+    // like NEW GAME. Without this the choice 3 would fall into the USA build's
+    // load-game case below.
+    if (g_bDcMode && g_titleSelectionId >= 3) {
+        nullsub_0047eb80();
+        Task_chain((void*)characterSelectionScreen);
+        return;
+    }
+
     switch (g_titleSelectionId) {
     case 0:
         nullsub_0047eb80();
@@ -514,6 +744,21 @@ void title_state(void)
     case 1:
         nullsub_0047eb80();
         Task_chain((void*)characterSelectionScreen);
+
+        // The character select starts the game itself (CharacterSelectionScreen
+        // chains game_start once the player confirms a character), so the DC
+        // path stops here. Falling into the load screen below would show it for
+        // a NEW GAME, and that screen's exit option chains back to title_state -
+        // which is what made the DC difficulty confirm bounce back to the
+        // NEW GAME / LOAD GAME menu.
+        //
+        // On the PS1 the new-game branch chains the SELECT overlay and then
+        // calls its save-state loader; that loader is NOT the interactive
+        // screen, but the port only has the interactive one, so it must not run
+        // for a new game.
+        if (g_bDcMode) {
+            return;
+        }
 
     case 2:
     case 3:

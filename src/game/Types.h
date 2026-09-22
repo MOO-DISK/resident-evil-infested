@@ -124,8 +124,11 @@ static_assert(sizeof(ScaMatrixData) == 0x50, "ScaMatrixData size mismatch");
 #define ITEM_KNIFE              0x01
 #define ITEM_BERETTA            0x02
 #define ITEM_SHOTGUN            0x03
-#define ITEM_COLT_PYTHON_DUM    0x04
-#define ITEM_COLT_PYTHON_MAG    0x05
+#define ITEM_COLT_PYTHON_DUM    0x04    // item 4: Colt Python, DumDum rounds - unobtainable in the
+                                        // OG builds. The Director's Cut gives item 4 to its
+                                        // Beretta M92FS custom (verified in-game), the ADVANCED
+                                        // starting handgun; its weapon slot is slot 3.
+#define ITEM_COLT_PYTHON_MAG    0x05    // item 5: the live Colt Python, magnum rounds
 #define ITEM_FLAMETHROWER       0x06
 #define ITEM_BAZOOKA_EXPLOSIVE  0x07
 #define ITEM_BAZOOKA_ACID       0x08
@@ -177,8 +180,8 @@ static_assert(sizeof(ScaMatrixData) == 0x50, "ScaMatrixData size mismatch");
 // Utility Items (0x2F-0x32)
 #define ITEM_INK_RIBBONS        0x2F
 #define ITEM_LIGHTER            0x30
-#define ITEM_LOCK_PICK          0x31
-#define ITEM_OIL                0x32
+#define ITEM_LOCK_PICK          0x31    // DC: MOON CREST left part (mix 0x31 + 0x32 -> 0x2C)
+#define ITEM_OIL                0x32    // DC: MOON CREST right part
 
 // Keys (0x33-0x3D)
 #define ITEM_SWORD_KEY          0x33
@@ -204,15 +207,17 @@ static_assert(sizeof(ScaMatrixData) == 0x50, "ScaMatrixData size mismatch");
 #define ITEM_RED_HERB           0x43
 #define ITEM_GREEN_HERB         0x44
 #define ITEM_BLUE_HERB          0x45
-#define ITEM_MIX_BLUE_RED       0x46
+#define ITEM_MIX_GREEN_RED      0x46
 #define ITEM_MIX_2GREEN         0x47
 #define ITEM_MIX_GREEN_BLUE     0x48
 #define ITEM_MIX_GREEN_RED_BLUE 0x49
 #define ITEM_MIX_3GREEN         0x4A
-#define ITEM_MIX_2GREEN_RED     0x4B
+#define ITEM_MIX_2GREEN_BLUE    0x4B
 
 // Misc (0x4C-0x4D)
-#define ITEM_PICK_AXE           0x4C
+#define ITEM_PICK_AXE           0x4C    // unused in both builds (name and "nothing important"
+                                        // description are the same); the DC swaps its item *model*
+                                        // to the Com. Radio, the OG shows a Pick Axe
 #define ITEM_COMM_RADIO         0x4D
 
 // ============================================================================

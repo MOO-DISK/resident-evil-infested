@@ -125,7 +125,14 @@ struct DebugStageRooms {
     int                count;
 };
 
-static const DebugStageRooms s_dbgStageRooms[7] = {
+// Only the seven base stages are listed. The Director's Cut's arrange stages
+// (ids 7-13, STAGE8-E) are not a destination of their own: they hold the same
+// physical rooms as the base stage seven ids below, and ADVANCED mode already
+// redirects a base stage/room load to its arrange file (room_file_stage, in
+// dc/ArrangeStages.cpp), so picking the base room is how you reach it.
+#define DBG_STAGE_COUNT   7
+
+static const DebugStageRooms s_dbgStageRooms[DBG_STAGE_COUNT] = {
     { s_dbgRoomsMansion1F, 29 },    // stage 0 - mansion 1F
     { s_dbgRoomsMansion2F, 29 },    // stage 1 - mansion 2F
     { s_dbgRoomsCourtyard, 18 },    // stage 2 - courtyard / underground
@@ -134,6 +141,12 @@ static const DebugStageRooms s_dbgStageRooms[7] = {
     { s_dbgRoomsMansion1F, 29 },    // stage 5 - mansion return 1F
     { s_dbgRoomsMansion2F, 29 },    // stage 6 - mansion return 2F
 };
+
+// Highest stage the room-change menu will scroll to.
+static int DebugStageMax(void)
+{
+    return DBG_STAGE_COUNT - 1;
+}
 
 // Menu entries, mirroring the PS1 debug menu. "ROOM CHANGE" replaces its
 // "JUMP" entry. Only the implemented ones react to confirm.
@@ -1185,8 +1198,21 @@ struct DebugQuickSlotInfo {
     int stageId;        // file 0x200
     int roomId;         // file 0x201
     int savesCount;     // file 0x228
+    int dcGameMode;     // file 0x233 (g_DcGameMode); port-only, see below
 };
 static DebugQuickSlotInfo s_dbgQuickSlotInfo[8];
+
+// mirror of SaveLoadScreen.cpp's SaveSlotLoadBlocked. In OG mode a
+// DC TRAINING/ADVANCED/ADVANCED* save cannot be loaded (its rules exist only in
+// DC mode); the row is dimmed and the quick load is refused. Overwriting stays
+// allowed through the save list.
+static int DebugQuickSlotLoadBlocked(const DebugQuickSlotInfo* info)
+{
+    if (g_bDcMode || !info->hasData) {
+        return 0;
+    }
+    return (info->dcGameMode & 3) != DC_DIFFICULTY_STANDARD;
+}
 
 static void DebugQuick_ScanSlots(void)
 {
@@ -1202,6 +1228,7 @@ static void DebugQuick_ScanSlots(void)
             info->stageId     = (unsigned char)buffer[0x200];
             info->roomId      = (unsigned char)buffer[0x201];
             info->savesCount  = (unsigned char)buffer[0x228];
+            info->dcGameMode  = (unsigned char)buffer[0x233];
         }
     }
 }
@@ -1224,6 +1251,12 @@ static void DebugQuick_DrawSlotList(void)
             // Room id in the room change screen's hex form: (stage+1)*0x100+room
             sprintf(line, "%d %-5s ROOM %X", i + 1, chName,
                     (s_dbgQuickSlotInfo[i].stageId + 1) * 0x100 + s_dbgQuickSlotInfo[i].roomId);
+            // a DC TRAINING/ADVANCED save is dimmed, and in OG mode
+            // its load is refused (overwriting it from the save list is fine).
+            if (DebugQuickSlotLoadBlocked(&s_dbgQuickSlotInfo[i])) {
+                color = DBGCOL_DIM;
+                strcat(line, " [DC]");
+            }
         } else {
             sprintf(line, "%d EMPTY", i + 1);
             color = DBGCOL_DIM;
@@ -1387,8 +1420,15 @@ int debug_menu_overlay(void)
             g_debugMenuOpen = 1;
             s_dbgContext = 0;
             s_dbgCursor = 0;
-            s_dbgStage = g_stageId;
+            // Clamp: only the seven base stages are listed.
+            s_dbgStage = (int)g_stageId;
+            if (s_dbgStage > DebugStageMax()) {
+                s_dbgStage = DebugStageMax();
+            }
             s_dbgRoom = g_roomId;
+            if (s_dbgRoom >= s_dbgStageRooms[s_dbgStage].count) {
+                s_dbgRoom = s_dbgStageRooms[s_dbgStage].count - 1;
+            }
             s_dbgPrevKeys = DebugMenu_SampleKeys();
         }
         return g_debugMenuOpen;
@@ -1647,10 +1687,12 @@ int debug_menu_overlay(void)
                 // snapshot the helper takes is exactly what is on screen.
                 DebugQuick_SaveSlot(s_dbgQuickSlot);
                 DebugQuick_ScanSlots();     // refresh the list contents
-            } else if (s_dbgQuickSlotInfo[s_dbgQuickSlot].hasData) {
+            } else if (s_dbgQuickSlotInfo[s_dbgQuickSlot].hasData &&
+                       !DebugQuickSlotLoadBlocked(&s_dbgQuickSlotInfo[s_dbgQuickSlot])) {
                 // Load: hand the slot to GameLoop's quick access machine,
                 // which fades out, restores the card and restarts through
-                // game_start. Empty slots do nothing.
+                // game_start. Empty and greyed (DC TRAINING/ADVANCED in OG
+                // mode) slots do nothing.
                 g_debugLoadSlot = s_dbgQuickSlot;
                 g_debugOpenLoadScreenFlag = 1;
                 g_debugMenuOpen = 0;
@@ -1680,7 +1722,7 @@ int debug_menu_overlay(void)
         }
     }
     if (newKeys & DBGKEY_RIGHT) {
-        if (s_dbgStage < 6) {
+        if (s_dbgStage < DebugStageMax()) {
             s_dbgStage++;
             if (s_dbgRoom >= s_dbgStageRooms[s_dbgStage].count) {
                 s_dbgRoom = s_dbgStageRooms[s_dbgStage].count - 1;

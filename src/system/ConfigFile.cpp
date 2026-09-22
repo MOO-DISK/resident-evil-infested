@@ -278,6 +278,47 @@ const char* ConfigFile_Find(void)
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// [Game] Mode <-> GAME_MODE_*.
+//
+// The name doubles as the asset overlay's folder name (SetAssetMode), so these
+// two functions are the only place a mode name is spelled out. An unknown or
+// missing name falls back to OG rather than refusing to start: a typo should
+// give the stock game, not a black screen.
+// ---------------------------------------------------------------------------
+static const char* const kGameModeNames[] = { "OG", "DC", "SATURN", "DS" };
+static const int kGameModeCount =
+    (int)(sizeof(kGameModeNames) / sizeof(kGameModeNames[0]));
+
+static const char* GameModeName(int mode)
+{
+    if (mode < 0 || mode >= kGameModeCount) {
+        return kGameModeNames[GAME_MODE_OG];
+    }
+    return kGameModeNames[mode];
+}
+
+static int ParseGameMode(const char* name)
+{
+    if (name == NULL || name[0] == '\0') {
+        return GAME_MODE_OG;
+    }
+    for (int i = 0; i < kGameModeCount; i++) {
+        const char* a = name;
+        const char* b = kGameModeNames[i];
+        while (*a != '\0' && *b != '\0') {
+            char ca = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
+            if (ca != *b) break;
+            a++;
+            b++;
+        }
+        if (*a == '\0' && *b == '\0') {
+            return i;
+        }
+    }
+    return GAME_MODE_OG;
+}
+
 void ConfigFile_EnsureExists(void)
 {
     const char* path = ConfigFile_Find();
@@ -329,6 +370,24 @@ void ConfigFile_EnsureExists(void)
         "; the original used, and an existing save/ or Save/ is found as well.\n"
         "Path=\n"
         "\n"
+        "[Game]\n"
+        "; Which release's content to run. This one key selects BOTH the code\n"
+        "; branches and the asset overlay folder searched ahead of the [Assets]\n"
+        "; tree, so the two can never disagree.\n"
+        ";   OG     = the PC release (the original PS1 game's content). Default,\n"
+        ";            and the only mode that uses no overlay folder at all.\n"
+        ";   DC     = Director's Cut (Japanese MediaKite / SLUS_005.51). Needs a\n"
+        ";            DC/ folder beside USA/ holding only the files it changes or\n"
+        ";            adds; anything it does not carry falls back to the tree\n"
+        ";            [Assets] Version selects.\n"
+        ";   SATURN, DS = folder names reserved; no code behind them yet.\n"
+        "Mode=%s\n"
+        "; The DC title screen's STANDARD / TRAINING / ADVANCED choice:\n"
+        "; 0 = STANDARD (the original game), 1 = TRAINING, 2 = ADVANCED,\n"
+        "; 3 = ADVANCED with the held confirm. The title screen decides this at\n"
+        "; runtime; set it here to test a mode directly.\n"
+        "DcDifficulty=%d\n"
+        "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
         "; texture viewer, F8 collision overlay. 0 = off, 1 = on.\n"
@@ -346,6 +405,7 @@ void ConfigFile_EnsureExists(void)
         (unsigned)g_dwScreenWidth, (unsigned)g_dwScreenHeight,
         (unsigned)g_dwBitDepth, g_bVSync ? 1 : 0,
         (GetAssetVersion() == 1) ? "JPN" : "USA",
+        GameModeName(g_GameMode), g_DcDifficulty,
 #ifdef _DEBUG
         1,
 #else
@@ -423,6 +483,30 @@ BOOL ConfigFile_Load(void)
                                      0
 #endif
                                      );
+
+    // Content mode. [Game] Mode is the single switch: it sets g_GameMode AND
+    // the asset overlay folder. DcDifficulty is the initial
+    // STANDARD/TRAINING/ADVANCED choice (the DC title screen overwrites it at
+    // runtime, so it doubles as a way to test a mode directly).
+    char modeName[16];
+    if (ReadValue(path, "Game", "Mode", modeName, sizeof(modeName))) {
+        g_GameMode = ParseGameMode(modeName);
+    } else {
+        // Pre-Mode config files said [Game] DcMode=1. Honour it rather than
+        // silently booting OG against a config the user believes selects the
+        // Director's Cut; writing the file back replaces it with Mode=.
+        g_GameMode = ReadInt(path, "Game", "DcMode", 0) ? GAME_MODE_DC
+                                                        : GAME_MODE_OG;
+    }
+    // OG uses no overlay; every other mode overlays a folder of its own name.
+    SetAssetMode(g_GameMode == GAME_MODE_OG ? "" : GameModeName(g_GameMode));
+    dbg_printf("[CONFIG] mode=%s overlay=%s\n", GameModeName(g_GameMode),
+               GetAssetModeName()[0] ? GetAssetModeName() : "(none)");
+    g_DcDifficulty = ReadInt(path, "Game", "DcDifficulty", DC_DIFFICULTY_STANDARD);
+    if (g_DcDifficulty < DC_DIFFICULTY_STANDARD ||
+        g_DcDifficulty > DC_DIFFICULTY_ADVANCED_HOLD) {
+        g_DcDifficulty = DC_DIFFICULTY_STANDARD;
+    }
 
     // The port always renders in hardware; the original's adapter picker is gone.
     g_dwSelectedDisplayAdapterID = 1;

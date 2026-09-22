@@ -88,6 +88,15 @@ set(RE1_SOURCES
     src/game/TmdAnimation.cpp
     src/game/TmdRenderer.cpp
     src/game/WeaponDamage.cpp
+    src/game/dc/WeaponDamageTables.cpp
+    src/game/dc/ItemTables.cpp
+    src/game/dc/ItemNames.cpp
+    src/game/dc/ItemModels.cpp
+    src/game/dc/ItemDescriptions.cpp
+    src/game/dc/Items.cpp
+    src/game/dc/EntityModels.cpp
+    src/game/dc/ArrangeStages.cpp
+    src/game/dc/ArrangeSoundRows.cpp
 
     src/game/entities/Adder.cpp
     src/game/entities/BlackTiger.cpp

@@ -133,23 +133,26 @@ void plat_cursor_show(BOOL show);
 // src/video/VideoPlayback.cpp owns the 4-state machine, the per-FMV skip masks,
 // the g_videoSkipCounter grace period and the prologue scenario cut; the
 // decoder is platform-specific. On Windows MCI opens the AVI and renders it
-// into the game window itself (video.cpp). On Linux ffmpeg decodes
-// Cinepak into a texture that the backend uploads, draws as a full-screen quad
-// and presents (video.cpp).
+// into the game window itself, or Media Foundation decodes a modern container
+// into a texture (video.cpp). On Linux ffmpeg decodes into a texture that the
+// backend uploads, draws as a full-screen quad and presents (video.cpp).
 //
-// Frames are addressed by index, not seconds: the AVIs are 10 fps and MCI's
-// frame time format is what the original's cut points were authored in.
+// Cut points are MILLISECONDS, not frame indices: the original expressed the
+// prologue cut as frames 1778/1885 at the PC AVIs' 10 fps, but a converted
+// movie can have a different frame count and rate, so each backend turns the
+// time into its own frames (MCI from the AVI's header rate, the decoders from
+// the stream rate).
 // ---------------------------------------------------------------------------
 
 // Probe the decoder backend. FALSE means "no FMV available, skip the movie".
 BOOL plat_video_init(void);
 
-// Open `path` and start playing. playToFrame > 0 stops at that frame (the
+// Open `path` and start playing. playToMs > 0 stops at that time (the
 // prologue's Chris-only beat); 0 plays through to the end.
-BOOL plat_video_open_and_play(const char* path, int playToFrame);
+BOOL plat_video_open_and_play(const char* path, int playToMs);
 
-// Resume the already-open movie from fromFrame through to the end.
-void plat_video_play_from(int fromFrame);
+// Resume the already-open movie from fromMs through to the end.
+void plat_video_play_from(int fromMs);
 
 // Stop playback (user skip) and close the movie.
 void plat_video_stop(void);

@@ -815,7 +815,7 @@ g_pMarniDirect3D = CMarniDirect3D_Constructor(pNewObject, ...);
 ```c
 static BYTE g_DataBuffer[832728]; // general purpose buffer, usually used to load textures, sound banks and room data
 static BYTE g_TimImageBuffer[187180]; // TIM Images buffer, used mainly for background images
-static BYTE g_ItemsImageBuffer[86400];  // 86400 allocated bytes for items image texture atlas (ITEM_ALL.PIX) at 0x00bcb430
+static BYTE g_ItemsImageBuffer[91200];  // item image texture atlas (ITEM_ALL.PIX) at 0x00bcb430; sized for the Director's Cut's 76-row sheet (the USA one is 86400 / 72 rows)
 ```
 
 ### PSXTexture Ownership

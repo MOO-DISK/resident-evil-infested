@@ -1076,7 +1076,7 @@ int cmd_omodel_set(void)
 
             // Mansion 2F (stages 2/7) room 11: fix transparent colors.
             // The original zeroes palette entry 0 before the scan; that was missing.
-            if ((g_stageId + 1) % 5 == 2 && g_roomId == ROOM_FRONT_LESSON_ROOM && (g_ScdOpcodes[1] & 0x3f) == 0) {
+            if ((get_stage_id() + 1) % 5 == 2 && g_roomId == ROOM_FRONT_LESSON_ROOM && (g_ScdOpcodes[1] & 0x3f) == 0) {
                 unsigned short* colorPtr = (unsigned short*)(modelData[1] + 0x14);
                 *colorPtr = 0;
                 for (int i = 0; i < 256; i++) {
@@ -1104,13 +1104,13 @@ int cmd_omodel_set(void)
     }
 
     // Stage-specific adjustments
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 1) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 1) {
         DAT_004d2be0 = 0x30;
     }
     if (g_stageId == STAGE_MANSION_1F && g_roomId == ROOM_TIGER_STATUE_ROOM && (g_ScdOpcodes[1] & 0x3f) == 1) {
         FUN_00473e40(*modelData);
     }
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 0) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 0) {
         FUN_00484d90(modelData[1], DAT_008e1c7c, DAT_008e1c74);
         FUN_00484e40(*modelData, DAT_008e1c7c, DAT_008e1c74);
     }
@@ -1181,7 +1181,7 @@ setupObject:
         *(short*)(objPtr + 0x6e) = -5;
         *(int*)(objPtr + 0x38) = -5;
     }
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_FRONT_LESSON_ROOM) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_FRONT_LESSON_ROOM) {
         if ((g_ScdOpcodes[1] & 0x3f) == 0) {
             short adjZ = scd_read_s16(8) + 10;
             *(short*)(objPtr + 0x70) = adjZ;

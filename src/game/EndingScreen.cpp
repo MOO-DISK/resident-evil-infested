@@ -822,8 +822,16 @@ void ending_state(void)
 
     // The backdrop is the character's "escaped" still. Flag 0x7B is the
     // already-cleared-once bit, which swaps in the alternate stills.
+    //
+    // The Director's Cut's ENDING overlay (ENDING_DC.EXE) never READS 0x7B: its
+    // only 0x7B reference is the Flg_on that marks the next cycle cleared
+    // (0x800e1a74), and its only g_gameOptionsFlags read is bit 0x7E (infinite
+    // rocket launcher, 0x800e1688). The cleared-once art swap is
+    // a USA/PC behaviour the DC dropped, so in DC mode take the first-run branch
+    // even though InitializeGame forces the flag for gameplay (GameStart.cpp).
     const char* bgPath;
-    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
+    if (!g_bDcMode &&
+        Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
         bgPath = ((g_playerEntity.id & 3) == CHAR_CHRIS)
                      ? GAME_DATA_ROOT "data\\clis01.pix"
                      : GAME_DATA_ROOT "data\\jill01.pix";
@@ -892,7 +900,10 @@ void ending_state(void)
     } else {
         g_selectedFmvId = 27;
     }
-    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
+    // DC ending has no cleared-once congratulations-FMV swap (see the backdrop
+    // note above).
+    if (!g_bDcMode &&
+        Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
         g_selectedFmvId = 26;
     }
 
@@ -977,6 +988,9 @@ void ending_state(void)
     if (g_SavesCounter == 1) s_grantRocket = 1;
 
     LoadFile(GAME_DATA_ROOT "data\\bio_card.dat", g_BioCardData, 0x20);
+    if (g_bDcMode) {
+        g_DcGameMode = (unsigned char)g_DcDifficulty;
+    }
     g_fading_state = (short)0xFFFF;
     ending_slots_clear();
 
@@ -1009,7 +1023,22 @@ void ending_state(void)
             ((g_playerEntity.id & 3) != CHAR_CHRIS) ? ITEM_INGRAM : ITEM_MINIMI;
         g_ItemsSlots[slot].qty = 1;
         g_TotalHeldItems++;
+        slot++;
     }
+
+    // Director's Cut's ending bonus (0x800e1914): 
+    // an ADVANCED run that reaches ending 6 or 7 - the
+    // best ending for Chris and for Jill - grants infinite
+    // Colt Python Magnum
+    if (g_bDcMode && g_DcDifficulty >= DC_DIFFICULTY_ADVANCED
+        && (s_endingId == 6 || s_endingId == 7)) {
+        Flg_on((int)g_ScenarioFlags, DC_SCENARIO_FLAG_INF_COLT_PYTHON);
+        g_ItemsSlots[slot].Id = ITEM_COLT_PYTHON_MAG;
+        g_ItemsSlots[slot].qty = 1;
+        g_TotalHeldItems++;
+        slot++;
+    }
+    (void)slot;
 
     Flg_on((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH);
 

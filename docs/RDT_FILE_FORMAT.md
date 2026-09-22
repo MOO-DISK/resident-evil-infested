@@ -115,7 +115,7 @@ given by `cameras_count` in the header. Each camera is 0x2C (44) bytes:
 | Offset | Size  | Type  | Description |
 |--------|-------|-------|-------------|
 | 0x00   | 4     | int   | Mask data pointer (relocated) — camera sprite/mask block, see below |
-| 0x04   | 4     | int   | TIM mask texture pointer (relocated) |
+| 0x04   | 4     | int   | TIM mask texture pointer (relocated) — the mask ART, embedded (see below) |
 | 0x08   | 4     | int   | Camera position X |
 | 0x0C   | 4     | int   | Camera position Y |
 | 0x10   | 4     | int   | Camera position Z |
@@ -129,6 +129,22 @@ given by `cameras_count` in the header. Each camera is 0x2C (44) bytes:
 `Room_SetupCamera` (0x00462970) feeds `fov` to `set_scene_render_param` and the
 8-int block at +0x08 to `MatrixToCamera` as a `MATRIX`, so the position/look-at
 pairs are really the camera view transform in the engine's matrix layout.
+
+**The mask art is in the file, and `objspr/` is a copy of it.** `+0x04` points
+at a whole TIM: 8bpp, a 256-entry CLUT at VRAM (0, 0x1E0), the image block a
+tile atlas up to 256x256. The PC build does not read it - `load_room_masks`
+(0x00475a90) unpacks `objspr\osp0<stage><room><cam>.pak` instead - but that pak
+IS this TIM, LZW-compressed: `OSP01030.pak` and stage 2 room 3 camera 0's
+embedded TIM agree to **one byte in 66080**. The PS1 and PC RDTs being the same
+size for the same room (302808 bytes for ROOM2030 in both) says the same thing:
+nothing was moved out of the file, the PC just added a second copy in the
+format its own loader wanted.
+
+That matters for any room the PC release never shipped: the Director's Cut's
+arrange rooms have no `objspr` files and need none, because their masks travel
+in the RDT like everything else (`room_file_stage() >= STAGE_ARRANGE_FIRST` in
+Room.cpp takes that path). Their TIMs are all full 256x256 pages; the base
+stages' vary (128x64 up to 256x256) and the PC's paks pad them out.
 
 ### Camera switch zones (RDT+0x48)
 
@@ -268,6 +284,24 @@ space: `room_set` slices it into 0xA4-byte room-object records — first
 `omodel_slot_count` for `g_omodel_table`, then `item_count` more
 for `g_item_model_table` — before running the init script, which is why the
 room-object system indexes those two tables rather than allocating.
+
+**They are still the room's own answer to "what is in slot N", and the DC's
+arrange rooms are the only place that answer exists.** The three blocks together
+are a complete per-room sound bank:
+
+| offset | what |
+|---|---|
+| 0x88 | 48 records × 4 bytes, one per bank slot: `byte[1]` = VAB **program**, `byte[2]` = **tone** within it. An all-zero record is an *unused* slot — indistinguishable from program 0 / tone 0, which is slot 0's real sound |
+| 0x8C | the VAB header: magic `pBAV`, then `ps`/`vs`/`vg` counts at +0x12/+0x14/+0x16, 128 × 16-byte `ProgAtr`, `ps` × 16 × 32-byte `VagAtr`, and 256 `u16` VAG sizes (÷8). A `VagAtr` names its VAG index at +0x16 and the note it is keyed at (`min`) at +0x06. A tone index past its program's tone count has an all-zero `VagAtr`: an intentionally **empty** slot |
+| 0x90 | the VAB body: the VAGs packed in index order, so VAG *n* starts at `sum(sizes[1..n-1]) * 8` |
+
+A slot therefore resolves to a byte range of the body, and **(VAG bytes, note)**
+— not the bytes alone — is the identity of a sound: the PS1 plays one VAG at
+several notes and the PC pre-rendered each pitch as its own `.wav`, which is why
+`cer_taoA`/`cer_taoB` and `ft_wdA`/`ft_wdB` are one sample each. Hashing that
+pair and looking it up in a base room, whose `g_RoomSndData` row names the slot,
+names any arrange room's bank without guessing.
+`tools/gen_dc_arrange_sound_rows.py` does exactly this; see `DC_PORT.md` §5a.
 
 ## Collision Boundary Data (.blk)
 

@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include "../DebugPrint.h"
 #include "entities/EntityCommon.h"
+#include "dc/Items.h"             // lockpick/ammo item ids the DC moved
 
 // ============================================================================
 // Player animation function stubs (populated into g_playerAnimFunctions by set_player_animations_functions)
@@ -3983,7 +3984,8 @@ static void auto_aim_pitch_update(void)
 // The auto-aim fire gate: returns the ammo count (masked to 0x7f) when the
 // equipped slot still has rounds, and 0 when empty. The knife never passes.
 // The special weapons (id >= 0x6f) and the infinite-ammo flag (player flag
-// bit 0x7e, id 10) are topped back up to 4.
+// bit 0x7e, id 10) are topped back up to 4. The Director's Cut adds a second
+// infinite branch (flag 0x7a, id 5 = the Colt Python Magnum) that refills to 6.
 // Also read by the effect system's auto-aim flash (behavior 58, EffectSystem.cpp).
 // ============================================================================
 unsigned char weapon_autoaim_check(void)
@@ -4002,6 +4004,15 @@ unsigned char weapon_autoaim_check(void)
         slot[1] = 4;
         return 4;
     }
+    // Director's Cut (PS1 SLUS_005.51 0x8004228c): the ADVANCED best-ending
+    // unlock refills the magnum's cylinder to its full 6 rounds when empty, so
+    // it never runs out. The DC's copy returns here without the PC build's
+    // special-weapon refill below; the port keeps that PC behaviour for every
+    // other weapon and adds only this branch.
+    if (dc_is_infinite_colt_python(itemId)) {
+        slot[1] = 6;
+        return 6;
+    }
     if (itemId < ITEM_INGRAM) return 0;
     slot[1] = 4;
     return 4;
@@ -4011,7 +4022,7 @@ unsigned char weapon_autoaim_check(void)
 // looks up (weaponId + 9) in the inventory and returns slot+1 (0 = absent).
 static char weapon_fire_check(void)
 {
-    return (char)(get_item_slot(g_playerEntity.equippedWeaponId + 9) + 1);
+    return (char)(get_item_slot(weapon_ammo_item_id(g_playerEntity.equippedWeaponId)) + 1);
 }
 
 // ============================================================================
@@ -4545,7 +4556,13 @@ static void player_behavior_13_gun_hold_input(void)
             return;
         }
         if ((g_PlayerDpadPressed & 0x40) != 0) {
-            Play3DSnd(1, 9, 0, (int)&g_playerEntity.scaMatrixData.localMatrix.t);
+            // DC (PS1 SLUS_005.51 0x8003f234): the empty click is dropped while
+            // the magnum is the ADVANCED-unlocked infinite one.
+            if (!dc_is_infinite_colt_python(
+                    *(unsigned char*)((unsigned char*)g_ItemSlotsPointer
+                                      + g_EquippedItemId * 2 - 2))) {
+                Play3DSnd(1, 9, 0, (int)&g_playerEntity.scaMatrixData.localMatrix.t);
+            }
             if (weapon_fire_check() != 0 && g_playerEntity.equippedWeaponId < 6) {
                 g_playerEntity.action_behavior = 0x18;   // 0x00458ec0 - not yet transcribed
                 g_playerEntity.action_state = 0;
@@ -4952,14 +4969,18 @@ static void player_behavior_14_autoaim(void)
     case 1:
         player_behavior_14_autoaim_fire();
         return;
-    case 2:
+    case 2: {
         // fire motion done: back to the hold; click if the slot is empty
         g_playerEntity.action_behavior = 0x13;
         g_playerEntity.action_state = 0;
-        if (*(char*)((unsigned char*)g_ItemSlotsPointer + g_EquippedItemId * 2 - 1) == 0) {
+        unsigned char* slot = (unsigned char*)g_ItemSlotsPointer + g_EquippedItemId * 2;
+        // The DC's copy (PS1 0x8003fc6c) drops the empty click while the
+        // magnum is the ADVANCED-unlocked infinite one.
+        if (slot[-1] == 0 && !dc_is_infinite_colt_python(slot[-2])) {
             Play3DSnd(1, 9, 0, (int)&g_playerEntity.scaMatrixData.localMatrix.t);
         }
         return;
+    }
     case 3: {
         // re-raise after the fire motion: arm the raise pose, then play it
         // (0x0045862f: ADD AL,CL - same direction-term fix as the raise)
@@ -5153,19 +5174,20 @@ static void fire_reset_joint15_recoil(void)
 }
 
 // FUN_0045a580 - consume one round from the largest ammo stack that fits.
-// The ammo item for a weapon is itemId weaponId+9; the cap comes from
-// g_ItemMaxQty[(weaponId+9)*4].
+// The ammo item for a weapon is itemId weaponId+9 (weapon_ammo_item_id - the
+// DC's item 4 is the Beretta M92FS custom, which takes the clip); the cap comes
+// from g_ItemMaxQty[ammoItem*4].
 static void fire_consume_ammo_stack(void)
 {
     unsigned char weaponId = g_playerEntity.equippedWeaponId;
-    unsigned char maxQty = g_ItemMaxQty[((unsigned int)weaponId + 9) * 4];
+    unsigned char maxQty = g_ItemMaxQty[(unsigned int)weapon_ammo_item_id(weaponId) * 4];
     unsigned char bestSlot = 0;
     unsigned char bestQty = 0;
     unsigned char slots = (unsigned char)((4 - ((g_playerEntity.id & 3) != 1)) * 2);
     for (unsigned char i = 0; i < slots; i++) {
         unsigned char id = ((unsigned char*)g_ItemSlotsPointer)[i * 2];
         unsigned char qty = ((unsigned char*)g_ItemSlotsPointer)[i * 2 + 1];
-        if (id == (unsigned char)(weaponId + 9) && qty > bestQty) {
+        if (id == weapon_ammo_item_id(weaponId) && qty > bestQty) {
             bestSlot = i;
             bestQty = qty;
         }
@@ -5195,6 +5217,26 @@ static void fire_consume_ammo_stack(void)
 // billboard the shotgun's reload has no animation for) and the python got the
 // bazooka/flamethrower stub. Each routine fires its effects on specific frames
 // of the reload motion (EMW motion 0xe) while unk_bf == 1.
+// The Beretta's routine (0x00458ff0), shared by the two ids that name that
+// weapon: the plain item 2, and the DC's item 4 - the Beretta M92FS custom,
+// which is the ADVANCED starting handgun and is the same gun in everything but
+// its view art. It fires the volley gate at frame 0xa and consumes the round
+// from the ammo stack at frame 0x11; that stack is the 9mm clip for both ids
+// (weapon_ammo_item_id), because the DC renamed (4 + 9)'s 0x0D to LOCKPICK.
+static void fire_beretta_fx(int frame, int* muzzlePos)
+{
+    (void)muzzlePos;
+    if (frame == 0xa && g_playerEntity.unk_bf == 1) {
+        if (fire_ammo_volley_gate() != 0) {
+            fire_reset_joint15_recoil();
+        }
+    }
+    if (frame == 0x11 && g_playerEntity.unk_bf == 1) {
+        fire_consume_ammo_stack();
+        Play3DSnd(1, 5, 0, (int)&g_playerEntity.scaMatrixData.localMatrix.t);
+    }
+}
+
 static void fire_weapon_fx(void)
 {
     const int frame = (int)g_playerEntity.animation_frame_id;
@@ -5202,15 +5244,7 @@ static void fire_weapon_fx(void)
 
     switch (g_playerEntity.equippedWeaponId) {
     case ITEM_BERETTA: {   // 0x00458ff0
-        if (frame == 0xa && g_playerEntity.unk_bf == 1) {
-            if (fire_ammo_volley_gate() != 0) {
-                fire_reset_joint15_recoil();
-            }
-        }
-        if (frame == 0x11 && g_playerEntity.unk_bf == 1) {
-            fire_consume_ammo_stack();
-            Play3DSnd(1, 5, 0, (int)&g_playerEntity.scaMatrixData.localMatrix.t);
-        }
+        fire_beretta_fx(frame, muzzlePos);
         break;
     }
     case ITEM_SHOTGUN: {   // 0x00459040
@@ -5224,6 +5258,16 @@ static void fire_weapon_fx(void)
         break;
     }
     case ITEM_COLT_PYTHON_DUM:
+        // In a DC session this id is the Beretta M92FS custom, so it takes the
+        // Beretta routine rather than the Python's (whose frame 0xc spawns an
+        // ejected-case billboard the Beretta's reload motion has no animation
+        // for). The consumption goes through the same helper, which is what
+        // makes the custom Beretta eat clips and not lockpicks.
+        if (g_bDcMode) {
+            fire_beretta_fx(frame, muzzlePos);
+            break;
+        }
+        // fall through - the USA build's DumDum-rounds Colt Python
     case ITEM_COLT_PYTHON_MAG: {   // 0x00459090
         if (frame == 0xc && g_playerEntity.unk_bf == 1) {
             if (fire_ammo_volley_gate() != 0) {
@@ -6723,7 +6767,7 @@ int door_try_enter(unsigned char* entry)
             door_locked_message(0xd);
             return 0;
         }
-        g_selectedItemId = ITEM_LOCK_PICK;
+        g_selectedItemId = lockpick_item_id();
     } else if (need == 0xfe) {
         // 0x0041b4a5: opens only from the other side.
         set_message_display(0xd4, 0xff);

@@ -6,6 +6,7 @@
 #include "../marni/MarniSystem.h"
 #include "../marni/PSXTexture.h"
 #include "../system/AssetPath.h"
+#include "dc/Items.h"    // lockpick item id (is_lockpick_item)
 #include "SpriteRenderer.h"
 #include "TmdRenderer.h"
 #include <cstdlib>
@@ -619,7 +620,10 @@ void OT_InsertPrimitive(void* prim, unsigned int depth)
     g_pendingSprites[0].v0 = dv;
     g_pendingSprites[0].u1 = 1.0f + du;
     g_pendingSprites[0].v1 = 1.0f + dv;
-    g_pendingSprites[0].color = 0xFFFFFFFF;
+    unsigned int r = (unsigned int)((g_color_r < 0.0f ? 0.0f : g_color_r > 1.0f ? 1.0f : g_color_r) * 255.0f);
+    unsigned int g = (unsigned int)((g_color_g < 0.0f ? 0.0f : g_color_g > 1.0f ? 1.0f : g_color_g) * 255.0f);
+    unsigned int b = (unsigned int)((g_color_b < 0.0f ? 0.0f : g_color_b > 1.0f ? 1.0f : g_color_b) * 255.0f);
+    g_pendingSprites[0].color = 0xFF000000u | (r << 16) | (g << 8) | b;
     g_pendingSprites[0].tex = g_displayImageSRV;
     g_pendingSprites[0].valid = TRUE;
     g_pendingSprites[0].depth = 0xFFF;  // background (far, drawn first)
@@ -1128,14 +1132,49 @@ void ApplyShakeAndRebuildSprites() {
 // Returns a pointer to the item name string (RE1 font encoding). If the item
 // has not been examined yet (its game flag is clear), the generic name for
 // its category is returned instead (e.g. "MANSION KEY").
+// ItemNames.h (the DC item-name table) is included here rather than at the
+// top: this file's includes sit at the bottom of the file (line ~1870).
+#include "dc/ItemNames.h"
+
+// DC + JPN name table. The Japanese release has no Director's Cut table of its
+// own, and the DC's table is English, so in DC + JPN the DC's four relocations
+// are applied to the Japanese table instead: the DC moves the LOCKPICK name
+// onto item 0x0D (where the DUMDUM rounds were), gives item 0x04 the BERETTA
+// name (the "custom edition" handgun) and puts MOON CREST on the two crest
+// halves 0x31/0x32. Each override points at the Japanese string for that same
+// thing - 0x02 BERETTA, 0x31 LOCKPICK and 0x2C MOON CREST in the JPN table - so
+// no English text leaks into a Japanese session. Built once, on first use.
+static const unsigned char** dc_jpn_item_names(void)
+{
+    static const unsigned char* table[128];
+    static int built = 0;
+    if (!built) {
+        for (int i = 0; i < 128; ++i) {
+            table[i] = g_ItemNamePointersJpn[i];
+        }
+        table[0x04 - 1] = g_ItemNamePointersJpn[0x02 - 1];   // BERETTA
+        table[0x0d - 1] = g_ItemNamePointersJpn[0x31 - 1];   // LOCKPICK
+        table[0x31 - 1] = g_ItemNamePointersJpn[0x2c - 1];   // MOON CREST
+        table[0x32 - 1] = g_ItemNamePointersJpn[0x2c - 1];   // MOON CREST
+        built = 1;
+    }
+    return table;
+}
+
 unsigned char* message_item_name_lookup(unsigned char itemId)
 {
     // The Japanese release has its own pair of tables (0x004cd388/0x004cd548,
     // read by its message_item_name_lookup at 0x00491440) holding the names in
     // FONT.TIM's encoding. The USA strings would still draw - the two fonts
-    // share their latin rows - but they would draw in English.
+    // share their latin rows - but they would draw in English. So the version
+    // picks the language first and only then applies the DC's edits.
     const int jpn = (GetAssetVersion() != 0);
-    const unsigned char** names = jpn ? g_ItemNamePointersJpn : g_ItemNamePointers;
+    // The Director's Cut renames four ids (0x04, 0x0D, 0x31/0x32); its table is
+    // otherwise identical to the USA one, so only the pointer table switches.
+    const unsigned char** names = jpn ? (g_bDcMode ? dc_jpn_item_names()
+                                                   : g_ItemNamePointersJpn)
+                               : g_bDcMode ? g_dcItemNamePointers
+                                           : g_ItemNamePointers;
     const unsigned char** unknown = jpn ? g_UnknownItemNamePointersJpn
                                         : g_UnknownItemNamePointers;
 
@@ -1324,7 +1363,7 @@ static void handle_message_post_action(void)
     case 1: // Use selected item
         {
             g_usedItemId = g_selectedItemId;
-            if (g_selectedItemId != ITEM_LOCK_PICK) {
+            if (!is_lockpick_item(g_selectedItemId)) {
                 unsigned char bVar4 = 0;
                 unsigned char* slots = (unsigned char*)g_ItemSlotsPointer;
                 bVar1 = slots[0];

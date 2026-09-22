@@ -22,6 +22,8 @@
 #include "../marni/Marni3DObject.h"
 #include "TmdRenderer.h"     // TMD slot regions - see the slot-region note there
 #include "SpriteRenderer.h"  // g_SubpixelOffsetX/Y (item viewer OT quad records)
+#include "dc/ItemModels.h"    // DC item-view file names (item_model_file_name)
+#include "dc/Items.h"       // lockpick/ammo item ids the DC moved
 #include <math.h>
 #include <cstdio>
 #include <cstring>
@@ -731,7 +733,17 @@ void menu_update_equipped_weapon(void)
         unsigned char itemId = slotPtr[(g_EquippedItemId - 1) * 2];
         if (g_playerEntity.equippedWeaponId != itemId) {
             g_playerEntity.equippedWeaponId = itemId;
-            LoadSoundBank(itemId, g_TimImageBuffer__bitmap);
+            // PS1 FUN_80053958, the same ADVANCED remap LoadEquippedWeaponAnimation
+            // applies: the Beretta M92FS custom EQUIPS AS weapon 2. The original
+            // compares against the raw item id first (so re-equipping item 4 over
+            // a remapped 2 still reloads), then overwrites, then loads the bank
+            // with the remapped id - which is how the custom Beretta gets the
+            // Beretta's firing report rather than the DumDum's.
+            if (g_bDcMode && (g_main_state_flags2 & MSF2_DC_ADVANCED) != 0
+                && itemId == DC_ITEM_BERETTA_CUSTOM) {
+                g_playerEntity.equippedWeaponId = ITEM_BERETTA;
+            }
+            LoadSoundBank(g_playerEntity.equippedWeaponId, g_TimImageBuffer__bitmap);
             DAT_00ae9f1e = 0xFF;
         }
     }
@@ -1026,11 +1038,19 @@ static void display_item_qty(unsigned char itemId, unsigned char qty, int depth)
     g_TextureDesc.height = 8;
 
     int hasInfRLauncher = Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_INF_R_LAUNCHER);
+    
+    // Director's Cut (PS1 SLUS_005.51 0x8005436c): the ADVANCED best-ending
+    // unlock (flag 0x7A) makes the Colt Python count as unlimited, so its
+    // digits give way to the same infinity glyph. The guard wraps the original
+    // condition rather than widening it, so the rocket flag's behaviour for
+    // every other item is untouched.
+    int hasInfPython = dc_is_infinite_colt_python(itemId);
 
     // Normal numeric quantity display
     // (flag 0x7E grants infinite quantity for certain items like the rocket launcher)
-    if (((hasInfRLauncher == 0 && itemId <= ITEM_NON_INFINITE_MAX) ||
-         (itemId != ITEM_ROCKET_LAUNCHER && itemId <= ITEM_NON_INFINITE_MAX)))
+    if (!(hasInfPython != 0 && itemId == ITEM_COLT_PYTHON_MAG)
+        && ((hasInfRLauncher == 0 && itemId <= ITEM_NON_INFINITE_MAX) ||
+            (itemId != ITEM_ROCKET_LAUNCHER && itemId <= ITEM_NON_INFINITE_MAX)))
     {
         // Clip quantity display for certain weapon types
         if (itemId != ITEM_FLAMETHROWER && itemId < ITEM_CLIP)
@@ -1051,6 +1071,18 @@ static void display_item_qty(unsigned char itemId, unsigned char qty, int depth)
         switch (itemId)
         {
         case ITEM_COLT_PYTHON_DUM:
+            // Item 4 is the DumDum-rounds Colt Python in the USA build, so it
+            // takes the orange ammo column with the other DumDum/acid items.
+            // The DC gives id 4 to the Beretta M92FS custom and drops this case
+            // from the switch (PS1 SLUS_005.51 0x8005436c leaves only 8/0x0D/
+            // 0x11 orange, against SLUS_001.70 0x80054b00's 4/8/0x0D/0x11), so
+            // the custom Beretta counts up in green like the plain one.
+            // (docs/DC_PORT.md 3i)
+            if (g_bDcMode) {
+                g_TextureDesc.texU = 0x80; // green digits
+                break;
+            }
+            // fall through - the USA build's DumDum Python
         case ITEM_BAZOOKA_ACID:
         case ITEM_DUM_DUM_ROUNDS:
         case ITEM_ACID_ROUNDS:
@@ -1441,7 +1473,7 @@ static int menu_item_check_combine(void)
             play_sfx(3, 6, 0);
             if ((bVar1 < 0x13) || (0x1a < bVar1)) {
                 if ((0x42 < bVar1) && (bVar1 < 0x4c)) return 2;
-            } else if ((g_roomId != ROOM_DRUG_STOREHOUSE) || (g_stageId != STAGE_GUARDHOUSE)) {
+            } else if ((g_roomId != ROOM_DRUG_STOREHOUSE) || (get_stage_id() != STAGE_GUARDHOUSE)) {
                 return 1;
             }
             *(unsigned char*)(ITEM_SLOTS + (unsigned int)bVar3 * 2) = pRec[1];
@@ -2264,6 +2296,29 @@ static void menu_tab_exit(void)
     menu_exit_cleanup();
 }
 
+// The item-view file name for an image type (byte 0 of the item's
+// g_ItemImageLookupTable record), i.e. g_ItemModelFileNames[imageType].
+//
+// The USA table holds 75 records (0..0x4A) and every USA image type is inside
+// it. The DC's lookup reaches 0x4B - the Beretta M92FS custom, whose view is
+// one of the DC's new ITEM_M2 files - and renames two more (the MOON CREST
+// halves). dc_item_model_name supplies those; anything else the DC's lookup
+// could produce past the table has no view, and the empty name makes LoadFile
+// fail so the viewer stays inert instead of opening an unrelated model.
+static const unsigned char* item_model_file_name(unsigned char imageType)
+{
+    if (g_bDcMode) {
+        const unsigned char* dcName = dc_item_model_name(imageType);
+        if (dcName != 0) {
+            return dcName;
+        }
+        if ((int)imageType >= ITEM_MODEL_NAME_COUNT) {
+            return g_ItemModelFileNames[0];
+        }
+    }
+    return (const unsigned char*)g_ItemModelFileNames + imageType * 8;
+}
+
 // (0x00464770) - Load the item's 3D model TIM for the menu display
 static void menu_load_item_model(void)
 {
@@ -2302,7 +2357,7 @@ static void menu_load_item_model(void)
     } else if (g_bItemMenuSelectedItemId == ITEM_MINIMI) {
         pcVar6 = (char*)g_ItemModelFileNameMINI;
     } else {
-        pcVar6 = (char*)g_ItemModelFileNames + (char)DAT_00ae9f1e * 8;
+        pcVar6 = (char*)item_model_file_name(DAT_00ae9f1e);
     }
     strcat(DAT_008e1cb0, pcVar6);
     strcat(DAT_008e1cb0, (const char*)g_ItemModelExtIVM);
@@ -2379,6 +2434,17 @@ static void menu_draw_health_bar(void)
             } else {
                 DAT_00ae9f2f = (unsigned char)((g_playerEntity.health - 1) /
                     (int)(unsigned int)(g_playerEntity.maxHealth >> 2));
+                // DC-only clamp (SLUS_005.51 0x80054708). maxHealth >> 2 loses
+                // the remainder, so a max that is not a multiple of 4 lets a
+                // full bar divide out to 4 - the POISONED row of the colour
+                // table and the poisoned face. It bites on exactly the two
+                // values the DC modes introduce: Jill ADVANCED 70 (69/17) and
+                // Jill TRAINING 150 (149/37). Harmless for the USA values
+                // (140, 96, 88 all land on 3), which is why the original PC
+                // build has no clamp here.
+                if (DAT_00ae9f2f > 3) {
+                    DAT_00ae9f2f = 3;
+                }
             }
             uVar3 = (unsigned int)DAT_00ae9f2f;
             DAT_00ae9f30 = DAT_004b92c8[uVar3 * 3];
@@ -3447,7 +3513,8 @@ static void map_update_objective_highlight(void)
     }
     if (Flg_ck((int)g_ScenarioFlags2, SCENARIO2_FLAG_SERUM_OBJ2_CHRIS) != 0) {
         if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_PROGRESS_4A) == 0) {
-            if ((g_stageId != STAGE_MANSION_1F) && (g_stageId != STAGE_MANSION_2F)) {
+            if ((get_stage_id() != STAGE_MANSION_1F) &&
+                (get_stage_id() != STAGE_MANSION_2F)) {
                 if (Flg_ck((int)g_ScenarioFlags2, SCENARIO2_FLAG_PLANT42_OBJ) != 0) { MAP_MODE = 1; return; }
                 MAP_MODE = 0;
                 return;
@@ -6025,12 +6092,26 @@ static int FUN_0044ed40(void)
     } else {
         switch (g_bItemMenuSelectedItemId) {
         case ITEM_COLT_PYTHON_DUM:
+            // In the USA build item 4 is the unobtainable DumDum-rounds Colt
+            // Python, one of the ammo-holding weapons the +9 below maps onto its
+            // own ammo item (4 + 9 = 0x0D, DUMDUM ROUNDS). The DC gives that id
+            // to the Beretta M92FS custom - its ADVANCED starting handgun, with
+            // rounds in the slot - and renamed 0x0D to LOCKPICK, so the same
+            // branch printed "LOCKPICK loaded." for the Beretta instead of its
+            // description ("A beretta M92FS Automatic. / Custom edition."),
+            // which is what the item shows on the PS1 DC. The DC falls through
+            // to the description path below like any other unexaminable item.
+            // (docs/DC_PORT.md 3i)
+            if (g_bDcMode) {
+                break;
+            }
+            // fall through - the USA build's DumDum Python
         case ITEM_COLT_PYTHON_MAG:
         case ITEM_BAZOOKA_EXPLOSIVE:
         case ITEM_BAZOOKA_ACID:
         case ITEM_BAZOOKA_FLAME:
             if (*(char*)((unsigned int)g_ItemSlotsPointer + 1 + (unsigned int)((DAT_00ae9f23 >> 1) - 4) * 2) != 0) {
-                g_selectedItemId = g_bItemMenuSelectedItemId + 9;
+                g_selectedItemId = weapon_ammo_item_id(g_bItemMenuSelectedItemId);
                 g_bItemViewerActionIndex = 2;
                 set_message_display(0xf0, 0);
                 return 1;
@@ -6407,13 +6488,20 @@ int FUN_0044e1b0(void)
                 uVar7 = 0xc0;
             } else {
                 if (((ITEM_EXPLOSIVE_ROUNDS < g_bItemMenuSelectedItemId) && (g_bItemMenuSelectedItemId < ITEM_EMPTY_BOTTLE)) || (g_bItemMenuSelectedItemId == ITEM_INK_RIBBONS)) {
+                    // Same doubling the pickup itself will apply, so the
+                    // "you got it" / "no room" choice matches what lands in the
+                    // inventory (PS1 FUN_8002e1a4 repeats IncludeCurrentItem's
+                    // shift for exactly this decision).
+                    unsigned char pickupQty = dc_item_pickup_quantity(
+                        g_bItemMenuSelectedItemId,
+                        *(unsigned char*)(*(int*)((int)g_pRoomActionEntry + 8) + 9));
                     bVar5 = 0;
                     bVar4 = g_totalInventorySlots;
                     do {
                         unsigned char* pbVar2 = (unsigned char*)((unsigned int)bVar5 * 2 + (unsigned int)g_ItemSlotsPointer);
                         if ((*pbVar2 == g_bItemMenuSelectedItemId) &&
                             ((unsigned short)((unsigned short)pbVar2[1] +
-                             (unsigned short)*(unsigned char*)(*(int*)((int)g_pRoomActionEntry + 8) + 9)) < 0xfb)) {
+                             (unsigned short)pickupQty) < 251)) {
                             set_message_display(0xc0, 0);
                             break;
                         }

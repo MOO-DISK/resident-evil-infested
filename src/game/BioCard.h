@@ -59,7 +59,13 @@ struct BioCardLayout {
     short         playerPosZCopy;            // 0x22E
     short         playerDirAngleCopy;        // 0x230
     unsigned char playerHealthStatusCopy;    // 0x232
-    unsigned char pad_0x233;                 // 0x233
+    // 0x233: padding in the USA build (no references in the binary) and the
+    // Director's Cut's mode byte - PS1 g_abDcGameMode, state block +0x33, which
+    // the DC's load path (SLUS_005.51 0x80019638) turns back into its
+    // g_status_flags mode bits. Same values as g_DcDifficulty: 0 STANDARD,
+    // 1 TRAINING, 2 ADVANCED, 3 ADVANCED*. A USA save has 0 here, so it loads
+    // as STANDARD.
+    unsigned char dcGameMode;                // 0x233
 
     // flags
     unsigned char scenarioFlags2[32];        // 0x234
@@ -126,6 +132,7 @@ static_assert(sizeof(BioCardLayout) == 0x41C, "BioCardLayout size mismatch");
 #define g_PlayerPosZCopy          (g_BioCard.playerPosZCopy)                    // SHORT 0x00be984E
 #define g_PlayerDirAngleCopy      (g_BioCard.playerDirAngleCopy)                // SHORT 0x00be9850
 #define g_PlayerHealthStatusCopy  (g_BioCard.playerHealthStatusCopy)            // BYTE 0x00be9852
+#define g_DcGameMode              (g_BioCard.dcGameMode)                        // BYTE 0x00be9853 - Director's Cut mode, saved with the card (PS1 g_abDcGameMode)
 
 #define g_ScenarioFlags2          (g_BioCard.scenarioFlags2)                    // BYTE[32] 0x00be9854
 #define g_LocksFlags              (g_BioCard.locksFlags)                        // BYTE[8] 0x00be9874
@@ -167,6 +174,10 @@ static_assert(sizeof(BioCardLayout) == 0x41C, "BioCardLayout size mismatch");
 #define SCENARIO_FLAG_PROGRESS_49         0x49  // acks serum objective 1 - set by the serum room's init script
 #define SCENARIO_FLAG_PROGRESS_4A         0x4A  // acks serum objective 2 - set by the serum room's init script
 #define SCENARIO_FLAG_MONSTER_PLANT_PROG  0x5B  // monster plant combat progression (3+ hits)
+// Director's Cut only (PS1 ENDING overlay 0x800e1914, DC-exclusive): raised
+// when an ADVANCED run reaches ending 6 or 7. The USA build never sets or reads
+// it; DC mode does, alongside the magnum it grants for the next cycle.
+#define DC_SCENARIO_FLAG_INF_COLT_PYTHON  0x7A  // ADVANCED cleared on a best ending
 #define SCENARIO_FLAG_SECOND_PLAYTHROUGH  0x7B  // second playthrough ("hard mode") - set after clearing
 #define SCENARIO_FLAG_HAS_LOCKPICK        0x7C  // has the lockpick (Jill)
 #define SCENARIO_FLAG_MENU_FADE_LATCH     0x7D  // fade-in latch, cleared when the menu closes
