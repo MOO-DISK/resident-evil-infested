@@ -115,12 +115,14 @@ static const FMVEntry* GetFmvTable(void)
 // video_mci_window_helper(0, 0x6f2) in state 1 and video_mci_window_helper(
 // 0x75d, 0) on the first MCI_NOTIFY, gated on
 // (g_CurrentFMVID == 1 && g_FmvCharacterId != 0 && g_videoFlagA4 != 0).
-// Both AVIs are 10 fps (USA 2259 frames, JPN 2261) and the MCIAVI default time
-// format is frames, so the two constants are raw frame numbers in both regions.
+//
+// The originals are 10 fps, so the constants below are their frame numbers
+// converted to milliseconds. Keeping them as time lets a converted movie -
+// which keeps every PS1 frame at the retimed rate - cut at the same moment.
 // ============================================================================
-#define FMV_PROLOGUE_ID          1
-#define FMV_PROLOGUE_CUT_START   0x6f2   // 1778 - last frame before the Chris beat
-#define FMV_PROLOGUE_CUT_END     0x75d   // 1885 - first frame after the Chris beat
+#define FMV_PROLOGUE_ID              1
+#define FMV_PROLOGUE_CUT_START_MS    177800   // frame 1778 at 10 fps
+#define FMV_PROLOGUE_CUT_END_MS      188500   // frame 1885 at 10 fps
 
 // ============================================================================
 // Global video playback state (file-scope, persistent across UpdateVideoPlayback calls)
@@ -151,25 +153,71 @@ static const char* ResolveVideoPath(const char* originalPath, char* outPath, siz
 // The path is normalised through the platform layer (separators + case) so the
 // backend can open exactly what was probed here.
 // ============================================================================
+static BOOL FileReadable(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) return FALSE;
+    fclose(f);
+    return TRUE;
+}
+
+// Resolve a path through the asset root and the platform's case resolution.
+// `out` receives the usable path; returns FALSE when normalization fails.
+static BOOL NormalizeVideoPath(const char* filename, char* out, size_t size)
+{
+    char resolvedPath[MAX_PATH];
+    const char* filePath = ResolveVideoPath(filename, resolvedPath, sizeof(resolvedPath));
+    if (filePath == NULL) filePath = filename;
+    plat_normalize_path(filePath, out, size);
+    return out[0] != '\0';
+}
+
+// Prefer a modern container over the legacy Cinepak AVI when one sits beside
+// it (the converter writes both). The FMV table still names the .avi, so the
+// modern file is the same path with the extension swapped.
+static BOOL PreferModernSibling(const char* aviPath, char* out, size_t size)
+{
+    const char* dot = strrchr(aviPath, '.');
+    if (dot == NULL || _stricmp(dot, ".avi") != 0) return FALSE;
+
+    // aviPath is already resolved through the asset root, so only the
+    // extension changes; plat_normalize_path resolves the case of the new
+    // filename on case-sensitive filesystems.
+    char candidate[MAX_PATH];
+    const size_t prefix = (size_t)(dot - aviPath);
+    if (prefix + 5 > MAX_PATH) return FALSE;
+    memcpy(candidate, aviPath, prefix);
+    strcpy_s(candidate + prefix, sizeof(candidate) - prefix, ".mp4");
+
+    char normalized[MAX_PATH];
+    plat_normalize_path(candidate, normalized, sizeof(normalized));
+    if (!FileReadable(normalized)) return FALSE;
+
+    strcpy_s(out, size, normalized);
+    return TRUE;
+}
+
 BOOL CheckVideoFileExists(const char* filename)
 {
     if (filename == NULL) return FALSE;
 
-    char resolvedPath[MAX_PATH];
-    const char* filePath = ResolveVideoPath(filename, resolvedPath, sizeof(resolvedPath));
-    if (filePath == NULL) filePath = filename;
-
     char normalized[MAX_PATH];
-    filePath = plat_normalize_path(filePath, normalized, sizeof(normalized));
-
-    FILE* f = fopen(filePath, "rb");
-    if (f == NULL) {
-        dbg_printf("[VIDEO] Could not open file: %s\n", filePath);
+    if (!NormalizeVideoPath(filename, normalized, sizeof(normalized))) {
         return FALSE;
     }
-    fclose(f);
 
-    strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), filePath);
+    char modern[MAX_PATH];
+    if (PreferModernSibling(normalized, modern, sizeof(modern))) {
+        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), modern);
+        return TRUE;
+    }
+
+    if (!FileReadable(normalized)) {
+        dbg_printf("[VIDEO] Could not open file: %s\n", normalized);
+        return FALSE;
+    }
+
+    strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), normalized);
     return TRUE;
 }
 
@@ -241,7 +289,7 @@ void UpdateVideoPlayback(void)
     case 1: // Open and start playing
         {
             // Jill: stop the first chunk right before the Chris-only dialogue.
-            int playTo = UsesScenarioCut() ? FMV_PROLOGUE_CUT_START : 0;
+            int playTo = UsesScenarioCut() ? FMV_PROLOGUE_CUT_START_MS : 0;
 
             if (!plat_video_open_and_play(g_videoFilePath, playTo)) {
                 g_FMVPlaybackState = 3;
@@ -284,7 +332,7 @@ void UpdateVideoPlayback(void)
                     // The first chunk ended at the cut point: jump past the
                     // Chris-only beat and play the remainder. g_videoFlagA4 is
                     // cleared below, so the next notification ends the FMV.
-                    plat_video_play_from(FMV_PROLOGUE_CUT_END);
+                    plat_video_play_from(FMV_PROLOGUE_CUT_END_MS);
                 } else {
                     plat_video_stop();
                 }

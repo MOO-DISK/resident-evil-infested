@@ -9,9 +9,9 @@
 // the video clock, so the picture cannot drift from the sound. When a movie has
 // no audio the wall clock stands in.
 //
-// Frames are addressed by index (the AVIs are 10 fps and the original's cut
-// points are frame numbers), so the shared state machine's playTo/playFrom
-// semantics carry over unchanged.
+// The state machine's cut points are times; this backend turns them into
+// frames with the stream's own rate, so a converted movie retimed to a
+// different frame count still cuts at the same moment.
 #include "../platform.h"
 
 #include "../../Globals.h"
@@ -409,7 +409,7 @@ BOOL plat_video_init(void)
     return TRUE;   // ffmpeg is linked in; nothing to probe
 }
 
-BOOL plat_video_open_and_play(const char* path, int playTo)
+BOOL plat_video_open_and_play(const char* path, int playToMs)
 {
     FreeAll();
 
@@ -479,7 +479,11 @@ BOOL plat_video_open_and_play(const char* path, int playTo)
         DecodeAllAudio();
     }
 
-    s_playToFrame = playTo;
+    // The cut point arrives as a time; turn it into this movie's frames (the
+    // stream rate is known now, and a converted movie's rate need not be the
+    // originals' 10 fps).
+    s_playToFrame = (playToMs > 0)
+        ? (int)((double)playToMs / 1000.0 * s_fps + 0.5) : 0;
     s_active = TRUE;
     s_endEvent = FALSE;
     SeekTo(0);
@@ -490,15 +494,16 @@ BOOL plat_video_open_and_play(const char* path, int playTo)
     return TRUE;
 }
 
-void plat_video_play_from(int fromFrame)
+void plat_video_play_from(int fromMs)
 {
     if (s_fmt == NULL) return;
+    const int fromFrame = (int)((double)fromMs / 1000.0 * s_fps + 0.5);
     s_playToFrame = 0;
     s_endEvent = FALSE;
     s_active = TRUE;
     SeekTo(fromFrame);
-    fprintf(stderr, "[VIDEO] play_from(%d) -> index %d eof=%d\n",
-            fromFrame, s_frameIndex, (int)s_eof);
+    fprintf(stderr, "[VIDEO] play_from(%dms -> frame %d) index %d eof=%d\n",
+            fromMs, fromFrame, s_frameIndex, (int)s_eof);
     Present();
 }
 
