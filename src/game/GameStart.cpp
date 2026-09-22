@@ -3,13 +3,13 @@
 // All functions decompiled from Ghidra with original addresses
 #include "../Globals.h"
 #include "dc/ItemTables.h"
+#include "dc/Items.h"
 #include "../marni/MarniSystem.h"
 #include "FileLoader.h"
 #include "SpriteRenderer.h"
 #include <cstdio>
 #include <cstring>
 #include "../system/AssetPath.h"
-#include "Items.h"
 
 extern void setSomeColor(int r, int g, int b);              // 0x00470a50
 extern void empty_40ae40(int);                              // 0x0040ae40 RoomInit.cpp

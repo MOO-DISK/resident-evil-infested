@@ -1,0 +1,52 @@
+#pragma once
+// Entry points for the two migrations the GUI drives.
+
+#include "core/Types.h"
+
+#include <string>
+
+namespace re1 {
+
+struct PcMigrationOptions {
+    // Either an already-extracted folder or a disc image, per sourceIsImage.
+    std::string sourcePath;
+    bool sourceIsImage = false;
+    // Game folder the USA/ or JPN/ tree is written under.
+    std::string targetRoot;
+    AssetVersion version = AssetVersion::USA;
+    // Convert every .avi in the migrated Movie folder to .mp4 (H.264 + AAC).
+    bool convertMovies = false;
+    // Keep the source .avi next to the generated .mp4 (the engine prefers the
+    // .mp4 and falls back to the .avi).
+    bool keepAvi = true;
+    // ffmpeg executable; resolved from PATH when it is a bare name.
+    std::string ffmpegPath = "ffmpeg";
+};
+
+struct DcMigrationOptions {
+    // The Director's Cut disc image (.bin/.cue/.iso). A raw 2352-byte image is
+    // required for clean CD-XA audio in the movie conversion.
+    std::string imagePath;
+    // Game folder the DC/ overlay is written under.
+    std::string targetRoot;
+    // Base tree the overlay is built on top of (also where the shipped PC AVIs
+    // used for movie retiming are looked up).
+    AssetVersion base = AssetVersion::USA;
+    Backgrounds backgrounds = Backgrounds::All;
+    // Convert the disc's .STR movies to .mp4 into the overlay's Movie/ folder.
+    bool convertMovies = false;
+    // Run the coverage/background check after the overlay is written.
+    bool verify = true;
+    std::string ffmpegPath = "ffmpeg";
+};
+
+// Both return true on success; on failure `error` carries a human-readable
+// message. Cancellation through `progress.cancelled` returns false with
+// "cancelled" as the error.
+bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
+                     std::string* error);
+
+bool migrateDcAssets(const DcMigrationOptions& opts, const Progress& progress,
+                     std::string* error);
+
+}  // namespace re1

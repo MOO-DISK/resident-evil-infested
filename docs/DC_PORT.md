@@ -13,8 +13,7 @@ enemy AI, stage overlays, audio) and `docs/PSX_DIRECTORS_CUT_ANALYSIS.md`.
 ## 0. Design: one key, an overlay, and a mode-exclusive folder
 
 - **Base trees are complete and never written to.** `assets/USA/` and
-  `assets/JPN/` stay exactly as the retail discs ship them. No `.bkp`, no
-  `*_dc.*` siblings, no in-place replacement.
+  `assets/JPN/` stay exactly as the retail discs ship them.
 - **A mode owns its content.** `assets/DC/` is laid out like a base tree and
   holds the DC's own assets under their *ordinary* names —
   `assets/DC/Data/title.pix` is the DC's title art. It is **not** a sparse diff:
