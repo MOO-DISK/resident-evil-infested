@@ -63,10 +63,12 @@ unsigned char dc_emd_advanced_index(unsigned char modelIndex)
         modelIndex = (unsigned char)(modelIndex + 0x14);
     }
 
-    // The costume-variant slot defers to the player's own model once the DC's
-    // outfit unlock is set.
+    // The costume-variant slot defers to the player's own model when mannequin
+    // A's outfit is the one being worn - that is what makes OUTFIT_A the OG
+    // outfit and OUTFIT_B (which leaves the index at DC_EMD_INDEX_COSTUME) the
+    // OG alternate. See the flag comment in EntityModels.h.
     if (modelIndex == DC_EMD_INDEX_COSTUME
-        && Flg_ck((int)g_ScenarioFlags, DC_SCENARIO_FLAG_OUTFIT_UNLOCK) != 0) {
+        && Flg_ck((int)g_ScenarioFlags, DC_SCENARIO_FLAG_OUTFIT_A) != 0) {
         modelIndex = (unsigned char)(g_playerEntity.id & 1);
     }
 

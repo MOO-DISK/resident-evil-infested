@@ -501,9 +501,29 @@ static inline unsigned short RoomSprBrightnessKey(unsigned short posData)
 // the same value wraps to ~4e9 and drops the overlay behind the entire scene.
 // Clamp instead - a key of 0 is the nearest slot, which is what a bias meant to
 // pull the overlay forward was asking for.
+//
+// The `& ~3` is the ordering-table BUCKET, and it is not cosmetic. The PS1
+// DrawRoomSpr (SLUS_001.70 0x80037964) submits every overlay with
+//
+//     GsSortFastSprite(spr, ot, min(posData >> 2, 0x3ff))
+//
+// so four consecutive posData values share ONE ordering-table slot and their
+// relative order comes from the submission order alone. That is exactly what
+// the backward entry walk below exists to preserve (see the path-flag note) -
+// but only if overlays the original could not tell apart keep one key here too.
+// This port's depthSort is `fade << 4`, four times finer than the original's
+// slot, so two overlapping overlays two posData units apart got reordered.
+//
+// Found on the Director's Cut arrange wardrobe closet (stage 1 room 0x1C ->
+// Stage8/ROOM81C0, camera 0). Groups 1 and 5 are the dressed and the bare
+// mannequin and the room's script leaves BOTH active in that camera, relying
+// on group 1 (the earlier entry) to cover group 5. Group 5's 24x32 chest tile
+// carries posData 220 against group 1's 222: one bucket on PS1, two keys here,
+// and the bare mannequin painted a grey rectangle across the outfit. 61 other
+// (room, camera) pairs in the shipped USA rooms carry the same kind of pair.
 static inline int RoomSprClampSortKey(int fade)
 {
-    return (fade < 0) ? 0 : fade;
+    return (fade < 0) ? 0 : (fade & ~3);
 }
 
 // ==========================================================================
@@ -590,7 +610,8 @@ void DrawRoomSpr(void)
                 fade  = (int)posData - fadeBias;
             }
 
-            AddSprite(&entry->texDesc, depth, 0, RoomSprClampSortKey(fade));
+            AddSprite(&entry->texDesc, depth, ROOM_MASK_TEXTURE_SLOT,
+                      RoomSprClampSortKey(fade));
         }
         return;
     }
@@ -638,7 +659,8 @@ void DrawRoomSpr(void)
             fade  = (int)posData - fadeBias;
         }
 
-        AddSprite(&entry->texDesc, depth, 0, RoomSprClampSortKey(fade));
+        AddSprite(&entry->texDesc, depth, ROOM_MASK_TEXTURE_SLOT,
+                  RoomSprClampSortKey(fade));
     }
 }
 
@@ -697,14 +719,21 @@ void load_room_masks(int param_1) // 0x00475a90
     // where the PC's objspr paks come from in the first place: the pak for
     // stage 2 room 3 camera 0 is that camera's RDT TIM, LZW'd, and the two
     // match to a single byte in 66080. The base rooms keep reading their paks,
-    // which is the shipped, tested path; the arrange rooms, whose TIMs are all
-    // full 256x256 pages, read the RDT directly.
+    // which is the shipped, tested path; the arrange rooms read the RDT
+    // directly.
+    //
+    // Those TIMs are 256 px WIDE but not always 256 tall - Stage8/ROOM81C0
+    // carries 256x176, 256x184, 256x184 and 256x216 for its four cameras. Both
+    // the page upload (LoadEffectTextureSheet) and the UV normalisation take
+    // the height from the TIM header, so a short page samples correctly; do
+    // not reintroduce a 256x256 assumption anywhere on this path.
     if (*spriteGroupPtr != 0 && room_file_stage() >= STAGE_ARRANGE_FIRST) {
         void* timMask = (void*)cameras[param_1].tim_mask_pointer;
         if (timMask != NULL) {
-            TexturePage_SetupFull(timMask, g_TextureBankID, g_TextureCurrentPage, 0);
+            TexturePage_SetupFull(timMask, g_TextureBankID, g_TextureCurrentPage,
+                                  ROOM_MASK_TEXTURE_SLOT);
         } else {
-            TexturePage_DeleteSet(4);
+            TexturePage_DeleteSet(ROOM_MASK_TEXTURE_SLOT);
         }
         return;
     }
@@ -734,11 +763,13 @@ void load_room_masks(int param_1) // 0x00475a90
         }
         unpack_pakfile_(pakData, g_TimImageBuffer__bitmap);
         // The original passes texture-set parameter 0 here. Its legacy page
-        // handle is stored in texture set 4 internally, while this port keeps
-        // the D3D SRV produced from that image at direct slot 0.
-        TexturePage_SetupFull(g_TimImageBuffer__bitmap, g_TextureBankID, g_TextureCurrentPage, 0);
+        // handle is stored in texture set 4 internally (SetupFull adds the 4),
+        // while this port keeps the D3D SRV at the direct slot - see
+        // ROOM_MASK_TEXTURE_SLOT.
+        TexturePage_SetupFull(g_TimImageBuffer__bitmap, g_TextureBankID,
+                              g_TextureCurrentPage, ROOM_MASK_TEXTURE_SLOT);
     } else {
-        TexturePage_DeleteSet(4);
+        TexturePage_DeleteSet(ROOM_MASK_TEXTURE_SLOT);
     }
 }
 

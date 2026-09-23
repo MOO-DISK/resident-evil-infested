@@ -5,6 +5,7 @@
 #include "FileLoader.h"
 #include "SpriteRenderer.h"
 #include "dc/ItemDescriptions.h"
+#include "dc/EntityModels.h"    // the arrange wardrobe's two outfit flags
 #include "../system/AssetPath.h"
 #include <cstdio>
 
@@ -430,7 +431,37 @@ void room_set(void)
                 }
             }
         } else {
-            g_main_state_flags2 |= MSF2_COSTUME_VARIANT;
+            // 0x00477888 sets the costume bit unconditionally, which is right
+            // for the USA: its alternate outfit is a one-way unlock.
+            //
+            // The Director's Cut's arrange wardrobe can put the player BACK in
+            // the arrange-exclusive outfit, so its room_set (SLUS_005.51
+            // 0x80044138) makes the same store conditional:
+            //
+            //     if ((g_status_flags & 0x20000) == 0)          // not ADVANCED
+            //         g_status_flags |= 0x4000000;
+            //     else if (Flg_ck(&g_gameOptionsFlags, 0x6f) ||
+            //              Flg_ck(&g_gameOptionsFlags, 0x70))
+            //         g_status_flags |= 0x4000000;
+            //     else
+            //         g_status_flags &= 0xfbffffff;             // CLEAR it
+            //
+            // i.e. in ADVANCED the bit tracks the two wardrobe flags, and with
+            // neither set the player is in the arrange outfit. Without the
+            // clear, LoadEntityEMD keeps taking its costume branch forever:
+            // the index becomes DC_EMD_INDEX_COSTUME and, with OUTFIT_A also
+            // cleared by the script, nothing maps it back down - so changing
+            // out of an OG outfit landed on the OG ALTERNATE instead of the
+            // arrange one. The wardrobe writes characterModelId = 8 for every
+            // one of the three choices, so this store is the only thing that
+            // tells them apart.
+            if ((g_main_state_flags2 & MSF2_DC_ADVANCED) != 0 &&
+                Flg_ck((int)g_ScenarioFlags, DC_SCENARIO_FLAG_OUTFIT_A) == 0 &&
+                Flg_ck((int)g_ScenarioFlags, DC_SCENARIO_FLAG_OUTFIT_B) == 0) {
+                g_main_state_flags2 &= ~MSF2_COSTUME_VARIANT;
+            } else {
+                g_main_state_flags2 |= MSF2_COSTUME_VARIANT;
+            }
             g_CharacterModelId &= 7;
         }
 

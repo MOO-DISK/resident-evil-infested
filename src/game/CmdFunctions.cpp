@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include "../DebugPrint.h"
+#include "dc/ArrangeStages.h"   // room_file_stage() - see cmd_state_word_set
 
 // Forward declarations for functions defined in other files
 extern unsigned int set_message_display(unsigned short msg_id, unsigned short pause_game);
@@ -1720,7 +1721,46 @@ int cmd_state_word_set(void)
     // Original: MOV word ptr [ECX + 0xbe9834],AX with ECX = (op1 >> 7) & ~1.
     // That is a BYTE offset ((op1 >> 8) * 2), not an element index - indexing a
     // short* with it doubled the offset and wrote into the wrong field.
-    *(unsigned short*)((char*)&g_fading_state + (((unsigned int)op1 >> 7) & 0xFFFFFFFEu)) = value;
+    //
+    // The index space is confirmed against the PS1 build, which does the same
+    // thing as an element index into a ushort array: cmd_state_word_set
+    // (SLUS_001.70 0x8004553c) is `(&g_fadeOutCounter)[op1 >> 8] = value`, and
+    // the three globals sit at 0x800c8674 / 0x800c8676 / 0x800c8678 - i.e.
+    // index 1 is specialRoomLightState and index 2 is specialRoomLightDelta,
+    // exactly as here.
+    const unsigned int byteOffset = ((unsigned int)op1 >> 7) & 0xFFFFFFFEu;
+
+    // PORT-ONLY, Director's Cut. The arrange wardrobe's outfit-change script
+    // (Stage8/ROOM81C0 event 1) ramps the special-room-light overlay to full
+    // black over 15 frames, freezes it with `state_word_set index 2 = 0`
+    // (delta), and then one frame later writes `index 1 = 0` (state) - which
+    // drops the overlay and un-blanks the screen.
+    //
+    // That is correct on a PlayStation: the console is blocked on the CD for
+    // the whole "Just a moment please." interlude (~300 frames of clothing
+    // SFX), so it keeps showing the black frame it last presented and the
+    // write is just post-load bookkeeping. This port loads instantly and keeps
+    // rendering, so the room came back with its 20 masks under the message -
+    // the grey screen with overlays showing through.
+    //
+    // Nothing in either original suppresses that render, so hold the blank
+    // instead: ignore the write that would clear a fade the script has already
+    // driven to full and frozen. The overlay then keeps painting opaque black
+    // until room re-init (RoomInit.cpp sets specialRoomLightState = 0xffff),
+    // which is exactly where the sequence ends (`room_action [00 01 81]`).
+    //
+    // Scoped so nothing else can reach it: DC mode only, arrange rooms only
+    // (so the stage-3 ROOM4110 flashing emergency light, the other script that
+    // writes these two fields, is untouched), and only when the fade really is
+    // parked at full black with its delta already zeroed.
+    if (byteOffset == 2 && value == 0 && g_bDcMode &&
+        room_file_stage() >= STAGE_ARRANGE_FIRST &&
+        g_SpecialRoomLightDelta == 0 &&
+        (short)g_SpecialRoomLightState >= 0x7F00) {
+        return 1;
+    }
+
+    *(unsigned short*)((char*)&g_fading_state + byteOffset) = value;
     return 1;
 }
 

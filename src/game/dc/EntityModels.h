@@ -36,12 +36,32 @@
 // The costume-variant slot the PC table holds as em1030 / em1031.
 #define DC_EMD_INDEX_COSTUME        0x33
 
-// The DC's alternate-outfit unlock. Bit of g_ScenarioFlags (PS1
+// The arrange wardrobe's two mannequin flags. Bits of g_ScenarioFlags (PS1
 // g_gameOptionsFlags, the same bank whose 0x7B is the port's
-// SCENARIO_FLAG_SECOND_PLAYTHROUGH); nothing in the port sets it yet - the DC
-// owns it in its SELECT / ENDING overlays - so the branch below is inert until
-// those land.
-#define DC_SCENARIO_FLAG_OUTFIT_UNLOCK 0x6F
+// SCENARIO_FLAG_SECOND_PLAYTHROUGH), toggled by the examine scripts of
+// Stage8/ROOM81C0 events 0 and 3:
+//
+//     if (flag is CLEAR) { set this flag; clear the other } else { clear it }
+//
+// so between them they encode THREE outfits, which is what the arrange
+// wardrobe offers:
+//
+//   neither set  -> the arrange-exclusive outfit (EM1032 / EM1033).
+//                   LoadEntityEMD never reaches its costume branch, so the
+//                   player index stays 0/1 and the ADVANCED remap takes it to
+//                   DC_EMD_INDEX_PLAYER_ADV.
+//   OUTFIT_A set -> the OG outfit. The costume branch turns the index into
+//                   DC_EMD_INDEX_COSTUME and this flag then maps it back down
+//                   to the plain player model (0/1).
+//   OUTFIT_B set -> the OG alternate outfit, i.e. DC_EMD_INDEX_COSTUME itself
+//                   (EM1030 / EM1031) - the costume index with no remap.
+//
+// room_set is what turns "neither set" into the arrange outfit: it clears
+// MSF2_COSTUME_VARIANT when both are clear (see RoomInit.cpp). Leaving that
+// out is a one-way trip - the USA's costume unlock is set once and never
+// cleared, so the player could never get back out of an OG outfit.
+#define DC_SCENARIO_FLAG_OUTFIT_A 0x6F
+#define DC_SCENARIO_FLAG_OUTFIT_B 0x70
 
 // The ADVANCED model remap (PS1 0x800238c8, first block). Returns the index to
 // load; the identity outside ADVANCED and for every index the DC does not
