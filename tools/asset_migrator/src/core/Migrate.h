@@ -29,8 +29,7 @@ struct DcMigrationOptions {
     std::string imagePath;
     // Game folder the DC/ overlay is written under.
     std::string targetRoot;
-    // Base tree the overlay is built on top of (also where the shipped PC AVIs
-    // used for movie retiming are looked up).
+    // Base tree the overlay is built on top of.
     AssetVersion base = AssetVersion::USA;
     Backgrounds backgrounds = Backgrounds::All;
     // Convert the disc's .STR movies to .mp4 into the overlay's Movie/ folder.

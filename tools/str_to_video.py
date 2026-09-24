@@ -7,13 +7,11 @@ Produces, for each movie:
     stays drop-in compatible with the existing FMV table; and
   * <name>.mp4 - H.264 + AAC, the modern format the port prefers when present.
 
-Both carry every decoded MDEC frame and the CD-XA audio. The default timing
-behaviour matches the shipped PC movie of the same name: the PS1 stream plays
-as fast as the CD delivers frames (about 15 fps for dm1), while Capcom's PC
-AVIs are a fixed, slower 10 fps, so all the video is kept and the movie is
-retimed to the PC AVI's duration (the audio is played back slower, i.e. pitched down,
-exactly as the shipped PC AVIs are). Use --timing ps1 to keep the PS1's own
-speed instead.
+Both carry every decoded MDEC frame and the CD-XA audio. The default timing is
+the STR's own CD-sector timing: the source is read at the PS1's 150 sectors per
+second through the last valid video sector, so trailing XA/padding does not
+shorten the displayed movie. Use --timing pc to reproduce the shipped PC
+movie's slower wall-clock timing.
 
 Two sources are supported:
 
@@ -52,7 +50,20 @@ import mdec
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 SECTOR = 0x800
+# PS1 FMV streaming uses CdlModeSpeed; see docs/PS1_VIDEO_FORMAT.txt.
+CD_SECTOR_RATE = 150.0
 MAGIC = b'\x60\x01\x01\x80'
+
+
+def source_frame_rate(frames, sectors):
+    if not frames or not sectors:
+        return 0.0
+    raw = frames * CD_SECTOR_RATE / float(sectors)
+    for rate in (7.5, 10.0, 15.0, 20.0, 30.0):
+        if abs(raw - rate) < 0.25:
+            return 20000.0 / 1001.0 if rate == 20.0 else rate
+    return raw
+
 
 # ffmpeg xa_adpcm_table (cdrom XA predictor coefficients, filter 0..4).
 XA_TABLE = ((0, 0), (60, 0), (115, -52), (98, -55), (122, -60))
@@ -67,9 +78,19 @@ class Movie(object):
         self.width = 0
         self.height = 0
         self.version = 0
+        self.sector_count = 0
+        self.video_sector_end = 0
         self.frames = []        # bytearray per frame, MDEC bitstream
         self.audio = bytearray()  # concatenated 128-byte XA sound groups
         self.truncated_audio = False
+
+
+def _is_valid_video(data):
+    if len(data) < 0x20 or data[:4] != MAGIC:
+        return False
+    magic32 = struct.unpack_from('<I', data, 0)[0]
+    magic16 = struct.unpack_from('<H', data, 22)[0]
+    return magic32 == 0x80010160 and magic16 == 0x3800
 
 
 def demux(sectors):
@@ -86,12 +107,10 @@ def demux(sectors):
             if len(data) < 2304:
                 mov.truncated_audio = True
             continue
-        if data[:4] != MAGIC:
+        if not _is_valid_video(data):
             continue
-        magic32, _chunk, _chunks, frame_no, _used, w, h, _n, magic16, qscale, \
+        _magic32, _chunk, _chunks, frame_no, _used, w, h, _n, _magic16, qscale, \
             version = struct.unpack_from('<IHHIIHHHHHH', data, 0)
-        if magic32 != 0x80010160 or magic16 != 0x3800:
-            continue
         if frame_no not in by_frame:
             by_frame[frame_no] = bytearray()
             order.append(frame_no)
@@ -105,10 +124,16 @@ def parse_str(path, name):
     """2048-byte-per-sector extract."""
     data = open(path, 'rb').read()
     sectors = []
-    for s in range(len(data) // SECTOR):
-        chunk = data[s * SECTOR:(s + 1) * SECTOR]
-        sectors.append((chunk[:4] == MAGIC, chunk))
+    video_sector_end = 0
+    for s in range(0, len(data), SECTOR):
+        chunk = data[s:s + SECTOR]
+        is_video = chunk[:4] == MAGIC
+        sectors.append((is_video, chunk))
+        if _is_valid_video(chunk):
+            video_sector_end = s // SECTOR + 1
     mov = demux(sectors)
+    mov.sector_count = len(data) // SECTOR
+    mov.video_sector_end = video_sector_end
     mov.name = name
     return mov
 
@@ -163,14 +188,20 @@ def parse_bin(img, lba, size, name):
     """Raw sectors: classify by submode, honour Form 1 vs Form 2 sizing."""
     nsec = size // 2048
     sectors = []
+    video_sector_end = 0
     for s in range(nsec):
         raw = img[(lba + s) * 2352:(lba + s) * 2352 + 2352]
         submode = raw[18]
         if submode & 0x04:                     # AUDIO
             sectors.append((False, raw[24:24 + 2304]))
         elif submode & 0x02:                   # VIDEO
-            sectors.append((True, raw[24:24 + 2048]))
+            chunk = raw[24:24 + 2048]
+            sectors.append((True, chunk))
+            if _is_valid_video(chunk):
+                video_sector_end = s + 1
     mov = demux(sectors)
+    mov.sector_count = nsec
+    mov.video_sector_end = video_sector_end
     mov.name = name
     return mov
 
@@ -368,14 +399,19 @@ def convert(mov, args, fmt, pc_dirs):
 
     wav_path = None
     fps = None if args.fps == 'auto' else float(args.fps)
-    ps1_dur = None
+    duration_sectors = mov.video_sector_end or mov.sector_count
+    source_dur = (duration_sectors / CD_SECTOR_RATE
+                  if duration_sectors else None)
+    source_fps = source_frame_rate(len(mov.frames), duration_sectors)
+    audio_dur = None
+    nframes = 0
     target = None
     asetrate = None
 
     if mov.audio and not args.no_audio:
         pcm, nframes = decode_xa(bytes(mov.audio), True)
-        ps1_dur = nframes / float(args.xa_rate)
-        print('  audio: %.2f s @ %d Hz stereo' % (ps1_dur, args.xa_rate))
+        audio_dur = nframes / float(args.xa_rate)
+        print('  audio: %.2f s @ %d Hz stereo' % (audio_dur, args.xa_rate))
         if not args.dry_run:
             fd, wav_path = tempfile.mkstemp(suffix='.wav')
             os.close(fd)
@@ -385,20 +421,25 @@ def convert(mov, args, fmt, pc_dirs):
         pc = pc_duration(mov.name, pc_dirs)
         if pc:
             target = pc
-            if ps1_dur:
-                # Play the samples slower so they last the PC movie's length;
-                # asetrate = samples / target seconds, which lowers the pitch
-                # exactly as the shipped PC AVIs do.
+            if audio_dur:
                 asetrate = nframes / pc
             print('  pc movie: %.2f s (retiming from %.2f s, audio pitch %+.1f%%)'
-                  % (pc, ps1_dur if ps1_dur else 0,
+                  % (pc, audio_dur if audio_dur else 0,
                      (asetrate / args.xa_rate - 1.0) * 100 if asetrate else 0))
         else:
             print('  pc movie: none for this name, keeping PS1 timing')
 
+    if source_dur:
+        print('  source timing: %.2f s (%d/%d sectors, %.3f fps)'
+              % (source_dur, duration_sectors, mov.sector_count, source_fps))
+
     if args.fps == 'auto':
-        dur = target or ps1_dur
-        fps = len(mov.frames) / dur if dur else 15.0
+        if target:
+            fps = len(mov.frames) / target
+        elif source_dur and source_fps > 0:
+            fps = source_fps
+        else:
+            fps = len(mov.frames) / audio_dur if audio_dur else 15.0
 
     print('  fps: %.3f  duration: %.2f s' % (fps, len(mov.frames) / fps))
     try:
@@ -419,10 +460,10 @@ def main():
     ap.add_argument('--out', required=True, help='folder for the .avi/.mp4')
     ap.add_argument('--format', default='both',
                     choices=['avi', 'mp4', 'both'])
-    ap.add_argument('--timing', default='pc', choices=['pc', 'ps1'],
-                    help='"pc" (default) retimes each movie to the duration of '
-                         'the shipped PC AVI of the same name; "ps1" keeps the '
-                         'PS1 stream\'s own speed')
+    ap.add_argument('--timing', default='ps1', choices=['pc', 'ps1'],
+                    help='"ps1" (default) keeps the STR sector timing; "pc" '
+                         'retimes each movie to the duration of the shipped PC '
+                         'AVI of the same name')
     ap.add_argument('--pc-movies', action='append',
                     help='folder holding the shipped PC Movie AVIs '
                          '(default assets/USA/Movie then assets/JPN/Movie)')

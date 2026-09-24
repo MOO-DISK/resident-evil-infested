@@ -152,7 +152,7 @@ bool migrateDcAssets(const DcMigrationOptions& opts, const Progress& progress,
                 cleanup();
                 return false;
             }
-            if (!convertStrMovie(img, e, movieOut, opts.ffmpegPath, pcDirs,
+            if (!convertStrMovie(img, e, movieOut, opts.ffmpegPath,
                                  progress, error)) {
                 cleanup();
                 return false;

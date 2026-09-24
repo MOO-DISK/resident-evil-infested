@@ -142,9 +142,10 @@ int cmdStrInfo(const std::string& image, const std::string& filter) {
             std::printf("ERROR: %s\n", err.c_str());
             return 1;
         }
-        std::printf("%-24s frames=%-5zu %dx%d v%d audio=%zu%s\n",
+        std::printf("%-24s frames=%-5zu %dx%d v%d audio=%zu sectors=%zu video_end=%zu%s\n",
                     fs::path(e.path).stem().string().c_str(), mov.frames.size(),
                     mov.width, mov.height, mov.version, mov.audio.size(),
+                    mov.sectorCount, mov.videoSectorEnd,
                     mov.truncatedAudio ? " TRUNCATED" : "");
         ++n;
     }
@@ -162,11 +163,6 @@ int cmdStrConvert(const std::string& image, const std::string& outDir,
         return 1;
     }
     re1::Progress p = consoleProgress();
-    std::vector<std::string> pcDirs = {
-        (fs::path(outDir).parent_path().parent_path() / "USA" / "Movie")
-            .string(),
-        (fs::path(outDir).parent_path().parent_path() / "JPN" / "Movie")
-            .string()};
     int n = 0;
     for (const auto& e : img.entries()) {
         if (e.directory || extensionOf(e.path) != ".str") continue;
@@ -174,7 +170,7 @@ int cmdStrConvert(const std::string& image, const std::string& outDir,
             toUpper(e.path).find(toUpper(filter)) == std::string::npos)
             continue;
         if (limit > 0 && n >= limit) break;
-        if (!convertStrMovie(img, e, outDir, ffmpeg, pcDirs, p, &err)) {
+        if (!convertStrMovie(img, e, outDir, ffmpeg, p, &err)) {
             std::printf("ERROR: %s\n", err.c_str());
             return 1;
         }

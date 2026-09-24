@@ -40,16 +40,16 @@ rows and the PS1 colour-key -> PC index-0 transparency relabel), decodes **every
 movies to `.mp4`.
 
 `Base tree` selects which tree the overlay is built on top of (it is only read:
-the font comes from it and the movie retiming looks up the shipped PC AVIs in
-`<target>/USA/Movie` then `<target>/JPN/Movie`). `Verify` runs the coverage and
-background checks afterwards.
+the font comes from it). Movie conversion keeps each STR's original CD-sector
+timing by default, at the PS1's 150 sectors per second through the last valid
+video sector. `Verify` runs
+the coverage and background checks afterwards.
 
 ## Requirements
 
 - Qt 6.8 (MSVC 2022 64-bit kit; `C:\Qt\6.8.3\msvc2022_64` by default).
 - Visual Studio 2022/2026 with the C++ toolset.
-- `ffmpeg` on `PATH` (or browsed to) for the movie conversions. Everything else
-  is self-contained; there is no Python dependency at runtime.
+- `ffmpeg` on `PATH` (or browsed to) for the movie conversions.
 
 ## Build
 
@@ -109,5 +109,4 @@ The C++ decoders were checked against the Python tools:
   `scripts/build_dc_assets.py` run over the same extracted disc: 584 files,
   0 differences, and the same 136 relabelled files / 3,372,204 texels.
 - The `.STR` demux matches `tools/str_to_video.py` exactly (DM8: 160 frames,
-  256x240, v2, 3582 audio groups) and the `--timing pc` retime reproduces its
-  `11.20 s / -5.2%` result.
+  256x240, v2, 3582 audio groups).

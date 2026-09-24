@@ -10,8 +10,8 @@
 // no audio the wall clock stands in.
 //
 // The state machine's cut points are times; this backend turns them into
-// frames with the stream's own rate, so a converted movie retimed to a
-// different frame count still cuts at the same moment.
+// frames with the stream's own rate, so a source-timed or PC-retimed movie
+// still cuts at the same moment.
 #include "../platform.h"
 
 #include "../../Globals.h"

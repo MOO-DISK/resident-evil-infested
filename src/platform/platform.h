@@ -137,11 +137,9 @@ void plat_cursor_show(BOOL show);
 // into a texture (video.cpp). On Linux ffmpeg decodes into a texture that the
 // backend uploads, draws as a full-screen quad and presents (video.cpp).
 //
-// Cut points are MILLISECONDS, not frame indices: the original expressed the
-// prologue cut as frames 1778/1885 at the PC AVIs' 10 fps, but a converted
-// movie can have a different frame count and rate, so each backend turns the
-// time into its own frames (MCI from the AVI's header rate, the decoders from
-// the stream rate).
+// Cut points are MILLISECONDS, not frame indices: the PC prologue uses frames
+// 1778/1885 at 10 fps, while the DC STR stream uses its 15-fps frame points.
+// Each backend turns the selected time into its own stream frames.
 // ---------------------------------------------------------------------------
 
 // Probe the decoder backend. FALSE means "no FMV available, skip the movie".

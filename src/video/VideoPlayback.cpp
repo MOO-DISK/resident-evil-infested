@@ -107,22 +107,32 @@ static const FMVEntry* GetFmvTable(void)
 }
 
 // ============================================================================
-// FMV 1 (PU.avi / PJ.avi) scenario cut
-// The prologue movie is authored for the Chris scenario: frames 1778..1884
-// (2:57.8 - 3:08.4 at the movie's 10 fps) are a Chris-only dialogue beat. When
-// Jill was selected, the original plays the movie in two chunks and drops that
-// range - see UpdateVideoPlayback @0x00474e00, which calls
-// video_mci_window_helper(0, 0x6f2) in state 1 and video_mci_window_helper(
-// 0x75d, 0) on the first MCI_NOTIFY, gated on
-// (g_CurrentFMVID == 1 && g_FmvCharacterId != 0 && g_videoFlagA4 != 0).
-//
-// The originals are 10 fps, so the constants below are their frame numbers
-// converted to milliseconds. Keeping them as time lets a converted movie -
-// which keeps every PS1 frame at the retimed rate - cut at the same moment.
+// FMV 1 (PU.avi / PJ.avi) scenario cut; UpdateVideoPlayback @0x00474e00 uses
+// millisecond cut points so the PC and DC streams select their native frames.
 // ============================================================================
-#define FMV_PROLOGUE_ID              1
-#define FMV_PROLOGUE_CUT_START_MS    177800   // frame 1778 at 10 fps
-#define FMV_PROLOGUE_CUT_END_MS      188500   // frame 1885 at 10 fps
+#define FMV_PROLOGUE_ID                 1
+#define FMV_PROLOGUE_CUT_START_USAGE_MS 177800
+#define FMV_PROLOGUE_CUT_END_USAGE_MS   188500
+#define FMV_PROLOGUE_CUT_START_DC_FRAME 2430 // SLUS_001.70 PlayFMV @0x80037020: 0x97e
+#define FMV_PROLOGUE_CUT_END_DC_FRAME   2591 // SLUS_001.70 PlayFMV @0x80037020: 0xa1f
+#define FMV_PROLOGUE_DC_FPS             15
+
+static int DcFrameToMs(int frame)
+{
+    return (frame * 1000 + FMV_PROLOGUE_DC_FPS / 2) / FMV_PROLOGUE_DC_FPS;
+}
+
+static int GetPrologueCutStartMs(void)
+{
+    return g_bDcMode ? DcFrameToMs(FMV_PROLOGUE_CUT_START_DC_FRAME)
+                     : FMV_PROLOGUE_CUT_START_USAGE_MS;
+}
+
+static int GetPrologueCutEndMs(void)
+{
+    return g_bDcMode ? DcFrameToMs(FMV_PROLOGUE_CUT_END_DC_FRAME)
+                     : FMV_PROLOGUE_CUT_END_USAGE_MS;
+}
 
 // ============================================================================
 // Global video playback state (file-scope, persistent across UpdateVideoPlayback calls)
@@ -291,7 +301,7 @@ void UpdateVideoPlayback(void)
     case 1: // Open and start playing
         {
             // Jill: stop the first chunk right before the Chris-only dialogue.
-            int playTo = UsesScenarioCut() ? FMV_PROLOGUE_CUT_START_MS : 0;
+            int playTo = UsesScenarioCut() ? GetPrologueCutStartMs() : 0;
 
             if (!plat_video_open_and_play(g_videoFilePath, playTo)) {
                 g_FMVPlaybackState = 3;
@@ -334,7 +344,7 @@ void UpdateVideoPlayback(void)
                     // The first chunk ended at the cut point: jump past the
                     // Chris-only beat and play the remainder. g_videoFlagA4 is
                     // cleared below, so the next notification ends the FMV.
-                    plat_video_play_from(FMV_PROLOGUE_CUT_END_MS);
+                    plat_video_play_from(GetPrologueCutEndMs());
                 } else {
                     plat_video_stop();
                 }

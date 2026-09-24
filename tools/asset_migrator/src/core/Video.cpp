@@ -18,7 +18,31 @@ namespace re1 {
 namespace {
 
 constexpr size_t kSector = 0x800;
+// SLUS_001.70 _fmvPlay @ 0x8005A5B8 uses CdlModeSpeed (150 sectors/second).
+constexpr double kPsxCdsSpeed = 150.0;
 const uint8_t kMagic[4] = {0x60, 0x01, 0x01, 0x80};
+
+double sourceDuration(const Movie& mov) {
+    const size_t sectors = mov.videoSectorEnd > 0
+        ? mov.videoSectorEnd
+        : mov.sectorCount;
+    return sectors > 0
+        ? static_cast<double>(sectors) / kPsxCdsSpeed
+        : 0.0;
+}
+
+double sourceFrameRate(size_t frames, size_t sectors) {
+    if (frames == 0 || sectors == 0) return 0.0;
+    const double raw = static_cast<double>(frames) * kPsxCdsSpeed /
+        static_cast<double>(sectors);
+    const double rates[] = {7.5, 10.0, 15.0, 20.0, 30.0};
+    for (double rate : rates) {
+        if (std::abs(raw - rate) < 0.25) {
+            return rate == 20.0 ? 20000.0 / 1001.0 : rate;
+        }
+    }
+    return raw;
+}
 
 // ffmpeg xa_adpcm_table (cdrom XA predictor coefficients, filter 0..4).
 const int kXaTable[5][2] = {{0, 0}, {60, 0}, {115, -52}, {98, -55}, {122, -60}};
@@ -103,10 +127,10 @@ void writeWav(const std::string& path, const std::vector<int16_t>& samples,
     writeFile(path, bytes);
 }
 
-void demuxVideoSector(const uint8_t* data, size_t len, Movie* mov,
+bool demuxVideoSector(const uint8_t* data, size_t len, Movie* mov,
                       std::unordered_map<uint32_t, size_t>* byFrame,
                       std::vector<uint32_t>* order) {
-    if (len < 0x20 || std::memcmp(data, kMagic, 4) != 0) return;
+    if (len < 0x20 || std::memcmp(data, kMagic, 4) != 0) return false;
     uint32_t magic32, frameNo, used;
     uint16_t chunk, chunks, w, h, n, magic16, qscale, version;
     std::memcpy(&magic32, data + 0, 4);
@@ -125,7 +149,7 @@ void demuxVideoSector(const uint8_t* data, size_t len, Movie* mov,
     (void)used;
     (void)n;
     (void)qscale;
-    if (magic32 != 0x80010160 || magic16 != 0x3800) return;
+    if (magic32 != 0x80010160 || magic16 != 0x3800) return false;
     size_t idx;
     auto it = byFrame->find(frameNo);
     if (it == byFrame->end()) {
@@ -140,6 +164,7 @@ void demuxVideoSector(const uint8_t* data, size_t len, Movie* mov,
     mov->width = w;
     mov->height = h;
     mov->version = version;
+    return true;
 }
 
 std::vector<int16_t> decodeXaStereo(const std::vector<uint8_t>& groups,
@@ -264,6 +289,7 @@ bool strParseFromDisc(const DiscImage& img, const DiscEntry& entry, Movie* out,
     std::unordered_map<uint32_t, size_t> byFrame;
     std::vector<uint32_t> order;
     const uint32_t nsec = entry.size / 2048;
+    mov.sectorCount = nsec;
     for (uint32_t s = 0; s < nsec; ++s) {
         uint8_t raw[2352];
         if (img.isRaw() && img.readRawSector(entry.lba + s, raw)) {
@@ -271,13 +297,15 @@ bool strParseFromDisc(const DiscImage& img, const DiscEntry& entry, Movie* out,
             if (submode & 0x04) {
                 mov.audio.insert(mov.audio.end(), raw + 24, raw + 24 + 2304);
             } else if (submode & 0x02) {
-                demuxVideoSector(raw + 24, 2048, &mov, &byFrame, &order);
+                if (demuxVideoSector(raw + 24, 2048, &mov, &byFrame, &order))
+                    mov.videoSectorEnd = s + 1;
             }
         } else {
             uint8_t buf[2048];
             if (!img.readUserData(entry.lba + s, buf, 2048)) continue;
             if (std::memcmp(buf, kMagic, 4) == 0) {
-                demuxVideoSector(buf, 2048, &mov, &byFrame, &order);
+                if (demuxVideoSector(buf, 2048, &mov, &byFrame, &order))
+                    mov.videoSectorEnd = s + 1;
             } else {
                 mov.audio.insert(mov.audio.end(), buf, buf + 2048);
                 mov.truncatedAudio = true;
@@ -298,10 +326,12 @@ bool strParseExtract(const std::vector<uint8_t>& data, Movie* out,
     std::unordered_map<uint32_t, size_t> byFrame;
     std::vector<uint32_t> order;
     const size_t nsec = data.size() / kSector;
+    mov.sectorCount = nsec;
     for (size_t s = 0; s < nsec; ++s) {
         const uint8_t* chunk = data.data() + s * kSector;
         if (std::memcmp(chunk, kMagic, 4) == 0) {
-            demuxVideoSector(chunk, kSector, &mov, &byFrame, &order);
+            if (demuxVideoSector(chunk, kSector, &mov, &byFrame, &order))
+                mov.videoSectorEnd = s + 1;
         } else {
             mov.audio.insert(mov.audio.end(), chunk, chunk + kSector);
             mov.truncatedAudio = true;
@@ -313,7 +343,6 @@ bool strParseExtract(const std::vector<uint8_t>& data, Movie* out,
 
 bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
                      const std::string& outDir, const std::string& ffmpeg,
-                     const std::vector<std::string>& pcMovieDirs,
                      const Progress& progress, std::string* error) {
     Movie mov;
     if (!strParseFromDisc(img, entry, &mov, error)) return false;
@@ -330,15 +359,21 @@ bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
     if (mov.truncatedAudio) note += "  [TRUNCATED 2048-B source]";
     progress.info(note);
 
+    const std::string key = toLower(stem);
+    const double ps1dur = sourceDuration(mov);
+    const size_t durationSectors = mov.videoSectorEnd > 0
+        ? mov.videoSectorEnd
+        : mov.sectorCount;
+    const double sourceFps = sourceFrameRate(mov.frames.size(), durationSectors);
+    double audioDur = 0;
     std::vector<int16_t> pcm;
     size_t nframes = 0;
-    double ps1dur = 0;
     std::string wavPath;
     if (!mov.audio.empty()) {
         pcm = decodeXaStereo(mov.audio, &nframes);
-        ps1dur = (double)nframes / 37800.0;
+        audioDur = (double)nframes / 37800.0;
         char b[128];
-        std::snprintf(b, sizeof(b), "  audio: %.2f s @ 37800 Hz stereo", ps1dur);
+        std::snprintf(b, sizeof(b), "  audio: %.2f s @ 37800 Hz stereo", audioDur);
         progress.info(b);
         if (!progress.isCancelled()) {
             wavPath = joinPath(fs::temp_directory_path().string(),
@@ -347,28 +382,16 @@ bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
         }
     }
 
-    // --timing pc: retime to the shipped PC AVI of the same name.
-    double target = 0, asetrate = 0;
-    const std::string key = toLower(stem);
-    const auto& aliases = pcAliases();
-    std::vector<std::string> wanted = {key};
-    auto ai = aliases.find(key);
-    if (ai != aliases.end()) wanted.push_back(ai->second);
-
-    for (const auto& dir : pcMovieDirs) {
-        if (!isDirectory(dir)) continue;
-        for (const auto& f : listDirectory(dir)) {
-            if (extensionOf(f) != ".avi") continue;
-            const std::string s = toLower(fs::path(f).stem().string());
-            if (std::find(wanted.begin(), wanted.end(), s) == wanted.end())
-                continue;
-            const double d = probeDuration(ffprobeFor(ffmpeg), joinPath(dir, f));
-            if (d > 0) target = d;
-            break;
-        }
-        if (target > 0) break;
+    if (ps1dur > 0) {
+        char b[160];
+        std::snprintf(b, sizeof(b),
+                      "  source timing: %.2f s (%zu/%zu sectors, %.3f fps)",
+                      ps1dur, durationSectors, mov.sectorCount, sourceFps);
+        progress.info(b);
     }
-    if (target > 0 && ps1dur > 0) asetrate = (double)nframes / target;
+
+    double target = 0, asetrate = 0;
+    if (target > 0 && audioDur > 0) asetrate = (double)nframes / target;
 
     double fps;
     if (target > 0) {
@@ -377,11 +400,12 @@ bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
         std::snprintf(b, sizeof(b),
                       "  pc movie: %.2f s (retiming from %.2f s, audio pitch "
                       "%+.1f%%)",
-                      target, ps1dur, (asetrate / 37800.0 - 1.0) * 100.0);
+                      target, audioDur, (asetrate / 37800.0 - 1.0) * 100.0);
         progress.info(b);
     } else {
-        const double dur = ps1dur > 0 ? ps1dur : 0;
-        fps = dur > 0 ? mov.frames.size() / dur : 15.0;
+        fps = sourceFps > 0
+            ? sourceFps
+            : (audioDur > 0 ? mov.frames.size() / audioDur : 15.0);
     }
 
     makeDirs(outDir);

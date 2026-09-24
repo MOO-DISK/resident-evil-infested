@@ -16,6 +16,8 @@ struct Movie {
     int width = 0;
     int height = 0;
     int version = 0;
+    size_t sectorCount = 0;
+    size_t videoSectorEnd = 0;  // exclusive end of valid video sectors
     std::vector<std::vector<uint8_t>> frames;  // demultiplexed bitstreams
     std::vector<uint8_t> audio;                // 128-byte XA sound groups
     bool truncatedAudio = false;
@@ -33,10 +35,8 @@ bool strParseExtract(const std::vector<uint8_t>& data, Movie* out,
 double probeDuration(const std::string& ffprobe, const std::string& path);
 
 // Convert one .STR movie (read from `img`) into `<outDir>/<name>.mp4`.
-// `pcMovieDirs` hold the shipped PC AVIs used for `--timing pc` retiming.
 bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
                      const std::string& outDir, const std::string& ffmpeg,
-                     const std::vector<std::string>& pcMovieDirs,
                      const Progress& progress, std::string* error);
 
 // Transcode every .avi in `movieDir` to .mp4.
