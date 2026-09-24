@@ -434,6 +434,8 @@ void FlushTmdObjects(void)
                 break;
             }
         }
+        bool uniformBlend = (g_stageId % 5 == STAGE_MANSION_2F &&
+                             g_roomId == ROOM_FRONT_LESSON_ROOM);
 
         // Triangles are collected across every queued object and submitted only
         // after a per-triangle depth sort. The original inserts each TMD object
@@ -526,7 +528,12 @@ void FlushTmdObjects(void)
             float triAlpha = 1.0f;
             {
                 float bgWeight = *(float*)(e->objData + 0x68);
-                if (bgWeight > 0.0f && bgWeight <= 1.0f) triAlpha = 1.0f - bgWeight;
+                if (bgWeight < 0.0f)
+                    triAlpha = 1.0f + bgWeight;
+                else if (bgWeight > 0.0f && bgWeight <= 1.0f)
+                    triAlpha = 1.0f - bgWeight;
+                if (triAlpha < 0.0f) triAlpha = 0.0f;
+                if (triAlpha > 1.0f) triAlpha = 1.0f;
             }
 
             // Per-texel semi-transparency. The PS1 blends a texel only when its
@@ -548,7 +555,7 @@ void FlushTmdObjects(void)
             // model sits in front of an opaque one, as the case's glass top
             // does. Room 107's display case is the model this exists for.
             MarniHandle knockTex = MARNI_NULL_HANDLE;
-            if (triAlpha < 0.999f)
+            if (triAlpha < 0.999f && !uniformBlend)
                 knockTex = MarniStpKnockoutTwin((MarniHandle)tex);
 
             // The same ABE path also forces the model full-bright - bit 2 IS the

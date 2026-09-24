@@ -2870,10 +2870,10 @@ void scd_model_tint_apply(short p1, short p2, short p3, unsigned short p4, unsig
 
     if (e[3] == e[4] && e[3] == e[5]) {
         int obj = (int)g_omodel_table[(unsigned char)p6 & 0x7F];
-        TmdObjectSetLightScale(*(void**)(obj + 0x18), (int)(char)e[3]);
+        TmdObjectSetLightScale(*(void**)((unsigned char*)obj + 0x18), (int)(char)e[3]);
     } else {
         int obj = (int)g_omodel_table[(unsigned char)p6 & 0x3F];
-        TmdObjectTintAdd(*(void**)(obj + 0x18), (int)p1, (int)p2, (int)p3);
+        TmdObjectTintAdd(*(void**)((unsigned char*)obj + 0x18), (int)p1, (int)p2, (int)p3);
     }
 }
 
