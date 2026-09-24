@@ -82,7 +82,11 @@ DcAssetsTab::DcAssetsTab(QWidget* parent) : QWidget(parent) {
            "image. Every DC room and all backgrounds (STAGE1-7 and STAGE8-E) "
            "are migrated. A raw 2352-byte .bin/.cue image is required so the "
            "movies keep their CD-XA audio; an .iso is accepted but its audio is "
-           "degraded. The base tree is never written to."),
+           "degraded. The base tree is never written to.\n\n"
+           "Only DC-exclusive files go into the overlay. Rooms, models and "
+           "backgrounds the DC left as the 1996 originals are recognised from "
+           "a baked-in fingerprint of that release and fall back to the base "
+           "tree, whose copies carry the PC release's own fixes."),
         this);
     note->setWordWrap(true);
 

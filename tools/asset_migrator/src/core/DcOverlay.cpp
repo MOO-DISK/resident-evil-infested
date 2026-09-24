@@ -1,6 +1,7 @@
 #include "core/DcOverlay.h"
 
 #include "core/Bss.h"
+#include "core/Ps1Manifest.h"
 #include "core/Tim.h"
 #include "core/Util.h"
 
@@ -81,6 +82,7 @@ struct Ctx {
     size_t written = 0;
     size_t skipped = 0;
     size_t shared = 0;
+    size_t removed = 0;  // stale overlay files an earlier run left behind
 };
 
 bool writeOverlay(Ctx& c, const std::vector<std::string>& rel,
@@ -141,18 +143,112 @@ bool stepArrangeRdt(Ctx& c) {
     return true;
 }
 
+// FNV-1a-64. Must match fnv1a64() in tools/gen_ps1_manifest.py byte for byte,
+// or the baked table stops recognising anything and the filter silently turns
+// into a no-op.
+uint64_t fnv1a64(const std::vector<uint8_t>& data) {
+    // Hex, because the decimal spelling of the offset basis is 20 digits and a
+    // dropped one still compiles: every hash comes out wrong, nothing in the
+    // table ever matches, and the filter turns into a silent no-op.
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (uint8_t b : data) {
+        h ^= b;
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+// The 1996 release's entry for `folder`/`name`, or null. kPs1Manifest is sorted
+// by (folder, name) with both upper case, so this is a binary search.
+const Ps1ManifestEntry* ps1Lookup(const std::string& folder,
+                                  const std::string& name) {
+    const std::string up = toUpper(name);
+    size_t lo = 0, hi = kPs1ManifestCount;
+    while (lo < hi) {
+        const size_t mid = lo + (hi - lo) / 2;
+        const Ps1ManifestEntry& e = kPs1Manifest[mid];
+        int cmp = folder.compare(e.folder);
+        if (cmp == 0) cmp = up.compare(e.name);
+        if (cmp == 0) return &e;
+        if (cmp < 0)
+            hi = mid;
+        else
+            lo = mid + 1;
+    }
+    return nullptr;
+}
+
+// True when `data` IS the 1996 file of that name - i.e. one the DC shipped
+// unchanged. Size is checked first so the hash is only paid for on a candidate.
+bool isPs1Original(const std::string& ps1Folder, const std::string& name,
+                   const std::vector<uint8_t>& data) {
+    const Ps1ManifestEntry* e = ps1Lookup(ps1Folder, name);
+    return e != nullptr && e->size == data.size() && e->hash == fnv1a64(data);
+}
+
+// True when this file can be left out of the overlay: the DC never touched it
+// AND the base tree has one of the same name to fall back to.
+//
+// The second half is not a nicety. ITEM_M2 holds document pages that both PS1
+// discs ship and the PC tree does not have at all - FILEMARR.PIX is one - and
+// they are only ever going to come from the overlay, so dropping one for being
+// "not DC content" would just delete it. Unchanged-from-PS1 means "the base
+// tree's copy is the better one", which presupposes there is a copy.
+bool leaveToBaseTree(const std::string& ps1Folder, const std::string& baseDir,
+                     const std::string& name,
+                     const std::vector<uint8_t>& data) {
+    if (ps1Folder.empty()) return false;
+    if (!isPs1Original(ps1Folder, name, data)) return false;
+    return !baseDir.empty() && !findChildCI(baseDir, name).empty();
+}
+
+// Drop a file the overlay should not be carrying, left by a run from before the
+// filter existed.
+//
+// No content check: the overlay's copy is usually NOT byte-identical to the
+// disc source, because stepTransparency rewrites the RDTs, EMDs, IVMs and TIMs
+// in place afterwards to move them onto the PC's index-0 transparency key. A
+// byte compare would spare exactly those, which is most of the ones worth
+// clearing. Nor would the check protect a hand-edit: writeOverlay already
+// overwrites any overlay file whose content differs, so an ordinary run would
+// have flattened it regardless. The overlay is this tool's to rebuild.
+void dropStaleOverlay(Ctx& c, const std::vector<std::string>& rel) {
+    const std::string path = joinParts(c.o.overlayDir, rel);
+    if (!isRegularFile(path)) return;
+    std::error_code ec;
+    if (fs::remove(path, ec)) {
+        ++c.removed;
+    } else {
+        c.p.info("  cannot remove " + path);
+    }
+}
+
 bool copyFolder(Ctx& c, const std::string& srcDir, const std::string& dstName,
-                const std::string& ext) {
+                const std::string& ext, const std::string& ps1Folder = {}) {
     if (srcDir.empty()) {
         c.p.info("  " + dstName + ": not on the disc");
         return true;
     }
     size_t n = 0;
+    size_t unchanged = 0;
+    const std::string baseFolder = findChildCI(c.o.baseTreeDir, dstName);
     for (const auto& name : filesWithExt(srcDir, ext)) {
         std::vector<uint8_t> data;
         if (!readFile(joinPath(srcDir, name), &data)) continue;
+        if (leaveToBaseTree(ps1Folder, baseFolder, name, data)) {
+            // Not DC content. Leave it to the base tree, and clear out any copy
+            // an earlier run put there.
+            dropStaleOverlay(c, {dstName, name});
+            ++unchanged;
+            continue;
+        }
         if (!writeOverlay(c, {dstName, name}, data)) return false;
         ++n;
+    }
+    if (unchanged) {
+        c.p.info("  " + dstName + ": " + std::to_string(unchanged) +
+                 " file(s) unchanged from the 1996 PS1 disc, left to the base "
+                 "tree");
     }
     const std::string baseDir = findChildCI(c.o.baseTreeDir, dstName);
     if (!baseDir.empty()) {
@@ -181,7 +277,8 @@ bool stepRooms(Ctx& c) {
     for (char sd : std::string("1234567")) {
         const std::string srcDir =
             findChildCI(c.o.sourceDir, std::string("STAGE") + sd);
-        if (!copyFolder(c, srcDir, "Stage" + std::string(1, sd), ".rdt"))
+        if (!copyFolder(c, srcDir, "Stage" + std::string(1, sd), ".rdt",
+                        std::string("STAGE") + sd))
             return false;
     }
     return true;
@@ -196,7 +293,8 @@ bool stepModels(Ctx& c) {
         {"ITEM_M2", "Item_m2"},
     };
     for (const auto& f : folders) {
-        if (!copyFolder(c, findChildCI(c.o.sourceDir, f.first), f.second, ""))
+        if (!copyFolder(c, findChildCI(c.o.sourceDir, f.first), f.second, "",
+                        f.first))
             return false;
     }
     return true;
@@ -214,15 +312,28 @@ bool stepData(Ctx& c) {
         "title.pix", "item_all.pix", "item_mix.pix", "font.tim"};
     std::unordered_set<std::string> baseNames;
     for (const auto& f : listDirectory(baseDir)) baseNames.insert(toLower(f));
+    // This step already restricts itself to names the base tree has, so the
+    // fallback always exists and leaveToBaseTree's second test is a formality.
     size_t n = 0;
+    size_t unchanged = 0;
     for (const auto& name : listDirectory(srcDir)) {
         if (!isRegularFile(joinPath(srcDir, name))) continue;
         const std::string low = toLower(name);
         if (own.count(low) || !baseNames.count(low)) continue;
         std::vector<uint8_t> data;
         if (!readFile(joinPath(srcDir, name), &data)) continue;
+        if (leaveToBaseTree("DATA", baseDir, name, data)) {
+            dropStaleOverlay(c, {"Data", name});
+            ++unchanged;
+            continue;
+        }
         if (!writeOverlay(c, {"Data", name}, data)) return false;
         ++n;
+    }
+    if (unchanged) {
+        c.p.info("  " + std::to_string(unchanged) +
+                 " file(s) unchanged from the 1996 PS1 disc, left to the base "
+                 "tree");
     }
     c.p.info("  " + std::to_string(n) + " shared DATA file(s)");
     return true;
@@ -397,12 +508,18 @@ bool stepBackgrounds(Ctx& c) {
     std::string stages = "1234567";
     if (c.o.backgrounds == Backgrounds::All) stages += "89ABCDE";
     size_t total = 0;
+    size_t unchangedRooms = 0;
     for (char sd : stages) {
         const std::string srcDir =
             findChildCI(c.o.sourceDir, std::string("STAGE") + sd);
         if (srcDir.empty()) continue;
         const std::string outDir = joinPath(c.o.overlayDir,
                                             "Stage" + std::string(1, sd));
+        // Arrange stages (8-E) are not in the manifest at all, so nothing
+        // matches there and the filter sits them out.
+        const std::string ps1Folder = std::string("STAGE") + sd;
+        const std::string baseStageDir =
+            findChildCI(c.o.baseTreeDir, "Stage" + std::string(1, sd));
         for (const auto& bss : filesWithExt(srcDir, ".bss")) {
             if (c.p.isCancelled()) {
                 c.p.info("  cancelled");
@@ -426,6 +543,38 @@ bool stepBackgrounds(Ctx& c) {
             }
             std::vector<uint8_t> data;
             if (!readFile(joinPath(srcDir, bss), &data)) continue;
+
+            // A .BSS the DC never touched holds the 1996 shots, and the base
+            // tree's paks are the PC release's own encode of those same shots,
+            // so ours would only shadow them.
+            //
+            // The room is converted first and judged after, because the deal
+            // only holds if the base tree covers EVERY camera. The PS1 has
+            // angles the PC release dropped - stage 3 room 06 camera 4, six in
+            // stage 4, two in stage 5 - and those nine paks exist nowhere else,
+            // so a room is kept whole rather than left half-covered. Deciding
+            // up front would mean guessing the camera count; convertBss reports
+            // it, and the whole pass costs seconds.
+            //
+            // Coverage is judged by NAME, not content: the overlay's paks come
+            // out of this converter and the base tree's came out of Capcom's,
+            // so they never match byte for byte even for the same photograph.
+            const bool unchanged = !baseStageDir.empty() &&
+                                   isPs1Original(ps1Folder, bss, data);
+            // What the overlay already had for this room, so the summary counts
+            // only the paks an earlier run left behind, not the ones this pass
+            // wrote and then withdrew.
+            std::set<std::string> preexisting;
+            if (unchanged) {
+                const std::string prefix = toLower(
+                    std::string("rc") + stageDigit + stem.substr(5, 2));
+                for (const auto& f : listDirectory(outDir)) {
+                    const std::string low = toLower(f);
+                    if (low.rfind(prefix, 0) == 0 && extensionOf(low) == ".pak")
+                        preexisting.insert(low);
+                }
+            }
+
             std::vector<std::string> written;
             std::string err;
             if (!convertBss(data, stageDigit, roomId, outDir, c.p, &written,
@@ -433,10 +582,40 @@ bool stepBackgrounds(Ctx& c) {
                 c.p.info("  " + err);
                 return false;
             }
+
+            if (unchanged) {
+                bool baseHasAll = !written.empty();
+                for (const auto& f : written) {
+                    if (findChildCI(baseStageDir, f).empty()) {
+                        baseHasAll = false;
+                        break;
+                    }
+                }
+                if (baseHasAll) {
+                    for (const auto& f : written) {
+                        std::error_code rec;
+                        if (fs::remove(joinPath(outDir, f), rec) &&
+                            preexisting.count(toLower(f)))
+                            ++c.removed;
+                    }
+                    ++unchangedRooms;
+                    continue;
+                }
+                c.p.info("  " + bss +
+                         ": unchanged from the 1996 disc, but the base tree is "
+                         "short a camera - keeping all " +
+                         std::to_string(written.size()) + " pak(s)");
+            }
+
             total += written.size();
             c.p.info("  " + bss + " -> " + std::to_string(written.size()) +
                      " pak(s)");
         }
+    }
+    if (unchangedRooms) {
+        c.p.info("  " + std::to_string(unchangedRooms) +
+                 " room(s) unchanged from the 1996 PS1 disc, left to the base "
+                 "tree");
     }
     c.p.info("  " + std::to_string(total) + " background pak(s)");
     return true;
@@ -521,10 +700,11 @@ bool checkCoverage(Ctx& c, std::string* error) {
             if (rooms.empty() && others.empty())
                 c.p.info("   " + folder + ": complete");
         } else if (!missing.empty()) {
+            // A gap here is the normal outcome, not a half-populated overlay:
+            // the DC never changed those files, so they are deliberately left
+            // to the base tree.
             c.p.info("   " + folder + ": " + std::to_string(missing.size()) +
-                     " missing");
-            problems.push_back(folder + " is short " +
-                               std::to_string(missing.size()) + " file(s)");
+                     " missing (expected - not DC content, falls back)");
         } else {
             c.p.info("   " + folder + ": complete");
         }
@@ -563,10 +743,20 @@ bool checkBackgrounds(Ctx& c, std::string* error) {
             ++checked;
             char name[32];
             std::snprintf(name, sizeof(name), "RC%s%02X0.pak", src.c_str(), rid);
-            if (!isRegularFile(joinPath(joinPath(c.o.overlayDir, "Stage" + src),
-                                        name)))
-                missing.push_back("Stage" + digit + " room 0x" +
-                                  std::to_string(rid) + " -> " + name);
+            if (isRegularFile(joinPath(joinPath(c.o.overlayDir, "Stage" + src),
+                                       name)))
+                continue;
+            // A room whose backgrounds the DC never changed has no pak of its
+            // own and resolves to the base tree at runtime, which is the point.
+            // It only counts as missing when neither tree has it.
+            {
+                const std::string baseStage =
+                    findChildCI(c.o.baseTreeDir, "Stage" + src);
+                if (!baseStage.empty() && !findChildCI(baseStage, name).empty())
+                    continue;
+            }
+            missing.push_back("Stage" + digit + " room 0x" +
+                              std::to_string(rid) + " -> " + name);
         }
     }
     c.p.info("   " + std::to_string(checked) +
@@ -609,8 +799,14 @@ bool buildDcOverlay(const DcOverlayOptions& opts, const Progress& progress,
         if (error) *error = "backgrounds failed";
         return false;
     }
-    progress.info("overlay: wrote " + std::to_string(c.written) +
-                  " file(s), " + std::to_string(c.skipped) + " up to date");
+    std::string summary = "overlay: wrote " + std::to_string(c.written) +
+                          " file(s), " + std::to_string(c.skipped) +
+                          " up to date";
+    if (c.removed) {
+        summary += ", removed " + std::to_string(c.removed) +
+                   " that an earlier run took from the 1996 PS1 disc";
+    }
+    progress.info(summary);
     return true;
 }
 
