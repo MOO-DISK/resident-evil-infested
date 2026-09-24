@@ -267,6 +267,35 @@ BOOL ConvertAndStore(void)
             }
         }
         return TRUE;
+    case AV_PIX_FMT_YUV420P:
+        {
+            const unsigned char* yp = s_frame->data[0];
+            const unsigned char* up = s_frame->data[1];
+            const unsigned char* vp = s_frame->data[2];
+            const int yStride = s_frame->linesize[0];
+            const int uStride = s_frame->linesize[1];
+            const int vStride = s_frame->linesize[2];
+            for (int y = 0; y < s_height; ++y) {
+                const unsigned char* yRow = yp + (size_t)y * yStride;
+                const unsigned char* uRow = up + (size_t)(y / 2) * uStride;
+                const unsigned char* vRow = vp + (size_t)(y / 2) * vStride;
+                unsigned char* d = dst + (size_t)y * s_rgbaPitch;
+                for (int x = 0; x < s_width; ++x) {
+                    const int yy = yRow[x] - 16;
+                    const int uu = uRow[x / 2] - 128;
+                    const int vv = vRow[x / 2] - 128;
+                    const int r = (298 * yy + 409 * vv + 128) >> 8;
+                    const int g = (298 * yy - 100 * uu - 208 * vv + 128) >> 8;
+                    const int b = (298 * yy + 516 * uu + 128) >> 8;
+                    d[0] = (unsigned char)(r < 0 ? 0 : r > 255 ? 255 : r);
+                    d[1] = (unsigned char)(g < 0 ? 0 : g > 255 ? 255 : g);
+                    d[2] = (unsigned char)(b < 0 ? 0 : b > 255 ? 255 : b);
+                    d[3] = 255;
+                    d += 4;
+                }
+            }
+        }
+        return TRUE;
     default:
         fprintf(stderr, "[VIDEO] unsupported pixel format %d\n", s_frame->format);
         return FALSE;

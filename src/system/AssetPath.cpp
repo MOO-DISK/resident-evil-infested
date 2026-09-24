@@ -364,7 +364,7 @@ const char* ResolveAssetRoot(const char* path, char* out, size_t outSize)
     if (s_overlayRoot != NULL) {
         char candidate[260];
         int c = sprintf_s(candidate, sizeof(candidate), "%s%s", s_overlayRoot, tail);
-        if (c > 0) {
+        if (c >= 0) {
             char probeBuf[260];
             const char* probe = plat_normalize_path(candidate, probeBuf, sizeof(probeBuf));
             FILE* fp = fopen(probe, "rb");

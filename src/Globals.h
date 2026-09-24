@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdlib>
+
 #include "DebugPrint.h"   // dbg_printf / dbg_safe_str
 
 // Ban raw OutputDebugStringA: it fail-fasts when called from a task on the
@@ -492,15 +494,17 @@ extern int           g_DcDifficulty;           // DC_DIFFICULTY_*
 // The game's random stream, mode-aware (Globals.cpp). The PC release recorded
 // its demo reels against the CRT rand; the PS1 DC uses its own LCG, so DC
 // sessions must roll the PS1 sequence for demo playback to line up. Every
-// game-code call site goes through the rand()/srand() macros below. C linkage:
-// the macros also rewrite the CRT's own extern "C" rand/srand declarations,
-// so the port functions must match or the link fails.
+// game-code call site goes through the rand()/srand() entry points below. On
+// Windows the names are macros; on Linux the C library entry points forward to
+// the game functions so standard headers remain untouched.
 extern "C" {
 void re1_srand(unsigned int seed);
 int  re1_rand(void);
 }
-#define rand  re1_rand
-#define srand re1_srand
+#if !defined(__linux__)
+#define rand(...)  re1_rand(__VA_ARGS__)
+#define srand(...) re1_srand(__VA_ARGS__)
+#endif
 
 // --- Arrange stages (Director's Cut STAGE8-E) -----------------------------
 // Stage ids 0-6 are the base game's seven stages (STAGE1-7). The DC adds seven

@@ -3911,7 +3911,6 @@ static void player_ctrl_frame1(void)
 
 extern unsigned char apply_weapon_damage(unsigned int weapon_id);   // 0x0043c020
 extern int  get_item_slot(unsigned char itemId);                    // 0x004516a0
-extern int  rand(void);
 extern int  turn_toward_target(VECTOR* target_pos, short angle_step);          // 0x00489960
 extern void entity_rotate_toward_target(VECTOR* pos, unsigned short angleStep);// 0x004899b0
 

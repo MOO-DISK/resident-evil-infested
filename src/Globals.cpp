@@ -2030,6 +2030,18 @@ extern "C" int re1_rand(void)
     return (int)((g_randState >> 16) & 0x7fff);
 }
 
+#if defined(__linux__)
+extern "C" int rand() noexcept
+{
+    return re1_rand();
+}
+
+extern "C" void srand(unsigned int seed) noexcept
+{
+    re1_srand(seed);
+}
+#endif
+
 // Port-added debug helpers (no original address; set by F6 in WindowProc
 // and by the F1 debug menu's QUICK ACCESS screen). F6 requests the texture viewer
 // overlay, g_debugOpenLoadScreenFlag requests the load screen (title flow).

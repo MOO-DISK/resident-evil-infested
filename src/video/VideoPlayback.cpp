@@ -173,24 +173,26 @@ static BOOL NormalizeVideoPath(const char* filename, char* out, size_t size)
 }
 
 // Prefer a modern container over the legacy Cinepak AVI when one sits beside
-// it (the converter writes both). The FMV table still names the .avi, so the
-// modern file is the same path with the extension swapped.
+// it. The FMV table still names the .avi, so the modern file is the same
+// rooted path with the extension swapped; resolve it through the active
+// asset overlay before falling back to the base tree.
 static BOOL PreferModernSibling(const char* aviPath, char* out, size_t size)
 {
     const char* dot = strrchr(aviPath, '.');
     if (dot == NULL || _stricmp(dot, ".avi") != 0) return FALSE;
 
-    // aviPath is already resolved through the asset root, so only the
-    // extension changes; plat_normalize_path resolves the case of the new
-    // filename on case-sensitive filesystems.
     char candidate[MAX_PATH];
     const size_t prefix = (size_t)(dot - aviPath);
     if (prefix + 5 > MAX_PATH) return FALSE;
     memcpy(candidate, aviPath, prefix);
     strcpy_s(candidate + prefix, sizeof(candidate) - prefix, ".mp4");
 
+    char resolved[MAX_PATH];
+    const char* candidatePath = ResolveVideoPath(candidate, resolved, sizeof(resolved));
+    if (candidatePath == NULL) candidatePath = candidate;
+
     char normalized[MAX_PATH];
-    plat_normalize_path(candidate, normalized, sizeof(normalized));
+    plat_normalize_path(candidatePath, normalized, sizeof(normalized));
     if (!FileReadable(normalized)) return FALSE;
 
     strcpy_s(out, size, normalized);
@@ -201,15 +203,15 @@ BOOL CheckVideoFileExists(const char* filename)
 {
     if (filename == NULL) return FALSE;
 
+    char modern[MAX_PATH];
+    if (PreferModernSibling(filename, modern, sizeof(modern))) {
+        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), modern);
+        return TRUE;
+    }
+
     char normalized[MAX_PATH];
     if (!NormalizeVideoPath(filename, normalized, sizeof(normalized))) {
         return FALSE;
-    }
-
-    char modern[MAX_PATH];
-    if (PreferModernSibling(normalized, modern, sizeof(modern))) {
-        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), modern);
-        return TRUE;
     }
 
     if (!FileReadable(normalized)) {
