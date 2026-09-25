@@ -387,6 +387,9 @@ void ConfigFile_EnsureExists(void)
         "; 3 = ADVANCED with the held confirm. The title screen decides this at\n"
         "; runtime; set it here to test a mode directly.\n"
         "DcDifficulty=%d\n"
+        "; 1 = use the PS1 staff-credit overlay in the ending FMVs. DC enables it\n"
+        "; automatically; OG leaves it off unless this key is set.\n"
+        "Ps1EndingCredits=%d\n"
         "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
@@ -406,6 +409,7 @@ void ConfigFile_EnsureExists(void)
         (unsigned)g_dwBitDepth, g_bVSync ? 1 : 0,
         (GetAssetVersion() == 1) ? "JPN" : "USA",
         GameModeName(g_GameMode), g_DcDifficulty,
+        g_bPs1EndingCredits ? 1 : 0,
 #ifdef _DEBUG
         1,
 #else
@@ -500,8 +504,10 @@ BOOL ConfigFile_Load(void)
     }
     // OG uses no overlay; every other mode overlays a folder of its own name.
     SetAssetMode(g_GameMode == GAME_MODE_OG ? "" : GameModeName(g_GameMode));
-    dbg_printf("[CONFIG] mode=%s overlay=%s\n", GameModeName(g_GameMode),
-               GetAssetModeName()[0] ? GetAssetModeName() : "(none)");
+    g_bPs1EndingCredits = ReadInt(path, "Game", "Ps1EndingCredits", 0) != 0;
+    dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
+               GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
+               g_bPs1EndingCredits ? 1 : 0);
     g_DcDifficulty = ReadInt(path, "Game", "DcDifficulty", DC_DIFFICULTY_STANDARD);
     if (g_DcDifficulty < DC_DIFFICULTY_STANDARD ||
         g_DcDifficulty > DC_DIFFICULTY_ADVANCED_HOLD) {

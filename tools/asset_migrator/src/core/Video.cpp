@@ -343,7 +343,8 @@ bool strParseExtract(const std::vector<uint8_t>& data, Movie* out,
 
 bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
                      const std::string& outDir, const std::string& ffmpeg,
-                     const Progress& progress, std::string* error) {
+                     const Progress& progress, std::string* error,
+                     const std::string& outStem) {
     Movie mov;
     if (!strParseFromDisc(img, entry, &mov, error)) return false;
 
@@ -409,7 +410,8 @@ bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
     }
 
     makeDirs(outDir);
-    const std::string outPath = joinPath(outDir, stem + ".mp4");
+    const std::string outPath =
+        joinPath(outDir, (outStem.empty() ? stem : outStem) + ".mp4");
     bool ok = encodeFrames(mov, outPath, ffmpeg, fps,
                            progress.isCancelled() ? std::string() : wavPath,
                            asetrate, progress, error);

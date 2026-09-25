@@ -6,6 +6,7 @@
 // skip grace period and the prologue scenario cut.
 
 #include "../Globals.h"
+#include "../game/Ps1EndingCredits.h"
 #include "../platform/platform.h"
 #include "../system/AssetPath.h"
 #include "../marni/MarniSystem.h"
@@ -142,6 +143,12 @@ static DWORD g_videoFlagA4 = 0;
 static WORD  g_videoSkipInput = 0;
 static int   g_videoSkipCounter = 0;
 static char  g_videoFilePath[MAX_PATH] = {};
+static BOOL  s_overlayCallbackRegistered = FALSE;
+
+static BOOL Ps1VideoOverlayCallback(DWORD32 frameTexture, int frameMs)
+{
+    return Ps1EndingCredits_RenderFrame((MarniHandle)frameTexture, frameMs);
+}
 
 // ============================================================================
 // ResolveVideoPath - Normalize the FMV path's data root to the selected version.
@@ -213,9 +220,19 @@ BOOL CheckVideoFileExists(const char* filename)
 {
     if (filename == NULL) return FALSE;
 
+    char creditsPath[MAX_PATH];
+    if (Ps1EndingCredits_ResolveVideoPath(g_CurrentFMVID, creditsPath,
+                                          sizeof(creditsPath)) &&
+        FileReadable(creditsPath)) {
+        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), creditsPath);
+        Ps1EndingCredits_SetVideoPath(g_videoFilePath);
+        return TRUE;
+    }
+
     char modern[MAX_PATH];
     if (PreferModernSibling(filename, modern, sizeof(modern))) {
         strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), modern);
+        Ps1EndingCredits_SetVideoPath(g_videoFilePath);
         return TRUE;
     }
 
@@ -230,6 +247,7 @@ BOOL CheckVideoFileExists(const char* filename)
     }
 
     strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), normalized);
+    Ps1EndingCredits_SetVideoPath(g_videoFilePath);
     return TRUE;
 }
 
@@ -248,6 +266,10 @@ static BOOL UsesScenarioCut(void)
 // ============================================================================
 void UpdateVideoPlayback(void)
 {
+    if (!s_overlayCallbackRegistered) {
+        plat_video_set_overlay_callback(Ps1VideoOverlayCallback);
+        s_overlayCallbackRegistered = TRUE;
+    }
     if (g_bIsSoftwareRendering) {
         g_bMCINotifyEnabled = FALSE;
         return;
@@ -280,6 +302,7 @@ void UpdateVideoPlayback(void)
 
                 if (!plat_video_init()) {
                     dbg_safe_str("[VIDEO] Failed to init video system, skipping FMV\n");
+                    Ps1EndingCredits_End();
                     g_bMCINotifyEnabled = FALSE;
                     plat_video_close();
                     setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -290,6 +313,7 @@ void UpdateVideoPlayback(void)
                 g_FMVPlaybackState = 1;
             } else {
                 // No video file - skip FMV
+                Ps1EndingCredits_End();
                 g_bMCINotifyEnabled = FALSE;
                 plat_video_close();
                 setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -303,14 +327,14 @@ void UpdateVideoPlayback(void)
             // Jill: stop the first chunk right before the Chris-only dialogue.
             int playTo = UsesScenarioCut() ? GetPrologueCutStartMs() : 0;
 
+            Ps1EndingCredits_StartVideo();
             if (!plat_video_open_and_play(g_videoFilePath, playTo)) {
                 g_FMVPlaybackState = 3;
                 break;
             }
 
             g_FMVPlaybackState = 2;
-
-            plat_video_tick();   // present the first frame before polling input
+            plat_video_tick();
 
             InputUpdate();
             g_videoSkipInput = (WORD)PlayerPad_Update();
@@ -337,6 +361,12 @@ void UpdateVideoPlayback(void)
             }
 
             g_videoSkipInput = currentInput;
+
+            // The staff roll leaves its loop on its own counter (0x1c20),
+            // a moment before the STR runs out.
+            if (Ps1EndingCredits_IsFinished()) {
+                plat_video_stop();
+            }
 
             // Segment/film-end notification from the backend
             if (plat_video_take_end_event()) {
@@ -367,6 +397,7 @@ void UpdateVideoPlayback(void)
     case 3: // Cleanup
         {
             plat_video_close();
+            Ps1EndingCredits_End();
             ResumeGameSoundsAsync();
 
             g_FMVPlaybackState = 0;

@@ -21,6 +21,22 @@ struct PcMigrationOptions {
     bool keepAvi = true;
     // ffmpeg executable; resolved from PATH when it is a bare name.
     std::string ffmpegPath = "ffmpeg";
+
+    // Optional PS1 disc image (the 1996 release or the Director's Cut) whose
+    // PS1-only assets are added to the same USA/JPN tree, for the PS1 ending
+    // credits in OG mode ([Game] Ps1EndingCredits=1). A raw .bin/.cue keeps
+    // the movies' CD-XA audio.
+    std::string ps1ImagePath;
+    // Copy DATA/STAFF.STF, STAFF2.STF and BIO.TIM into <tree>/Data. The
+    // tree's own EN05/EN07/CLIS01/JILL01 are left alone.
+    bool ps1Credits = true;
+    // Convert the disc's .STR movies to .mp4 in <tree>/Movie: always the
+    // credits movies STFC/STFJ, and any other movie the tree has no version
+    // of (under its PC name).
+    bool ps1Movies = true;
+    // Also overwrite the tree's own movies with the PS1 versions, and
+    // re-convert STFC/STFJ when they already exist.
+    bool ps1ReplaceMovies = false;
 };
 
 struct DcMigrationOptions {
@@ -39,6 +55,8 @@ struct DcMigrationOptions {
     std::string ffmpegPath = "ffmpeg";
 };
 
+// migratePcAssets runs the base-tree copy when sourcePath is set, then the PS1
+// supplement when ps1ImagePath is set; at least one of the two is required.
 // Both return true on success; on failure `error` carries a human-readable
 // message. Cancellation through `progress.cancelled` returns false with
 // "cancelled" as the error.

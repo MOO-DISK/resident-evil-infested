@@ -1,10 +1,12 @@
 #pragma once
-// "PC assets" tab: migrate a USA or JPN asset tree from a folder or a disc image.
+// "PC assets" tab: migrate a USA or JPN asset tree from a folder or a disc image,
+// optionally adding the PS1 ending-credit assets from a PS1 disc image.
 
 #include <QWidget>
 
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
 class QLineEdit;
 class RunPanel;
 
@@ -16,6 +18,7 @@ public:
 private slots:
     void onSourceKindChanged();
     void onBrowseSource();
+    void onBrowsePs1();
     void onBrowseTarget();
     void onBrowseFfmpeg();
     void onDetectFfmpeg();
@@ -30,5 +33,10 @@ private:
     QCheckBox* m_convert = nullptr;
     QCheckBox* m_keepAvi = nullptr;
     QLineEdit* m_ffmpeg = nullptr;
+    QGroupBox* m_ps1 = nullptr;
+    QLineEdit* m_ps1Image = nullptr;
+    QCheckBox* m_ps1Credits = nullptr;
+    QCheckBox* m_ps1Movies = nullptr;
+    QCheckBox* m_ps1Replace = nullptr;
     RunPanel* m_run = nullptr;
 };

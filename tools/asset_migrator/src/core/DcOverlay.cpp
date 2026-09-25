@@ -339,6 +339,28 @@ bool stepData(Ctx& c) {
     return true;
 }
 
+bool stepEndingCredits(Ctx& c) {
+    c.p.info("ending_credits: STAFF.STF, STAFF2.STF, BIO.TIM, EN05.TIM, EN07.TIM, CLIS01.PIX, JILL01.PIX");
+    const std::pair<const char*, const char*> files[] = {
+        {"STAFF.STF", "staff.stf"},
+        {"STAFF2.STF", "staff2.stf"},
+        {"BIO.TIM", "bio.tim"},
+        {"EN05.TIM", "en05.tim"},
+        {"EN07.TIM", "en07.tim"},
+        {"CLIS01.PIX", "clis01.pix"},
+        {"JILL01.PIX", "jill01.pix"},
+    };
+    for (const auto& f : files) {
+        std::vector<uint8_t> data;
+        if (!readSource(c, {"DATA", f.first}, &data)) {
+            c.p.info(std::string("  ") + f.first + " not on the disc, skipped");
+            continue;
+        }
+        if (!writeOverlay(c, {"Data", f.second}, data)) return false;
+    }
+    return true;
+}
+
 bool stepTitleBg(Ctx& c) {
     c.p.info("title_bg: TITLE.PIX -> Data/title.pix");
     std::vector<uint8_t> data;
@@ -784,6 +806,7 @@ bool buildDcOverlay(const DcOverlayOptions& opts, const Progress& progress,
         {"title_bg", stepTitleBg},       {"title_menu", stepTitleMenu},
         {"font", stepFont},              {"item_sprites", stepItemSprites},
         {"item_models", stepItemModels}, {"transparency", stepTransparency},
+        {"ending_credits", stepEndingCredits},
     };
     for (const auto& s : steps) {
         if (progress.isCancelled()) {

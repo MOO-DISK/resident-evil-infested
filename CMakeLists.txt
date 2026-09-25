@@ -52,6 +52,7 @@ set(RE1_SOURCES
     src/game/EffectSprites.cpp
     src/game/EffectSystem.cpp
     src/game/EndingScreen.cpp
+    src/game/Ps1EndingCredits.cpp
     src/game/EntityModelLoader.cpp
     src/game/FadeSprite.cpp
     src/game/FileLoader.cpp

@@ -465,6 +465,7 @@ extern DWORD         g_MainStateFlagBank[2];           // 0x00be41c0
 #define GAME_MODE_NDS                3   // reserved, not implemented
 
 extern int           g_GameMode;               // [Game] Mode -> GAME_MODE_*
+extern bool          g_bPs1EndingCredits;
 
 // Every "are we in Director's Cut mode" test in the port. Deliberately a macro
 // over g_GameMode rather than a second global: there is one stored value, so

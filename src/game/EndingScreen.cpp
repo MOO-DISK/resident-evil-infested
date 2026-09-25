@@ -25,6 +25,7 @@
 #include "../marni/MarniSystem.h"
 #include "../marni/PSXTexture.h"
 #include "FileLoader.h"
+#include "Ps1EndingCredits.h"
 #include "SpriteRenderer.h"
 #include "BioCard.h"
 #include "PrintText.h"
@@ -830,8 +831,11 @@ void ending_state(void)
     // a USA/PC behaviour the DC dropped, so in DC mode take the first-run branch
     // even though InitializeGame forces the flag for gameplay (GameStart.cpp).
     const char* bgPath;
-    if (!g_bDcMode &&
-        Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
+    if (g_bDcMode) {
+        bgPath = ((g_playerEntity.id & 3) == CHAR_CHRIS)
+                     ? GAME_DATA_ROOT "data\\clis01.pix"
+                     : GAME_DATA_ROOT "data\\jill01.pix";
+    } else if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
         bgPath = ((g_playerEntity.id & 3) == CHAR_CHRIS)
                      ? GAME_DATA_ROOT "data\\clis01.pix"
                      : GAME_DATA_ROOT "data\\jill01.pix";
@@ -907,6 +911,12 @@ void ending_state(void)
         g_selectedFmvId = 26;
     }
 
+    if (g_bIsSoftwareRendering == 0 && Ps1EndingCredits_IsEnabled()) {
+        // The overlay keys its movie and tables on the player character
+        // (0x800c5125 & 3), not on the rocket-launcher congratulations id.
+        Ps1EndingCredits_Begin(s_endingId, g_playerEntity.id & 3);
+    }
+
     if (g_bIsSoftwareRendering == 0) {
         g_main_state_flags |= MSF_FMV_REQUEST;
         Task_sleep(1);
@@ -914,6 +924,11 @@ void ending_state(void)
 
     if (s_endingTable[s_endingId].staffRoll == 1) {
         if (g_bIsSoftwareRendering == 0) {
+            g_main_state_flags =
+                (g_main_state_flags & ~MSF_SCREEN_MODE_MASK) | MSF_SCREEN_STANDALONE;
+            g_spriteAnimR = 0;
+            g_spriteAnimG = 0;
+            g_spriteAnimB = 0;
             Task_sleep(0x96);
         } else {
             QueueVideoPlayback(g_selectedFmvId, 0);
@@ -925,6 +940,7 @@ void ending_state(void)
         g_main_state_flags |= MSF_FMV_REQUEST;
         Task_sleep(1);
     }
+    Ps1EndingCredits_End();
 
     // ------------------------------------------------------------------
     // RESULT screen
@@ -963,7 +979,9 @@ void ending_state(void)
         }
     }
 
-    if ((s_endingTable[s_endingId].epilogue == 1) && (s_hasSpecialKey == 0)) {
+    if ((s_endingTable[s_endingId].epilogue == 1) &&
+        (!g_bDcMode || g_DcDifficulty < DC_DIFFICULTY_ADVANCED) &&
+        (s_hasSpecialKey == 0)) {
         s_stepTimer = 0;
         s_stepDone = 0;
         s_step = 0;
@@ -1012,7 +1030,8 @@ void ending_state(void)
         g_TotalHeldItems++;
         slot++;
     }
-    if (s_hasSpecialKey != 0) {
+    if (s_hasSpecialKey != 0 &&
+        (!g_bDcMode || g_DcDifficulty < DC_DIFFICULTY_ADVANCED)) {
         g_ItemsSlots[slot].Id = ITEM_SPECIAL_KEY;
         g_ItemsSlots[slot].qty = 1;
         g_TotalHeldItems++;

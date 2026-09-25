@@ -1997,6 +1997,7 @@ int            g_debugFeaturesEnabled = 0;
 // ADVANCED choice (PS1 g_abDcGameMode), also written into the save block.
 int            g_GameMode = GAME_MODE_OG;
 int            g_DcDifficulty = DC_DIFFICULTY_STANDARD;
+bool           g_bPs1EndingCredits = false;
 
 // ---------------------------------------------------------------------------
 // re1_rand / re1_srand (port-only)

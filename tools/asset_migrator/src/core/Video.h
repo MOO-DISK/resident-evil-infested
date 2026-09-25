@@ -34,10 +34,12 @@ bool strParseExtract(const std::vector<uint8_t>& data, Movie* out,
 // ffprobe duration of a file, or -1.
 double probeDuration(const std::string& ffprobe, const std::string& path);
 
-// Convert one .STR movie (read from `img`) into `<outDir>/<name>.mp4`.
+// Convert one .STR movie (read from `img`) into `<outDir>/<name>.mp4`, or
+// `<outDir>/<outStem>.mp4` when `outStem` is given.
 bool convertStrMovie(const DiscImage& img, const DiscEntry& entry,
                      const std::string& outDir, const std::string& ffmpeg,
-                     const Progress& progress, std::string* error);
+                     const Progress& progress, std::string* error,
+                     const std::string& outStem = std::string());
 
 // Transcode every .avi in `movieDir` to .mp4.
 bool convertPcMovies(const std::string& movieDir, const std::string& ffmpeg,

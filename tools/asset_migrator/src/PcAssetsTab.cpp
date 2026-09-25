@@ -9,6 +9,7 @@
 #include <QCoreApplication>
 #include <QFileDialog>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
@@ -62,6 +63,36 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
         l->addWidget(detectFfmpeg);
     }
 
+    m_ps1 = new QGroupBox(tr("Add PS1 assets from a PS1 disc image"), this);
+    m_ps1->setCheckable(true);
+    m_ps1->setChecked(false);
+    m_ps1Image = new QLineEdit(m_ps1);
+    auto* browsePs1 = new QPushButton(tr("Browse..."), m_ps1);
+    m_ps1Credits = new QCheckBox(
+        tr("Ending-credit data (STAFF.STF, STAFF2.STF, BIO.TIM)"), m_ps1);
+    m_ps1Credits->setChecked(true);
+    m_ps1Movies = new QCheckBox(
+        tr("Convert PS1 movies (STR -> MP4): STFC/STFJ and any the tree lacks"),
+        m_ps1);
+    m_ps1Movies->setChecked(true);
+    m_ps1Replace = new QCheckBox(
+        tr("Replace the tree's own movies with the PS1 versions"), m_ps1);
+    {
+        auto* ps1Form = new QFormLayout(m_ps1);
+        ps1Form->addRow(tr("PS1 image:"), pathRow(m_ps1Image, browsePs1));
+        ps1Form->addRow(QString(), m_ps1Credits);
+        ps1Form->addRow(QString(), m_ps1Movies);
+        ps1Form->addRow(QString(), m_ps1Replace);
+        auto* ps1Note = new QLabel(
+            tr("For the PS1 staff and cast rolls in OG mode "
+               "([Game] Ps1EndingCredits=1). Use a raw .bin/.cue so the movie "
+               "audio is intact. With a PS1 image the PC source may be left "
+               "empty to update an existing tree."),
+            m_ps1);
+        ps1Note->setWordWrap(true);
+        ps1Form->addRow(ps1Note);
+    }
+
     auto* form = new QFormLayout();
     form->addRow(tr("Source type:"), m_sourceKind);
     form->addRow(tr("Source:"), pathRow(m_source, browseSource));
@@ -83,11 +114,15 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(note);
     layout->addLayout(form);
+    layout->addWidget(m_ps1);
     layout->addWidget(m_run, 1);
 
     connect(m_sourceKind, &QComboBox::currentIndexChanged, this,
             &PcAssetsTab::onSourceKindChanged);
     connect(browseSource, &QPushButton::clicked, this, &PcAssetsTab::onBrowseSource);
+    connect(browsePs1, &QPushButton::clicked, this, &PcAssetsTab::onBrowsePs1);
+    connect(m_ps1, &QGroupBox::toggled, this, &PcAssetsTab::syncEnabled);
+    connect(m_ps1Movies, &QCheckBox::toggled, this, &PcAssetsTab::syncEnabled);
     connect(browseTarget, &QPushButton::clicked, this, &PcAssetsTab::onBrowseTarget);
     connect(browseFfmpeg, &QPushButton::clicked, this, &PcAssetsTab::onBrowseFfmpeg);
     connect(detectFfmpeg, &QPushButton::clicked, this, &PcAssetsTab::onDetectFfmpeg);
@@ -103,6 +138,12 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
         opts.convertMovies = m_convert->isChecked();
         opts.keepAvi = m_keepAvi->isChecked();
         opts.ffmpegPath = m_ffmpeg->text().toStdString();
+        if (m_ps1->isChecked()) {
+            opts.ps1ImagePath = m_ps1Image->text().toStdString();
+            opts.ps1Credits = m_ps1Credits->isChecked();
+            opts.ps1Movies = m_ps1Movies->isChecked();
+            opts.ps1ReplaceMovies = m_ps1Replace->isChecked();
+        }
         return new Worker(
             [opts](const re1::Progress& p, QString& error) {
                 std::string err;
@@ -116,10 +157,10 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
 }
 
 void PcAssetsTab::syncEnabled() {
-    const bool image = m_sourceKind->currentData().toBool();
+    const bool ps1Movies = m_ps1->isChecked() && m_ps1Movies->isChecked();
     m_keepAvi->setEnabled(m_convert->isChecked());
-    m_ffmpeg->setEnabled(m_convert->isChecked());
-    (void)image;
+    m_ffmpeg->setEnabled(m_convert->isChecked() || ps1Movies);
+    m_ps1Replace->setEnabled(m_ps1Movies->isChecked());
 }
 
 void PcAssetsTab::onSourceKindChanged() {
@@ -138,6 +179,13 @@ void PcAssetsTab::onBrowseSource() {
             this, tr("Select the extracted asset folder"), m_source->text());
         if (!d.isEmpty()) m_source->setText(d);
     }
+}
+
+void PcAssetsTab::onBrowsePs1() {
+    const QString f = QFileDialog::getOpenFileName(
+        this, tr("Select a PS1 disc image"), m_ps1Image->text(),
+        tr("Disc images (*.cue *.bin *.img *.iso);;All files (*)"));
+    if (!f.isEmpty()) m_ps1Image->setText(f);
 }
 
 void PcAssetsTab::onBrowseTarget() {

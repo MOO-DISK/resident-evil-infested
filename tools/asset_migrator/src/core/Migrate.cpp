@@ -26,12 +26,168 @@ bool ensureTarget(const std::string& targetRoot, std::string* error) {
     return true;
 }
 
+// The directory under `dir` whose name matches `name` case-insensitively, or
+// `dir/name` when there is none yet.
+std::string childDir(const std::string& dir, const std::string& name) {
+    for (const auto& e : listDirectory(dir)) {
+        if (toLower(e) == toLower(name) && isDirectory(joinPath(dir, e)))
+            return joinPath(dir, e);
+    }
+    return joinPath(dir, name);
+}
+
+// The existing file in `dir` named `stem` + one of `exts`, compared
+// case-insensitively; "" when none.
+std::string findFile(const std::string& dir, const std::string& stem,
+                     const std::vector<std::string>& exts) {
+    for (const auto& e : listDirectory(dir)) {
+        const std::string low = toLower(e);
+        for (const auto& ext : exts) {
+            if (low == toLower(stem) + ext && isRegularFile(joinPath(dir, e)))
+                return e;
+        }
+    }
+    return std::string();
+}
+
+// The disc entry at `<anything>/<folder>/<name>`, case-insensitive.
+const DiscEntry* findInFolder(const DiscImage& img, const std::string& folder,
+                              const std::string& name) {
+    const std::string tail = "/" + toUpper(folder) + "/" + toUpper(name);
+    for (const auto& e : img.entries()) {
+        if (e.directory) continue;
+        const std::string p = "/" + toUpper(e.path);
+        if (p.size() >= tail.size() &&
+            p.compare(p.size() - tail.size(), tail.size(), tail) == 0)
+            return &e;
+    }
+    return nullptr;
+}
+
+// PS1 movie stem -> the stem the PC FMV table names (tools/str_to_video.py
+// PC_ALIASES). The Japanese table already uses the PS1 names. STFC/STFJ keep
+// theirs: the PS1 credits look them up as STFC/STFJ, while stfc_r/stfj_r are
+// the PC staff rolls with the credits baked in.
+std::string pcMovieStem(const std::string& ps1Stem, AssetVersion version) {
+    const std::string key = toLower(ps1Stem);
+    if (version == AssetVersion::USA) {
+        if (key == "oj") return "OU";
+        if (key == "pj") return "PU";
+        if (key == "ed4") return "EU4";
+        if (key == "ed5") return "EU5";
+    }
+    return toUpper(ps1Stem);
+}
+
+bool migratePs1Supplement(const PcMigrationOptions& opts,
+                          const std::string& destRoot,
+                          const Progress& progress, std::string* error) {
+    progress.info("PS1 assets: " + opts.ps1ImagePath);
+    DiscImage img;
+    std::string err;
+    if (!img.open(opts.ps1ImagePath, &err)) {
+        if (error) *error = err;
+        return false;
+    }
+    if (!findInFolder(img, "DATA", "STAFF.STF") &&
+        !findInFolder(img, "MOVIE", "STFC.STR")) {
+        if (error)
+            *error = "the PS1 image has neither DATA/STAFF.STF nor "
+                     "MOVIE/STFC.STR; is it a Resident Evil PS1 disc?";
+        return false;
+    }
+
+    if (opts.ps1Credits) {
+        progress.info("PS1 credits: STAFF.STF, STAFF2.STF, BIO.TIM -> Data");
+        const std::string dataDir = childDir(destRoot, "Data");
+        size_t copied = 0;
+        for (const char* name : {"STAFF.STF", "STAFF2.STF", "BIO.TIM"}) {
+            if (progress.isCancelled()) {
+                if (error) *error = "cancelled";
+                return false;
+            }
+            const DiscEntry* e = findInFolder(img, "DATA", name);
+            if (!e) {
+                progress.info(std::string("  ") + name + " not on the disc, skipped");
+                continue;
+            }
+            std::vector<uint8_t> data;
+            if (!img.readFile(*e, &data)) {
+                if (error) *error = std::string("cannot read ") + e->path;
+                return false;
+            }
+            // Keep an existing file's spelling so a case-sensitive tree does
+            // not end up with two copies.
+            const std::string existing = findFile(dataDir, name, {""});
+            const std::string out =
+                joinPath(dataDir, existing.empty() ? std::string(name) : existing);
+            if (!writeFile(out, data)) {
+                if (error) *error = "cannot write " + out;
+                return false;
+            }
+            progress.info("  wrote " + out);
+            ++copied;
+        }
+        if (copied < 3)
+            progress.info("  warning: the PS1 credits need all three files");
+    }
+
+    if (opts.ps1Movies) {
+        if (!img.isRaw())
+            progress.info("warning: 2048-byte image; the movie audio will be "
+                          "degraded, use a raw .bin/.cue");
+        progress.info("PS1 movies: STR -> MP4");
+        const std::string movieDir = childDir(destRoot, "Movie");
+        makeDirs(movieDir);
+        size_t converted = 0;
+        size_t kept = 0;
+        for (const auto& e : img.entries()) {
+            if (e.directory) continue;
+            if (extensionOf(e.path) != ".str") continue;
+            if (toUpper(e.path).find("MOVIE") == std::string::npos) continue;
+            if (e.size == 0 || e.size % 2048 != 0) continue;
+            if (progress.isCancelled()) {
+                if (error) *error = "cancelled";
+                return false;
+            }
+            const std::string ps1Stem = fs::path(e.path).stem().string();
+            std::string stem = pcMovieStem(ps1Stem, opts.version);
+            const std::string existing =
+                findFile(movieDir, stem, {".mp4", ".avi"});
+            if (!existing.empty() && !opts.ps1ReplaceMovies) {
+                progress.info("  " + ps1Stem + ": the tree has " + existing +
+                              ", kept");
+                ++kept;
+                continue;
+            }
+            // Overwrite the tree's .mp4 under its own spelling.
+            const std::string existingMp4 = findFile(movieDir, stem, {".mp4"});
+            if (!existingMp4.empty())
+                stem = fs::path(existingMp4).stem().string();
+            if (!convertStrMovie(img, e, movieDir, opts.ffmpegPath, progress,
+                                 error, stem))
+                return false;
+            ++converted;
+        }
+        progress.info("  " + std::to_string(converted) + " movie(s) converted, " +
+                      std::to_string(kept) + " kept");
+        if (findFile(movieDir, "STFC", {".mp4"}).empty() ||
+            findFile(movieDir, "STFJ", {".mp4"}).empty())
+            progress.info("  warning: STFC.mp4/STFJ.mp4 missing; the PS1 "
+                          "credits need both");
+    }
+
+    progress.info("PS1 credits in OG mode: set [Game] Ps1EndingCredits=1 in "
+                  "config.ini");
+    return true;
+}
+
 }  // namespace
 
 bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
                      std::string* error) {
     progress.info("PC asset migration");
-    if (opts.sourcePath.empty()) {
+    if (opts.sourcePath.empty() && opts.ps1ImagePath.empty()) {
         if (error) *error = "no source selected";
         return false;
     }
@@ -39,15 +195,16 @@ bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
 
     const std::string destRoot =
         joinPath(opts.targetRoot, versionName(opts.version));
-    progress.info("source: " + opts.sourcePath +
-                  (opts.sourceIsImage ? " (disc image)" : " (folder)"));
     progress.info("target: " + destRoot);
     if (!makeDirs(destRoot)) {
         if (error) *error = "cannot create " + destRoot;
         return false;
     }
 
-    if (opts.sourceIsImage) {
+    if (opts.sourcePath.empty()) {
+        progress.info("no PC source: adding the PS1 assets to the existing tree");
+    } else if (opts.sourceIsImage) {
+        progress.info("source: " + opts.sourcePath + " (disc image)");
         DiscImage img;
         std::string err;
         if (!img.open(opts.sourcePath, &err)) {
@@ -58,6 +215,7 @@ bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
                                   : "image: 2048-byte ISO");
         if (!extractAssetsFromImage(img, destRoot, progress, error)) return false;
     } else {
+        progress.info("source: " + opts.sourcePath + " (folder)");
         std::string root;
         if (!findAssetRootInDir(opts.sourcePath, &root, error)) return false;
         progress.info("asset root: " + root);
@@ -66,10 +224,16 @@ bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
 
     if (opts.convertMovies) {
         progress.info("movies: AVI -> MP4");
-        if (!convertPcMovies(joinPath(destRoot, "Movie"), opts.ffmpegPath,
+        if (!convertPcMovies(childDir(destRoot, "Movie"), opts.ffmpegPath,
                              opts.keepAvi, progress, error))
             return false;
     }
+
+    // After the AVI conversion, so the "tree already has it" check sees the
+    // PC movies' .mp4 as well.
+    if (!opts.ps1ImagePath.empty() &&
+        !migratePs1Supplement(opts, destRoot, progress, error))
+        return false;
 
     progress.info("done: " + destRoot);
     return true;

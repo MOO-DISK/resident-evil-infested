@@ -8,7 +8,9 @@
 //   re1am_selftest strinfo <image> [filter]
 //   re1am_selftest strconvert <image> <outdir> <ffmpeg> [filter] [limit]
 //   re1am_selftest extract <image> <outdir> [folders-csv]
-//   re1am_selftest pc <source> <target> <USA|JPN> [--image] [--movies]
+//   re1am_selftest pc <source|-> <target> <USA|JPN> [--image] [--movies]
+//                     [--ps1 <image>] [--no-ps1-credits] [--no-ps1-movies]
+//                     [--ps1-replace]
 //   re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies] [--no-verify]
 
 #include "core/Assets.h"
@@ -211,13 +213,18 @@ int cmdExtract(const std::string& image, const std::string& outDir,
 
 int cmdPc(int argc, char** argv) {
     PcMigrationOptions o;
-    o.sourcePath = argv[2];
+    o.sourcePath = std::strcmp(argv[2], "-") == 0 ? "" : argv[2];
     o.targetRoot = argv[3];
     o.version = std::string(argv[4]) == "JPN" ? AssetVersion::JPN
                                               : AssetVersion::USA;
     for (int i = 5; i < argc; ++i) {
         if (std::strcmp(argv[i], "--image") == 0) o.sourceIsImage = true;
         if (std::strcmp(argv[i], "--movies") == 0) o.convertMovies = true;
+        if (std::strcmp(argv[i], "--ps1") == 0 && i + 1 < argc)
+            o.ps1ImagePath = argv[++i];
+        if (std::strcmp(argv[i], "--no-ps1-credits") == 0) o.ps1Credits = false;
+        if (std::strcmp(argv[i], "--no-ps1-movies") == 0) o.ps1Movies = false;
+        if (std::strcmp(argv[i], "--ps1-replace") == 0) o.ps1ReplaceMovies = true;
     }
     re1::Progress p = consoleProgress();
     std::string err;

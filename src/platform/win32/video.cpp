@@ -37,6 +37,8 @@
 #pragma comment(lib, "mfuuid.lib")
 #pragma comment(lib, "ole32.lib")
 
+static PlatVideoOverlayCallback s_overlayCallback = NULL;
+
 // ===========================================================================
 // MCI backend (legacy Cinepak .avi)
 // ===========================================================================
@@ -200,6 +202,12 @@ static int         s_texW = 0;
 static int         s_texH = 0;
 
 static int  s_frameIndex  = -1;
+// Timestamp of the stream's first picture. Media Foundation ignores the MP4
+// edit list, so an H.264 track with B-frames reports its first picture at the
+// composition delay (2 frames, 0.1333 s, in the converted PS1 movies) instead
+// of 0; frame numbers and seek positions are measured from here. -1 = not yet
+// read.
+static LONGLONG s_tsOrigin = -1;
 static int  s_baseFrame   = 0;
 static int  s_playToFrame = 0;
 static BOOL s_active     = FALSE;
@@ -256,6 +264,7 @@ static void ReleaseReader(void)
     ReleaseAudio();
     s_width = s_height = 0;
     s_frameIndex = -1;
+    s_tsOrigin = -1;
     s_baseFrame = 0;
     s_playToFrame = 0;
     s_eof = FALSE;
@@ -503,8 +512,11 @@ static BOOL DecodeNext(void)
     }
     sample->Release();
 
-    if (ts > 0) {
-        s_frameIndex = (int)((double)ts / 1e7 * s_fps + 0.5);
+    // Open decodes the first picture before anything seeks, so the first
+    // timestamp read is the stream's frame 0.
+    if (s_tsOrigin < 0) s_tsOrigin = ts > 0 ? ts : 0;
+    if (ts >= s_tsOrigin) {
+        s_frameIndex = (int)((double)(ts - s_tsOrigin) / 1e7 * s_fps + 0.5);
     } else {
         s_frameIndex++;
     }
@@ -534,10 +546,14 @@ static void Present(void)
     if (bw == 0 || bh == 0) return;
 
     dx->Clear(0.0f, 0.0f, 0.0f, 1.0f);
-    dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
-                   0.0f, 0.0f, 1.0f, 1.0f,
-                   0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT,
-                   MARNI_BLEND_DISABLE);
+    const int frameMs = s_frameIndex > 0
+        ? (int)((double)s_frameIndex * 1000.0 / s_fps + 0.5) : 0;
+    if (s_overlayCallback == NULL || !s_overlayCallback(s_tex, frameMs)) {
+        dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
+                       0.0f, 0.0f, 1.0f, 1.0f,
+                       0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT,
+                       MARNI_BLEND_DISABLE);
+    }
     dx->Present();
 }
 
@@ -574,7 +590,8 @@ static BOOL SeekTo(int frame)
     PROPVARIANT var;
     PropVariantInit(&var);
     var.vt = VT_I8;
-    var.hVal.QuadPart = (LONGLONG)((double)frame / s_fps * 1e7);
+    var.hVal.QuadPart = (LONGLONG)((double)frame / s_fps * 1e7) +
+                        (s_tsOrigin > 0 ? s_tsOrigin : 0);
     s_reader->SetCurrentPosition(GUID_NULL, var);
     PropVariantClear(&var);
 
@@ -726,6 +743,11 @@ static BOOL IsLegacyAvi(const char* path)
 {
     const char* dot = strrchr(path, '.');
     return dot != NULL && _stricmp(dot, ".avi") == 0;
+}
+
+void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback)
+{
+    s_overlayCallback = callback;
 }
 
 BOOL plat_video_init(void)

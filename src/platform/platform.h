@@ -142,6 +142,12 @@ void plat_cursor_show(BOOL show);
 // Each backend turns the selected time into its own stream frames.
 // ---------------------------------------------------------------------------
 
+// Called each presented movie frame with the frame's texture and its stream
+// time in milliseconds, after the backbuffer is cleared. TRUE = the callback
+// drew the frame itself, so the backend skips its full-screen quad.
+typedef BOOL (*PlatVideoOverlayCallback)(DWORD32 frameTexture, int frameMs);
+void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback);
+
 // Probe the decoder backend. FALSE means "no FMV available, skip the movie".
 BOOL plat_video_init(void);
 

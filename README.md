@@ -179,7 +179,8 @@ Some features of the Japanese PC release (*Biohazard* Mediakite version) is supp
 
 The PS1 Director's Cut's content also runs, as an overlay on top of either base
 tree. Use the asset migrator (below) to lay out `USA/`, `JPN/` and the
-Director's Cut `DC/` overlay.
+Director's Cut `DC/` overlay. The PS1 ending credits can replace the PC's
+credit movies in either mode; see [PS1 ending credits](#ps1-ending-credits).
 
 Every asset path is built against a data root that is resolved at startup:
 
@@ -291,6 +292,45 @@ through to the base tree for the folders the DC disc genuinely cannot supply, so
 the base trees stay complete and pristine and several releases can share one
 install. Build the overlay with the Director's Cut tab of the asset migrator; the
 full design is in `docs/DC_PORT.md`.
+
+### PS1 ending credits
+
+The PC release plays its credits as movies with the text baked into the
+picture (`stfc_r`, `stfj_r`, `stfz_r`, `staf_r`). The PS1 versions draw them
+live instead, and the port can do the same, following PS1 `ENDING.EXE`:
+
+- **Endings 1-3 (staff roll):** the `STAFF2.STF` credit strips scroll up over a
+  black screen, with the movie playing as music only. The last strips are the
+  RESIDENT EVIL logo, which fades out with the rest.
+- **Endings 4-7 (cast roll):** the character's movie (`STFC` for Chris, `STFJ`
+  for Jill) plays in shots that fade in and out. The `STAFF.STF` name panels
+  appear beside it, a black wipe covers part of one shot, and the roll ends on
+  the zoomed `BIO.TIM` logo.
+
+Director's Cut mode turns it on automatically. In OG mode, turn it on in
+`config.ini`:
+
+```ini
+[Game]
+; 1 = draw the PS1 credits over the ending movies (DC mode is always on)
+Ps1EndingCredits=1
+```
+
+It needs these files in the active tree (the `DC/` overlay, or `USA/` / `JPN/`
+in OG mode):
+
+| File | Holds |
+|---|---|
+| `Data/STAFF.STF` | the cast-roll name panels (endings 4-7) |
+| `Data/STAFF2.STF` | the staff-roll strips (endings 1-3) |
+| `Data/BIO.TIM` | the RESIDENT EVIL logo |
+| `Movie/STFC.mp4`, `Movie/STFJ.mp4` | the PS1 movies, which have no text in them |
+
+The Director's Cut tab of the asset migrator already writes all of these into
+`DC/`. For OG mode, tick **Add PS1 assets from a PS1 disc image** on the PC
+Assets tab and point it at a PS1 disc (the 1996 release or the Director's Cut).
+Use a raw `.bin`/`.cue` image so the movies keep their CD-XA audio. If the
+`.STF` files are missing, the ending plays the PC credit movie as before.
 
 ## Controls
 

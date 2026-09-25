@@ -39,6 +39,8 @@ long plat_audio_stream_pos(void);
 
 namespace {
 
+PlatVideoOverlayCallback s_overlayCallback = NULL;
+
 AVFormatContext* s_fmt     = NULL;
 AVCodecContext*  s_vctx    = NULL;
 AVCodecContext*  s_actx    = NULL;
@@ -421,9 +423,13 @@ void Present(void)
     if (bw == 0 || bh == 0) return;
 
     dx->Clear(0.0f, 0.0f, 0.0f, 1.0f);
-    dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
-                   0.0f, 0.0f, 1.0f, 1.0f,
-                   0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT, MARNI_BLEND_DISABLE);
+    const int frameMs = s_frameIndex > 0
+        ? (int)((double)s_frameIndex * 1000.0 / s_fps + 0.5) : 0;
+    if (s_overlayCallback == NULL || !s_overlayCallback(s_tex, frameMs)) {
+        dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
+                       0.0f, 0.0f, 1.0f, 1.0f,
+                       0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT, MARNI_BLEND_DISABLE);
+    }
     dx->Present();
 }
 
@@ -432,6 +438,11 @@ void Present(void)
 // ===========================================================================
 // Backend entry points (see platform.h)
 // ===========================================================================
+
+void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback)
+{
+    s_overlayCallback = callback;
+}
 
 BOOL plat_video_init(void)
 {
