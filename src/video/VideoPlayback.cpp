@@ -7,6 +7,7 @@
 
 #include "../Globals.h"
 #include "../game/Ps1EndingCredits.h"
+#include "../game/Ps1FmvSubtitles.h"
 #include "../platform/platform.h"
 #include "../system/AssetPath.h"
 #include "../marni/MarniSystem.h"
@@ -147,7 +148,12 @@ static BOOL  s_overlayCallbackRegistered = FALSE;
 
 static BOOL Ps1VideoOverlayCallback(DWORD32 frameTexture, int frameMs)
 {
-    return Ps1EndingCredits_RenderFrame((MarniHandle)frameTexture, frameMs);
+    // Whoever claims the frame draws the movie too, so the chain is ordered:
+    // the credits overlay owns the whole picture when it is running.
+    if (Ps1EndingCredits_RenderFrame((MarniHandle)frameTexture, frameMs)) {
+        return TRUE;
+    }
+    return Ps1FmvSubtitles_RenderFrame((MarniHandle)frameTexture, frameMs);
 }
 
 // ============================================================================
@@ -303,6 +309,7 @@ void UpdateVideoPlayback(void)
                 if (!plat_video_init()) {
                     dbg_safe_str("[VIDEO] Failed to init video system, skipping FMV\n");
                     Ps1EndingCredits_End();
+                    Ps1FmvSubtitles_End();
                     g_bMCINotifyEnabled = FALSE;
                     plat_video_close();
                     setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -310,10 +317,15 @@ void UpdateVideoPlayback(void)
                     return;
                 }
 
+                // JPN prologue subtitle track, if the config asked for it and
+                // the JPN assets are present.
+                Ps1FmvSubtitles_Begin(g_CurrentFMVID);
+
                 g_FMVPlaybackState = 1;
             } else {
                 // No video file - skip FMV
                 Ps1EndingCredits_End();
+                Ps1FmvSubtitles_End();
                 g_bMCINotifyEnabled = FALSE;
                 plat_video_close();
                 setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -398,6 +410,7 @@ void UpdateVideoPlayback(void)
         {
             plat_video_close();
             Ps1EndingCredits_End();
+            Ps1FmvSubtitles_End();
             ResumeGameSoundsAsync();
 
             g_FMVPlaybackState = 0;

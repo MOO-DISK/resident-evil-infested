@@ -122,6 +122,7 @@
     <ClCompile Include="src\system\DisplayConfig.cpp" />
     <ClCompile Include="src\system\Cleanup.cpp" />
     <ClCompile Include="src\system\AssetPath.cpp" />
+    <ClCompile Include="src\system\PngImage.cpp" />
     <ClCompile Include="src\game\FileLoader.cpp" />
     <ClCompile Include="src\game\DoorSystem.cpp" />
     <ClCompile Include="src\game\GameInit.cpp" />
@@ -155,6 +156,7 @@
     <ClCompile Include="src\game\DeathScreen.cpp" />
     <ClCompile Include="src\game\EndingScreen.cpp" />
     <ClCompile Include="src\game\Ps1EndingCredits.cpp" />
+    <ClCompile Include="src\game\Ps1FmvSubtitles.cpp" />
     <ClCompile Include="src\game\entities\EntityCommon.cpp" />
     <ClCompile Include="src\game\entities\CharacterNpc.cpp" />
     <ClCompile Include="src\game\entities\Cerberus.cpp" />
@@ -213,9 +215,12 @@
     <ClInclude Include="src\marni\MarniSound.h" />
     <ClInclude Include="src\game\SpriteRenderer.h" />
     <ClInclude Include="src\game\Ps1EndingCredits.h" />
+    <ClInclude Include="src\game\Ps1FmvSubtitles.h" />
+    <ClInclude Include="src\game\Ps1FmvSubtitleData.h" />
     <ClInclude Include="src\game\TmdRenderer.h" />
     <ClInclude Include="src\game\entities\EntityCommon.h" />
     <ClInclude Include="src\game\entities\Zombie.h" />
+    <ClInclude Include="src\system\PngImage.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

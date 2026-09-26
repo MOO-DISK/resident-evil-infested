@@ -43,6 +43,17 @@ DcAssetsTab::DcAssetsTab(QWidget* parent) : QWidget(parent) {
 
     m_convert = new QCheckBox(tr("Convert movies (STR -> MP4)"), this);
     m_convert->setChecked(true);
+    m_subs = new QCheckBox(
+        tr("Prologue FMV subtitles (JIMAKU*.RGB -> JPN/data/jimaku*.png)"),
+        this);
+    m_subs->setChecked(true);
+    m_subs->setToolTip(
+        tr("The Japanese PS1 prologue subtitles ([Game] Ps1FmvSubtitles=1).\n"
+           "They are written into the JPN tree's Data folder, not the DC "
+           "overlay, because the loader builds its path from the compile-time "
+           "JPN asset root and calls LoadFile directly - it never looks in an "
+           "overlay.\n"
+           "A Japanese disc has them; a USA disc is skipped."));
     m_verify = new QCheckBox(tr("Verify the overlay after building"), this);
     m_verify->setChecked(true);
     m_verify->setToolTip(
@@ -72,6 +83,7 @@ DcAssetsTab::DcAssetsTab(QWidget* parent) : QWidget(parent) {
     form->addRow(tr("Target game folder:"), pathRow(m_target, browseTarget));
     form->addRow(tr("Base tree:"), m_base);
     form->addRow(QString(), m_convert);
+    form->addRow(QString(), m_subs);
     form->addRow(QString(), m_verify);
     form->addRow(tr("ffmpeg:"), ffmpegRow);
 
@@ -86,7 +98,10 @@ DcAssetsTab::DcAssetsTab(QWidget* parent) : QWidget(parent) {
            "Only DC-exclusive files go into the overlay. Rooms, models and "
            "backgrounds the DC left as the 1996 originals are recognised from "
            "a baked-in fingerprint of that release and fall back to the base "
-           "tree, whose copies carry the PC release's own fixes."),
+           "tree, whose copies carry the PC release's own fixes.\n\n"
+           "The one exception is the prologue FMV subtitles, which are added to "
+           "<target>/JPN/Data - the loader reads them from the JPN tree's own "
+           "Data folder, so there is nowhere else they would work from."),
         this);
     note->setWordWrap(true);
 
@@ -107,6 +122,7 @@ DcAssetsTab::DcAssetsTab(QWidget* parent) : QWidget(parent) {
         opts.targetRoot = m_target->text().toStdString();
         opts.base = (re1::AssetVersion)m_base->currentData().toInt();
         opts.convertMovies = m_convert->isChecked();
+        opts.fmvSubtitles = m_subs->isChecked();
         opts.verify = m_verify->isChecked();
         opts.ffmpegPath = m_ffmpeg->text().toStdString();
         return new Worker(

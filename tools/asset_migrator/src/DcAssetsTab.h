@@ -26,6 +26,7 @@ private:
     QLineEdit* m_target = nullptr;
     QComboBox* m_base = nullptr;
     QCheckBox* m_convert = nullptr;
+    QCheckBox* m_subs = nullptr;
     QCheckBox* m_verify = nullptr;
     QLineEdit* m_ffmpeg = nullptr;
     RunPanel* m_run = nullptr;

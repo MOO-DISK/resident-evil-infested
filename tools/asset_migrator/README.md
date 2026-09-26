@@ -32,6 +32,11 @@ OG mode (`[Game] Ps1EndingCredits=1`):
 
 - **Ending-credit data** copies `DATA/STAFF.STF`, `STAFF2.STF` and `BIO.TIM`
   into `Data/`. The tree's own `EN05`/`EN07`/`CLIS01`/`JILL01` are kept.
+- **Prologue FMV subtitles** decodes the disc's `DATA/JIMAKU00/01/02.RGB` into
+  `Data/jimaku00/01/02.png` — 320-wide greyscale images the JPN prologue FMV draws
+  (`[Game] Ps1FmvSubtitles=1`, read from the JPN tree). Only the Japanese
+  releases carry the files; a disc without them is skipped, not an error. The
+  format and the cue tables are documented in `docs/PS1_FMV_SUBTITLES.md`.
 - **Convert PS1 movies** turns the disc's `.STR` files into `.mp4` in `Movie/`:
   always `STFC`/`STFJ` (the movies the PS1 credits play), plus any movie the
   tree has no `.avi`/`.mp4` of. Movies are named the way the PC FMV table
@@ -61,7 +66,13 @@ movies to `.mp4`.
 `Base tree` selects which tree the overlay is built on top of (it is only read:
 the font comes from it). Movie conversion keeps each STR's original CD-sector
 timing by default, at the PS1's 150 sectors per second through the last valid
-video sector. `Verify` runs
+video sector. `Prologue FMV subtitles` decodes the disc's
+`DATA/JIMAKU00/01/02.RGB` into `<target>/JPN/Data/jimaku00/01/02.png` — the
+Japanese prologue subtitles (`[Game] Ps1FmvSubtitles=1`). They go into the JPN
+tree rather than the overlay, because `Ps1FmvSubtitles` builds its path from the
+compile-time `GAME_DATA_ROOT_JPN`, so an overlay
+copy would never be read; that is the one file the DC tab writes outside
+`<target>/DC`. `Verify` runs
 the coverage and background checks afterwards.
 
 ## Requirements
@@ -116,15 +127,21 @@ on `PATH` (or browsed to) for the movie conversions.
 re1am_selftest info <image> [filter]
 re1am_selftest bss <image> <path-in-image> <outdir>
 re1am_selftest strinfo <image> [filter]
+re1am_selftest jimaku <image> <outdir>
 re1am_selftest pc <source|-> <target> <USA|JPN> [--image] [--movies]
-               [--ps1 <image>] [--no-ps1-credits] [--no-ps1-movies] [--ps1-replace]
-re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies] [--no-verify]
+               [--ps1 <image>] [--no-ps1-credits] [--no-ps1-subs]
+               [--no-ps1-movies] [--ps1-replace]
+re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies]
+               [--no-subs] [--no-verify]
 ```
 
 The C++ decoders were checked against the Python tools:
 
 - `bss` -> `.pak` output is **byte-identical** to `tools/bss_to_pak.py` for
   every camera of a base-stage `.BSS` (ROOM100: 6/6 files match).
+- `jimaku` -> `jimaku00/01/02.png` is **byte-identical** to
+  `tools/decode_jimaku.py` for all three planes of the Biohazard DC disc
+  (SHA-256 match, 23 / 7 / 5 lines), and writes nothing for a USA disc.
 - A full DC overlay build (`--no-bg`) is **byte-identical** to
   `scripts/build_dc_assets.py` for the shared output: 584 files,
   0 differences, and the same 136 relabelled files / 3,372,204 texels.

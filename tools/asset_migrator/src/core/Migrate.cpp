@@ -3,6 +3,7 @@
 #include "core/Assets.h"
 #include "core/DcOverlay.h"
 #include "core/DiscImage.h"
+#include "core/Jimaku.h"
 #include "core/Util.h"
 #include "core/Video.h"
 
@@ -50,20 +51,6 @@ std::string findFile(const std::string& dir, const std::string& stem,
     return std::string();
 }
 
-// The disc entry at `<anything>/<folder>/<name>`, case-insensitive.
-const DiscEntry* findInFolder(const DiscImage& img, const std::string& folder,
-                              const std::string& name) {
-    const std::string tail = "/" + toUpper(folder) + "/" + toUpper(name);
-    for (const auto& e : img.entries()) {
-        if (e.directory) continue;
-        const std::string p = "/" + toUpper(e.path);
-        if (p.size() >= tail.size() &&
-            p.compare(p.size() - tail.size(), tail.size(), tail) == 0)
-            return &e;
-    }
-    return nullptr;
-}
-
 // PS1 movie stem -> the stem the PC FMV table names (tools/str_to_video.py
 // PC_ALIASES). The Japanese table already uses the PS1 names. STFC/STFJ keep
 // theirs: the PS1 credits look them up as STFC/STFJ, while stfc_r/stfj_r are
@@ -89,8 +76,8 @@ bool migratePs1Supplement(const PcMigrationOptions& opts,
         if (error) *error = err;
         return false;
     }
-    if (!findInFolder(img, "DATA", "STAFF.STF") &&
-        !findInFolder(img, "MOVIE", "STFC.STR")) {
+    if (!img.findInFolder("DATA", "STAFF.STF") &&
+        !img.findInFolder("MOVIE", "STFC.STR")) {
         if (error)
             *error = "the PS1 image has neither DATA/STAFF.STF nor "
                      "MOVIE/STFC.STR; is it a Resident Evil PS1 disc?";
@@ -106,7 +93,7 @@ bool migratePs1Supplement(const PcMigrationOptions& opts,
                 if (error) *error = "cancelled";
                 return false;
             }
-            const DiscEntry* e = findInFolder(img, "DATA", name);
+            const DiscEntry* e = img.findInFolder("DATA", name);
             if (!e) {
                 progress.info(std::string("  ") + name + " not on the disc, skipped");
                 continue;
@@ -130,6 +117,17 @@ bool migratePs1Supplement(const PcMigrationOptions& opts,
         }
         if (copied < 3)
             progress.info("  warning: the PS1 credits need all three files");
+    }
+
+    int planes = 0;
+    if (opts.ps1FmvSubtitles) {
+        progress.info("PS1 subtitles: JIMAKU*.RGB -> jimaku*.png");
+        if (!convertJimakuSubtitles(img, childDir(destRoot, "Data"), progress,
+                                    &planes, error))
+            return false;
+        if (planes > 0 && opts.version != AssetVersion::JPN)
+            progress.info("  note: the game only reads the subtitle planes from "
+                          "the JPN tree ([Assets] Version=JPN)");
     }
 
     if (opts.ps1Movies) {
@@ -179,6 +177,9 @@ bool migratePs1Supplement(const PcMigrationOptions& opts,
 
     progress.info("PS1 credits in OG mode: set [Game] Ps1EndingCredits=1 in "
                   "config.ini");
+    if (planes > 0)
+        progress.info("PS1 FMV subtitles: set [Game] Ps1FmvSubtitles=1 in "
+                      "config.ini");
     return true;
 }
 
@@ -298,6 +299,27 @@ bool migrateDcAssets(const DcMigrationOptions& opts, const Progress& progress,
         return false;
     }
 
+    int planes = 0;
+    if (opts.fmvSubtitles) {
+        // Into the JPN tree, not the overlay: the subtitle loader reads the
+        // compile-time JPN root directly and never consults an overlay.
+        const std::string jpnData =
+            childDir(joinPath(opts.targetRoot, versionName(AssetVersion::JPN)),
+                     "Data");
+        progress.info("DC subtitles: JIMAKU*.RGB -> jimaku*.png");
+        if (!convertJimakuSubtitles(img, jpnData, progress, &planes, error)) {
+            cleanup();
+            return false;
+        }
+        if (planes > 0) {
+            progress.info("  the game reads these from the JPN tree's Data "
+                          "folder, whatever the base tree is");
+            if (opts.base != AssetVersion::JPN)
+                progress.info("  note: [Assets] Version=JPN selects the "
+                              "Japanese tree, which is where they landed");
+        }
+    }
+
     if (opts.convertMovies) {
         progress.info("movies: STR -> MP4");
         const std::string movieOut = joinPath(overlay, "Movie");
@@ -334,6 +356,9 @@ bool migrateDcAssets(const DcMigrationOptions& opts, const Progress& progress,
     }
 
     cleanup();
+    if (planes > 0)
+        progress.info("PS1 FMV subtitles: set [Game] Ps1FmvSubtitles=1 in "
+                      "config.ini");
     progress.info("done: " + overlay);
     return true;
 }

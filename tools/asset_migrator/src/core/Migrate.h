@@ -37,6 +37,10 @@ struct PcMigrationOptions {
     // Also overwrite the tree's own movies with the PS1 versions, and
     // re-convert STFC/STFJ when they already exist.
     bool ps1ReplaceMovies = false;
+    // Decode the disc's DATA/JIMAKU*.RGB into <tree>/Data/jimaku*.png, the
+    // prologue FMV subtitles ([Game] Ps1FmvSubtitles=1). Only the JPN releases
+    // carry them; a disc without them is skipped, not an error.
+    bool ps1FmvSubtitles = true;
 };
 
 struct DcMigrationOptions {
@@ -53,6 +57,13 @@ struct DcMigrationOptions {
     // Run the coverage/background check after the overlay is written.
     bool verify = true;
     std::string ffmpegPath = "ffmpeg";
+    // Decode the disc's DATA/JIMAKU*.RGB into <target>/JPN/Data/jimaku*.png,
+    // the prologue FMV subtitles ([Game] Ps1FmvSubtitles=1). They go into the
+    // JPN tree, not the overlay: Ps1FmvSubtitles builds its path from the
+    // compile-time GAME_DATA_ROOT_JPN and calls LoadFile directly, so the
+    // overlay's Data folder is never searched for them. Only the JPN discs
+    // carry the files; a disc without them is skipped, not an error.
+    bool fmvSubtitles = true;
 };
 
 // migratePcAssets runs the base-tree copy when sourcePath is set, then the PS1

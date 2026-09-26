@@ -8,14 +8,17 @@
 //   re1am_selftest strinfo <image> [filter]
 //   re1am_selftest strconvert <image> <outdir> <ffmpeg> [filter] [limit]
 //   re1am_selftest extract <image> <outdir> [folders-csv]
+//   re1am_selftest jimaku <image> <outdir>
 //   re1am_selftest pc <source|-> <target> <USA|JPN> [--image] [--movies]
-//                     [--ps1 <image>] [--no-ps1-credits] [--no-ps1-movies]
-//                     [--ps1-replace]
-//   re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies] [--no-verify]
+//                     [--ps1 <image>] [--no-ps1-credits] [--no-ps1-subs]
+//                     [--no-ps1-movies] [--ps1-replace]
+//   re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies]
+//                     [--no-subs] [--no-verify]
 
 #include "core/Assets.h"
 #include "core/Bss.h"
 #include "core/DiscImage.h"
+#include "core/Jimaku.h"
 #include "core/Migrate.h"
 #include "core/Util.h"
 #include "core/Video.h"
@@ -211,6 +214,25 @@ int cmdExtract(const std::string& image, const std::string& outDir,
     return 0;
 }
 
+int cmdJimaku(const std::string& image, const std::string& outDir) {
+    DiscImage img;
+    std::string err;
+    if (!img.open(image, &err)) {
+        std::printf("ERROR: %s\n", err.c_str());
+        return 1;
+    }
+    re1::Progress p = consoleProgress();
+    int written = 0;
+    if (!makeDirs(outDir) ||
+        !convertJimakuSubtitles(img, outDir, p, &written, &err)) {
+        std::printf("ERROR: %s\n", err.empty() ? "cannot create the output "
+                                               "directory" : err.c_str());
+        return 1;
+    }
+    std::printf("%d subtitle plane(s)\n", written);
+    return written > 0 ? 0 : 1;
+}
+
 int cmdPc(int argc, char** argv) {
     PcMigrationOptions o;
     o.sourcePath = std::strcmp(argv[2], "-") == 0 ? "" : argv[2];
@@ -223,6 +245,8 @@ int cmdPc(int argc, char** argv) {
         if (std::strcmp(argv[i], "--ps1") == 0 && i + 1 < argc)
             o.ps1ImagePath = argv[++i];
         if (std::strcmp(argv[i], "--no-ps1-credits") == 0) o.ps1Credits = false;
+        if (std::strcmp(argv[i], "--no-ps1-subs") == 0)
+            o.ps1FmvSubtitles = false;
         if (std::strcmp(argv[i], "--no-ps1-movies") == 0) o.ps1Movies = false;
         if (std::strcmp(argv[i], "--ps1-replace") == 0) o.ps1ReplaceMovies = true;
     }
@@ -241,6 +265,7 @@ int cmdDc(int argc, char** argv) {
         if (std::strcmp(argv[i], "--no-bg") == 0)
             o.backgrounds = Backgrounds::None;
         if (std::strcmp(argv[i], "--no-movies") == 0) o.convertMovies = false;
+        if (std::strcmp(argv[i], "--no-subs") == 0) o.fmvSubtitles = false;
         if (std::strcmp(argv[i], "--no-verify") == 0) o.verify = false;
     }
     re1::Progress p = consoleProgress();
@@ -268,6 +293,7 @@ int main(int argc, char** argv) {
                              argc >= 7 ? std::atoi(argv[6]) : 0);
     if (cmd == "extract" && argc >= 4)
         return cmdExtract(argv[2], argv[3], argc >= 5 ? argv[4] : "");
+    if (cmd == "jimaku" && argc >= 4) return cmdJimaku(argv[2], argv[3]);
     if (cmd == "pc" && argc >= 5) return cmdPc(argc, argv);
     if (cmd == "dc" && argc >= 5) return cmdDc(argc, argv);
     std::printf("unknown or incomplete command\n");

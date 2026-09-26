@@ -31,6 +31,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(RE1_SOURCES
     src/Globals.cpp
     src/system/AssetPath.cpp
+    src/system/PngImage.cpp
     src/system/ConfigFile.cpp
 
     src/marni/MarniBits.cpp
@@ -53,6 +54,7 @@ set(RE1_SOURCES
     src/game/EffectSystem.cpp
     src/game/EndingScreen.cpp
     src/game/Ps1EndingCredits.cpp
+    src/game/Ps1FmvSubtitles.cpp
     src/game/EntityModelLoader.cpp
     src/game/FadeSprite.cpp
     src/game/FileLoader.cpp

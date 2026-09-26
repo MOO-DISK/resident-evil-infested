@@ -301,6 +301,19 @@ const DiscEntry* DiscImage::find(const std::string& path) const {
     return nullptr;
 }
 
+const DiscEntry* DiscImage::findInFolder(const std::string& folder,
+                                         const std::string& name) const {
+    const std::string tail = "/" + toUpper(folder) + "/" + toUpper(name);
+    for (const auto& e : m_entries) {
+        if (e.directory) continue;
+        const std::string p = "/" + toUpper(e.path);
+        if (p.size() >= tail.size() &&
+            p.compare(p.size() - tail.size(), tail.size(), tail) == 0)
+            return &e;
+    }
+    return nullptr;
+}
+
 bool DiscImage::readFile(const DiscEntry& entry,
                          std::vector<uint8_t>* out) const {
     out->clear();

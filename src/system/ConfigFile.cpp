@@ -390,6 +390,10 @@ void ConfigFile_EnsureExists(void)
         "; 1 = use the PS1 staff-credit overlay in the ending FMVs. DC enables it\n"
         "; automatically; OG leaves it off unless this key is set.\n"
         "Ps1EndingCredits=%d\n"
+        "; 1 = draw the JPN PS1 subtitle lines over the prologue FMV, as the\n"
+        "; Biohazard Director's Cut disc does. Needs the JPN asset tree; the USA\n"
+        "; disc has no such subtitles.\n"
+        "Ps1FmvSubtitles=%d\n"
         "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
@@ -410,6 +414,7 @@ void ConfigFile_EnsureExists(void)
         (GetAssetVersion() == 1) ? "JPN" : "USA",
         GameModeName(g_GameMode), g_DcDifficulty,
         g_bPs1EndingCredits ? 1 : 0,
+        g_bPs1FmvSubtitles ? 1 : 0,
 #ifdef _DEBUG
         1,
 #else
@@ -505,6 +510,9 @@ BOOL ConfigFile_Load(void)
     // OG uses no overlay; every other mode overlays a folder of its own name.
     SetAssetMode(g_GameMode == GAME_MODE_OG ? "" : GameModeName(g_GameMode));
     g_bPs1EndingCredits = ReadInt(path, "Game", "Ps1EndingCredits", 0) != 0;
+    // JPN FMV subtitle overlay. Off by default: the assets only exist in the
+    // JPN tree, and the USA build has no equivalent.
+    g_bPs1FmvSubtitles = ReadInt(path, "Game", "Ps1FmvSubtitles", 0) != 0;
     dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
                GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
                g_bPs1EndingCredits ? 1 : 0);

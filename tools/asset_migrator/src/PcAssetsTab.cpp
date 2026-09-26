@@ -71,6 +71,9 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
     m_ps1Credits = new QCheckBox(
         tr("Ending-credit data (STAFF.STF, STAFF2.STF, BIO.TIM)"), m_ps1);
     m_ps1Credits->setChecked(true);
+    m_ps1Subs = new QCheckBox(
+        tr("Prologue FMV subtitles (JIMAKU*.RGB -> data/jimaku*.png)"), m_ps1);
+    m_ps1Subs->setChecked(true);
     m_ps1Movies = new QCheckBox(
         tr("Convert PS1 movies (STR -> MP4): STFC/STFJ and any the tree lacks"),
         m_ps1);
@@ -81,13 +84,16 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
         auto* ps1Form = new QFormLayout(m_ps1);
         ps1Form->addRow(tr("PS1 image:"), pathRow(m_ps1Image, browsePs1));
         ps1Form->addRow(QString(), m_ps1Credits);
+        ps1Form->addRow(QString(), m_ps1Subs);
         ps1Form->addRow(QString(), m_ps1Movies);
         ps1Form->addRow(QString(), m_ps1Replace);
         auto* ps1Note = new QLabel(
             tr("For the PS1 staff and cast rolls in OG mode "
-               "([Game] Ps1EndingCredits=1). Use a raw .bin/.cue so the movie "
-               "audio is intact. With a PS1 image the PC source may be left "
-               "empty to update an existing tree."),
+               "([Game] Ps1EndingCredits=1) and the Japanese prologue FMV "
+               "subtitles ([Game] Ps1FmvSubtitles=1, read from the JPN tree). "
+               "Use a raw .bin/.cue so the movie audio is intact. With a PS1 "
+               "image the PC source may be left empty to update an existing "
+               "tree."),
             m_ps1);
         ps1Note->setWordWrap(true);
         ps1Form->addRow(ps1Note);
@@ -141,6 +147,7 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
         if (m_ps1->isChecked()) {
             opts.ps1ImagePath = m_ps1Image->text().toStdString();
             opts.ps1Credits = m_ps1Credits->isChecked();
+            opts.ps1FmvSubtitles = m_ps1Subs->isChecked();
             opts.ps1Movies = m_ps1Movies->isChecked();
             opts.ps1ReplaceMovies = m_ps1Replace->isChecked();
         }

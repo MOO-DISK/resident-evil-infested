@@ -64,6 +64,12 @@ public:
     // Case-insensitive lookup of a '/'-separated path.
     const DiscEntry* find(const std::string& path) const;
 
+    // The file `<any folder>/<folder>/<name>`, case-insensitive. The disc nests
+    // its files differently per release (root, /PSX/DATA, ...), so only the last
+    // two path components are matched. Null when the disc has no such file.
+    const DiscEntry* findInFolder(const std::string& folder,
+                                  const std::string& name) const;
+
 private:
     bool parseIso(std::string* error);
     void parseDir(uint32_t lba, uint32_t length, const std::string& prefix);

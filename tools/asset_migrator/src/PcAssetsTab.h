@@ -36,6 +36,7 @@ private:
     QGroupBox* m_ps1 = nullptr;
     QLineEdit* m_ps1Image = nullptr;
     QCheckBox* m_ps1Credits = nullptr;
+    QCheckBox* m_ps1Subs = nullptr;
     QCheckBox* m_ps1Movies = nullptr;
     QCheckBox* m_ps1Replace = nullptr;
     RunPanel* m_run = nullptr;

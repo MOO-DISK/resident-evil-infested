@@ -21,6 +21,8 @@ const char* kDcItemViewFiles[] = {"I00V_S1.IVM", "I60V_L.IVM", "I60V_R.IVM",
                                   "I99V.IVM"};
 const int kFontClutColours = 16;
 const int kFontClutRows = 4;
+// fontus.tim / FONT.TIM glyphs only use palette indices 0-8.
+const int kFontGlyphColours = 9;
 const char* kFontClutRowNames[] = {"STANDARD (the PC font's own)",
                                    "TRAINING green", "ADVANCED red",
                                    "ADVANCED* grey"};
@@ -444,6 +446,9 @@ bool stepFont(Ctx& c) {
                  "palettes");
         return false;
     }
+    // Row 0 is always the base font's own palette (what every non-DC string
+    // already draws with); rows 1-3 are the PS1 colour columns 1-3. A JPN base
+    // ships the PS1's wide CLUT itself, so it is its own source.
     std::vector<uint16_t> srcRow;
     std::string srcName;
     if (pcClut.w >= kFontClutRows * kFontClutColours) {
@@ -454,10 +459,19 @@ bool stepFont(Ctx& c) {
             c.p.info("  the two fonts put their CLUT at different VRAM spots");
             return false;
         }
+        // Sanity check that the disc's font is the same colour layout: its
+        // column 0 must carry the base palette. Only the entries the glyphs
+        // use are compared, and without the STP bit - the USA DC disc's
+        // column 0 is the PC palette verbatim, the Biohazard DC disc's has
+        // STP clear and zeros past entry 8, and both have identical columns
+        // 1-3.
         const auto& p0 = pcClut.rows[0];
         const auto& s0 = psClut.rows[0];
-        if ((int)p0.size() < kFontClutColours || (int)s0.size() < kFontClutColours ||
-            !std::equal(p0.begin(), p0.begin() + kFontClutColours, s0.begin())) {
+        bool same = (int)p0.size() >= kFontGlyphColours &&
+                    (int)s0.size() >= kFontGlyphColours;
+        for (int i = 0; same && i < kFontGlyphColours; ++i)
+            same = (p0[i] & 0x7FFF) == (s0[i] & 0x7FFF);
+        if (!same) {
             c.p.info("  the base font's palette is not the PS1 CLUT's column 0");
             return false;
         }
@@ -469,7 +483,9 @@ bool stepFont(Ctx& c) {
         return false;
     }
     std::vector<std::vector<uint16_t>> rows(kFontClutRows);
-    for (int r = 0; r < kFontClutRows; ++r)
+    rows[0] = std::vector<uint16_t>(pcClut.rows[0].begin(),
+                                    pcClut.rows[0].begin() + kFontClutColours);
+    for (int r = 1; r < kFontClutRows; ++r)
         rows[r] = std::vector<uint16_t>(
             srcRow.begin() + r * kFontClutColours,
             srcRow.begin() + (r + 1) * kFontClutColours);
