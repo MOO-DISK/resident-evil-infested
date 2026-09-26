@@ -677,7 +677,12 @@ void title_state(void)
     sounds_reset();
 
     g_loadDataDestPointer = g_DataBuffer;
-    LoadSoundBank(BANK_TITLE, g_DataBuffer);
+    // The USA title_state (0x00430470) loads bank 12 (EVIL01 - the "Resident
+    // Evil" voice), the Japanese one (FUN_0048dc20, 0x0048dc20 in
+    // Biohazard.exe) loads bank 11 (BIO01 - the "Bio Hazard" voice). Both banks
+    // have slot 0 as the logo voice and 13/14/15 as Cancel/Type01/Type02, so the
+    // play_sfx ids in update_title_options are unchanged; only the bank differs.
+    LoadSoundBank(GetAssetVersion() != 0 ? BANK_BIO : BANK_TITLE, g_DataBuffer);
 
     g_fading_state = -1;
     g_titleLoopFlag = 0;
