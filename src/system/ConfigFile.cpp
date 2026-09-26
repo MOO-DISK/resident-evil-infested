@@ -382,11 +382,6 @@ void ConfigFile_EnsureExists(void)
         ";            [Assets] Version selects.\n"
         ";   SATURN, DS = folder names reserved; no code behind them yet.\n"
         "Mode=%s\n"
-        "; The DC title screen's STANDARD / TRAINING / ADVANCED choice:\n"
-        "; 0 = STANDARD (the original game), 1 = TRAINING, 2 = ADVANCED,\n"
-        "; 3 = ADVANCED with the held confirm. The title screen decides this at\n"
-        "; runtime; set it here to test a mode directly.\n"
-        "DcDifficulty=%d\n"
         "; 1 = use the PS1 staff-credit overlay in the ending FMVs. DC enables it\n"
         "; automatically; OG leaves it off unless this key is set.\n"
         "Ps1EndingCredits=%d\n"
@@ -412,7 +407,7 @@ void ConfigFile_EnsureExists(void)
         (unsigned)g_dwScreenWidth, (unsigned)g_dwScreenHeight,
         (unsigned)g_dwBitDepth, g_bVSync ? 1 : 0,
         (GetAssetVersion() == 1) ? "JPN" : "USA",
-        GameModeName(g_GameMode), g_DcDifficulty,
+        GameModeName(g_GameMode),
         g_bPs1EndingCredits ? 1 : 0,
         g_bPs1FmvSubtitles ? 1 : 0,
 #ifdef _DEBUG
@@ -494,9 +489,7 @@ BOOL ConfigFile_Load(void)
                                      );
 
     // Content mode. [Game] Mode is the single switch: it sets g_GameMode AND
-    // the asset overlay folder. DcDifficulty is the initial
-    // STANDARD/TRAINING/ADVANCED choice (the DC title screen overwrites it at
-    // runtime, so it doubles as a way to test a mode directly).
+    // the asset overlay folder.
     char modeName[16];
     if (ReadValue(path, "Game", "Mode", modeName, sizeof(modeName))) {
         g_GameMode = ParseGameMode(modeName);
@@ -516,11 +509,6 @@ BOOL ConfigFile_Load(void)
     dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
                GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
                g_bPs1EndingCredits ? 1 : 0);
-    g_DcDifficulty = ReadInt(path, "Game", "DcDifficulty", DC_DIFFICULTY_STANDARD);
-    if (g_DcDifficulty < DC_DIFFICULTY_STANDARD ||
-        g_DcDifficulty > DC_DIFFICULTY_ADVANCED_HOLD) {
-        g_DcDifficulty = DC_DIFFICULTY_STANDARD;
-    }
 
     // The port always renders in hardware; the original's adapter picker is gone.
     g_dwSelectedDisplayAdapterID = 1;

@@ -69,7 +69,7 @@ enemy AI, stage overlays, audio) and `docs/PSX_DIRECTORS_CUT_ANALYSIS.md`.
 | `src/Globals.h` / `Globals.cpp` | `g_GameMode` (`GAME_MODE_OG/DC/SATURN/NDS`), `g_bDcMode` as a macro over it, and `g_DcDifficulty` (0=STANDARD, 1=TRAINING, 2=ADVANCED, 3=ADVANCED*) |
 | `src/system/ConfigFile.cpp` | reads `[Game] Mode` (default `OG`) in `ConfigFile_Load` and calls `SetAssetMode`; preserves it on save. A pre-`Mode` file's `DcMode=1` is still honoured, and writing the file back replaces it. The name doubles as the overlay folder (`kGameModeNames`), so a mode name is spelled in exactly one place |
 | `src/system/AssetPath.h/.cpp` | `SetAssetMode()` / `GetAssetModeName()` + the overlay probe in `ResolveAssetRoot` (§0) |
-| `config.ini` | documents `[Game] Mode` and `[Game] DcDifficulty` in the generated default file |
+| `config.ini` | documents `[Game] Mode` in the generated default file.
 
 No `GetAssetVersion()` change was needed: the overlay sits *on top of* whichever
 base tree `[Assets] Version` picks, so the existing `!= 0` JPN branches are
@@ -944,8 +944,9 @@ unmapped memory. A failed load now keeps the old RDT and says so.
   `dcGameMode` / `g_DcGameMode`, and it rides the existing whole-card copy.
   `dc_apply_mode_flags()` reads it on the continue path and writes it on the
   new-game path (PS1 `FUN_80019638`), which is what makes a continued game run
-  in the mode it was started in rather than whatever config.ini currently says —
-  including the F2/F3 quick load. A USA save has 0 there and loads as STANDARD.
+  in the mode it was started in rather than in the default a fresh title-screen
+  choice would leave behind. A USA save has 0
+  there and loads as STANDARD.
 - **Slot colour-coding** (`src/game/SaveLoadScreen.cpp`): the DC draws each slot
   row's text with colour = that row's mode byte. The two builds pack the colour
   differently: the PS1 font CLUT is 17 palettes wide by 3 rows at VRAM
