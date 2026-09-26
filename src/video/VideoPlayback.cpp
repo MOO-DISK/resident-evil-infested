@@ -102,10 +102,31 @@ static const int g_FMVTableCount = sizeof(g_FMVTableUSA) / sizeof(g_FMVTableUSA[
 static_assert(sizeof(g_FMVTableJPN) == sizeof(g_FMVTableUSA),
               "USA and JPN FMV tables must have the same layout/ID count");
 
+// Bits 0..11 of the PSX button word - the full set of accept/skip buttons every
+// skippable entry in the table above carries.
+#define FMV_SKIP_ALL_BUTTONS 0x0fff
+
 // Active table for the configured version (config.ini [Assets] Version).
 static const FMVEntry* GetFmvTable(void)
 {
     return (GetAssetVersion() == 1) ? g_FMVTableJPN : g_FMVTableUSA;
+}
+
+// ============================================================================
+// GetFmvSkipMask - the button mask that skips an FMV. Port-added override:
+// [Game] SkipUnskippableFmv=1 hands every movie the full button mask, so the
+// ones the original left unskippable (mask 0x0000) can be skipped too. The
+// per-entry masks are what ship.
+// ============================================================================
+static WORD GetFmvSkipMask(int fmvId)
+{
+    if (g_bSkipUnskippableFmv) {
+        return (WORD)FMV_SKIP_ALL_BUTTONS;
+    }
+    if (fmvId < 0 || fmvId >= g_FMVTableCount) {
+        return 0;
+    }
+    return (WORD)GetFmvTable()[fmvId].isSkippable;
 }
 
 // ============================================================================
@@ -366,7 +387,7 @@ void UpdateVideoPlayback(void)
             WORD currentInput = (WORD)PlayerPad_Update();
 
             // Check for skip input (per-FMV skip mask from g_FMVTable[i].isSkippable)
-            WORD skipMask = (WORD)GetFmvTable()[g_CurrentFMVID].isSkippable;
+            WORD skipMask = GetFmvSkipMask(g_CurrentFMVID);
             if (((skipMask & ~g_videoSkipInput & currentInput) != 0) && (g_videoSkipCounter == 0)) {
                 // Skip requested - stop playback
                 plat_video_stop();

@@ -1999,6 +1999,7 @@ int            g_GameMode = GAME_MODE_OG;
 int            g_DcDifficulty = DC_DIFFICULTY_STANDARD;
 bool           g_bPs1EndingCredits = false;
 bool           g_bPs1FmvSubtitles = false;
+bool           g_bSkipUnskippableFmv = false;
 
 // ---------------------------------------------------------------------------
 // re1_rand / re1_srand (port-only)

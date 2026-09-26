@@ -389,6 +389,10 @@ void ConfigFile_EnsureExists(void)
         "; Biohazard Director's Cut disc does. Needs the JPN asset tree; the USA\n"
         "; disc has no such subtitles.\n"
         "Ps1FmvSubtitles=%d\n"
+        "; 1 = let every FMV be skipped with the usual buttons. The original's\n"
+        "; per-movie mask leaves the endings, the staff rolls and two of the\n"
+        "; cutscenes unskippable; set this to 1 to make those skippable too.\n"
+        "SkipUnskippableFmv=%d\n"
         "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
@@ -410,6 +414,7 @@ void ConfigFile_EnsureExists(void)
         GameModeName(g_GameMode),
         g_bPs1EndingCredits ? 1 : 0,
         g_bPs1FmvSubtitles ? 1 : 0,
+        g_bSkipUnskippableFmv ? 1 : 0,
 #ifdef _DEBUG
         1,
 #else
@@ -506,6 +511,9 @@ BOOL ConfigFile_Load(void)
     // JPN FMV subtitle overlay. Off by default: the assets only exist in the
     // JPN tree, and the USA build has no equivalent.
     g_bPs1FmvSubtitles = ReadInt(path, "Game", "Ps1FmvSubtitles", 0) != 0;
+    // Port-added: overrides the per-FMV skip mask so the movies the original
+    // marks unskippable can be skipped too. Off unless the key is set.
+    g_bSkipUnskippableFmv = ReadInt(path, "Game", "SkipUnskippableFmv", 0) != 0;
     dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
                GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
                g_bPs1EndingCredits ? 1 : 0);

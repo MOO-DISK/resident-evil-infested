@@ -467,6 +467,10 @@ extern DWORD         g_MainStateFlagBank[2];           // 0x00be41c0
 extern int           g_GameMode;               // [Game] Mode -> GAME_MODE_*
 extern bool          g_bPs1EndingCredits;
 extern bool          g_bPs1FmvSubtitles;      // [Game] Ps1FmvSubtitles
+// Port-added: treat every FMV as skippable, including the ones the original's
+// per-FMV mask table (0x004c39dc) marks 0x0000 - the endings, the staff rolls
+// and DMF/DME. Off by default, so the original's masks are what ship.
+extern bool          g_bSkipUnskippableFmv;    // [Game] SkipUnskippableFmv
 
 // Every "are we in Director's Cut mode" test in the port. Deliberately a macro
 // over g_GameMode rather than a second global: there is one stored value, so

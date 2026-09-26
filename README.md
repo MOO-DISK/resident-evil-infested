@@ -332,6 +332,24 @@ Assets tab and point it at a PS1 disc (the 1996 release or the Director's Cut).
 Use a raw `.bin`/`.cue` image so the movies keep their CD-XA audio. If the
 `.STF` files are missing, the ending plays the PC credit movie as before.
 
+### Skippable FMVs
+
+Each movie carries its own skip mask in the original's FMV table
+(`0x004c39dc`, `src/video/VideoPlayback.cpp`): `0x0fff` for the cutscenes and
+the Capcom/Virgin logos, `0x0000` — unskippable — for the endings (`ED1`-`ED8`,
+`EU4`/`EU5`), the PC credit movies (`stf*_r`) and `DMF` / `DME`. A single
+config key lifts that:
+
+```ini
+[Game]
+; 1 = let every FMV be skipped, including the ones the original locks
+SkipUnskippableFmv=1
+```
+
+It is off by default, so the shipped behaviour is the original's masks. The
+original's 100-frame grace period still applies, so a press during the first few
+seconds of a movie is ignored.
+
 ## Controls
 
 The port keeps the original 1997 input model: every binding is a *function*
