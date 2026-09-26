@@ -972,6 +972,18 @@ unmapped memory. A failed load now keeps the old RDT and says so.
   cannot fire — that counter is overlay BSS, zeroed on load, and only the
   ADVANCED path increments it — so it is documented, not ported. The two 0x7B
   reads are guarded with `!g_bDcMode` (§2f).
+- **The next-cycle save's start handgun.** The ending rebuilds the save the player
+  starts the following game from, and `SetInitialItems` picks the Beretta M92FS
+  custom (item 4) over the plain Beretta only while `MSF2_DC_ADVANCED` is set. The
+  DC gets there by raising the bit for that one call and clearing it again
+  (`ENDING_DC.EXE 0x800e17d0`, which tests the `g_status_flags` snapshot its
+  overlay entry took at `0x800e00a4`). The PS1 can test the bit because the
+  snapshot predates the mask; in the port `game_start` has already run
+  `g_main_state_flags2` through `MSF2_RESET_KEEP_MASK`, which does not keep
+  `0x70000`, so `ending_state` puts the bit back from `g_DcDifficulty` — the same
+  stand-in the other DC branches in that function already use — around its
+  `SetInitialItems` call. Without it, every game started from a post-ending save
+  began with the plain Beretta.
 - **Port-only: OG mode refuses DC TRAINING/ADVANCED saves.** In `Mode=OG`, a
   save whose `file[0x233]` is TRAINING/ADVANCED/ADVANCED* (1/2/3) is drawn grey
   in the save/load screen and cannot be loaded; it can still be chosen in the
@@ -985,7 +997,9 @@ unmapped memory. A failed load now keeps the old RDT and says so.
 - `tools/verify_dc_save_mode.py` recomputes every `BioCardLayout` offset from
   the struct and checks each against its own comment, checks the mode->bit
   mapping against the PS1's own load path (`0x80019638`) through the Ghidra
-  bridge, and diffs both overlay fonts against the base glyph block and the PS1
+  bridge, reads the ending overlay's raise/clear-`ADVANCED` window
+  (`0x800e17d0`) to confirm the port wraps `SetInitialItems` the same way, and
+  diffs both overlay fonts against the base glyph block and the PS1
   colour columns.
 
 ---

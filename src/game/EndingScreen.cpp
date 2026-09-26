@@ -1069,7 +1069,20 @@ void ending_state(void)
     g_playerEntity.health = (short)((g_playerEntity.id & 1) * -44 + 140);
     g_PlayerHealthCopy = g_playerEntity.health;
 
+    // The DC's ending raises MSF2_DC_ADVANCED for the SetInitialItems call and
+    // clears it again straight after (ENDING_DC.EXE 0x800e17d0-0x800e1830), so
+    // the next-cycle save an ADVANCED run leaves behind starts with the Beretta
+    // M92FS custom (item 4) instead of the plain Beretta. The PS1 can test the
+    // bit itself because its ending overlay snapshots g_status_flags on entry,
+    // while the bits are still set from the run; here game_start has already run
+    // them through MSF2_RESET_KEEP_MASK, which does not keep 0x70000. The
+    // completed run's mode is g_DcDifficulty - what the rest of this function's
+    // DC branches already test - so use that to stand in for the PS1's snapshot.
+    if (g_bDcMode && g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+        g_main_state_flags2 |= MSF2_DC_ADVANCED;
+    }
     SetInitialItems();
+    g_main_state_flags2 &= ~MSF2_DC_ADVANCED;
 
     unsigned char slot = g_TotalHeldItems;
     if ((s_effectsEnabled != 0) || (s_grantRocket != 0)) {
