@@ -1161,6 +1161,27 @@ static const unsigned char** dc_jpn_item_names(void)
     return table;
 }
 
+// DC + USA name table. The DC has no sub machine guns, so its table carries
+// neither name: ids 0x6F and 0x70 both point at the stale "CRANK" string
+// (SLUS_005.51 0x800901D8 entries 110/111 -> 0x8008FEF6) and the generic-name
+// group that follows starts two entries early. The port keeps the PC weapons in
+// DC mode - the ending hands them out and the item viewer loads the USA
+// item_m2 models - so those two ids take the USA names.
+static const unsigned char** dc_usa_item_names(void)
+{
+    static const unsigned char* table[DC_ITEM_NAME_COUNT];
+    static int built = 0;
+    if (!built) {
+        for (int i = 0; i < DC_ITEM_NAME_COUNT; ++i) {
+            table[i] = g_dcItemNamePointers[i];
+        }
+        table[ITEM_INGRAM - 1] = g_ItemNamePointers[ITEM_INGRAM - 1];   // INGRAM
+        table[ITEM_MINIMI - 1] = g_ItemNamePointers[ITEM_MINIMI - 1];   // MINIMI
+        built = 1;
+    }
+    return table;
+}
+
 unsigned char* message_item_name_lookup(unsigned char itemId)
 {
     // The Japanese release has its own pair of tables (0x004cd388/0x004cd548,
@@ -1169,11 +1190,12 @@ unsigned char* message_item_name_lookup(unsigned char itemId)
     // share their latin rows - but they would draw in English. So the version
     // picks the language first and only then applies the DC's edits.
     const int jpn = (GetAssetVersion() != 0);
-    // The Director's Cut renames four ids (0x04, 0x0D, 0x31/0x32); its table is
-    // otherwise identical to the USA one, so only the pointer table switches.
+    // The Director's Cut renames four ids (0x04, 0x0D, 0x31/0x32) and drops the
+    // two PC-only sub machine guns; its table is otherwise identical to the USA
+    // one, so only the pointer table switches.
     const unsigned char** names = jpn ? (g_bDcMode ? dc_jpn_item_names()
                                                    : g_ItemNamePointersJpn)
-                               : g_bDcMode ? g_dcItemNamePointers
+                               : g_bDcMode ? dc_usa_item_names()
                                            : g_ItemNamePointers;
     const unsigned char** unknown = jpn ? g_UnknownItemNamePointersJpn
                                         : g_UnknownItemNamePointers;

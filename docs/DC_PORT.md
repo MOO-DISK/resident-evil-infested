@@ -340,6 +340,17 @@ DUMDUM ROUNDS -> **LOCKPICK**, `0x31`/`0x32` -> **MOON CREST** — plus the
 key/file names in the table's tail. `message_item_name_lookup` picks the DC
 table on `g_bDcMode` over a USA base.
 
+The table also has **no sub machine gun entries**: entries 110/111 (ids 0x6F
+INGRAM and 0x70 MINIMI, both PC-exclusive) point at the same stale string,
+`0x8008FEF6` = **CRANK**, and the generic-name group that follows starts two
+entries early (0x71 CHEMICAL where the USA table has 0x71 CRANK). Nothing in
+the DC ever reads those two ids, but this port keeps the PC weapons in DC mode
+— the ending hands them out (`EndingScreen.cpp`) and the item viewer loads the
+USA `item_m2` models — so `dc_usa_item_names` (`Rendering.cpp`) copies the DC
+table and puts the USA names back on 0x6F/0x70. Without it both weapons were
+labelled CRANK. The Japanese table has the two names already, so DC+JPN needs
+no such fix.
+
 Over a JPN base it does **not** switch to the English table: `dc_jpn_item_names`
 (`Rendering.cpp`) applies the same four relocations to the JPN table using the
 JPN strings the DC moved to — 0x02 `ベレッタ`, 0x31 `キーピック`, 0x2C
@@ -361,6 +372,16 @@ match byte-for-byte. The DC's real differences: item 0x04 =
 **"A beretta M92FS Automatic. / Custom edition."** and the two crest halves
 (0x31/0x32) = **"Nothing important."** (the DC's own text; its table points
 items 0x31/0x32 at the same string as items 0x33..0x36).
+
+The DC's table has no sub machine gun text either: its last real entry is
+index 0x4C "The battery is still charged." and 0x4D/0x4E — the two indices the
+item viewer passes for the INGRAM / MINIMI examine — point outside the string
+pool (`0x80080F3C` / `0x80031604`), so the generator's tail fallback repeated
+0x4C and both weapons read "The battery is still charged." in DC mode.
+`dc_usa_item_descriptions` (`RoomInit.cpp`) copies the DC table and restores
+the USA entries 0x4D "A sub machine gun loaded with 9mm bullets." and 0x4E "
+A full-automatic light-weight machine gun."; the JPN table already has its own
+pair there, so DC+JPN needs no fix.
 
 Emitted in the port's `STR()` style (`.`=0x79, `-`=0x3B, line break=0x02,
 quotes = the `\o` / `\"` escapes) and selected in

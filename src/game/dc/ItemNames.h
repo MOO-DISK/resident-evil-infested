@@ -9,4 +9,9 @@
 // itemId - 1 like the port's g_ItemNamePointers). The DC renames four ids -
 // 0x04 -> BERETTA, 0x0D -> LOCKPICK (name only) and 0x31/0x32 -> MOON CREST -
 // and every other name is identical to the USA build's.
+//
+// The two PC-only sub machine guns are the exception: the DC has none, so ids
+// 0x6F/0x70 (INGRAM / MINIMI) both point at the stale CRANK string and the
+// generic-name group starts two entries early. Rendering.cpp's
+// dc_usa_item_names() puts the USA names back on those two ids.
 extern const unsigned char* g_dcItemNamePointers[DC_ITEM_NAME_COUNT];

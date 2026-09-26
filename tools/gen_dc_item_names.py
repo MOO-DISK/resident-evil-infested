@@ -17,6 +17,12 @@ constants plus the pointer table. Unchanged ids reuse the port's text verbatim
 (read from MenuData.cpp), so the only decoding needed is for the four renames -
 whose text is plain letters and spaces.
 
+The DC has no sub machine guns, so its table carries neither name: entries
+110/111 (the port's INGRAM / MINIMI ids 0x6F / 0x70) both point at the stale
+CRANK string and the generic-name group that follows starts two entries early.
+That is the DC's table as built; the port keeps the PC weapons in DC mode, so
+Rendering.cpp's dc_usa_item_names() overrides those two ids with the USA names.
+
     python tools/gen_dc_item_names.py            # compare only
     python tools/gen_dc_item_names.py --write    # emit the C files
 """
@@ -164,6 +170,11 @@ def main():
 // itemId - 1 like the port's g_ItemNamePointers). The DC renames four ids -
 // 0x04 -> BERETTA, 0x0D -> LOCKPICK (name only) and 0x31/0x32 -> MOON CREST -
 // and every other name is identical to the USA build's.
+//
+// The two PC-only sub machine guns are the exception: the DC has none, so ids
+// 0x6F/0x70 (INGRAM / MINIMI) both point at the stale CRANK string and the
+// generic-name group starts two entries early. Rendering.cpp's
+// dc_usa_item_names() puts the USA names back on those two ids.
 extern const unsigned char* g_dcItemNamePointers[DC_ITEM_NAME_COUNT];
 '''
 

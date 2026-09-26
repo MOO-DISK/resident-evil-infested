@@ -129,6 +129,28 @@ static unsigned char** dc_jpn_item_descriptions(void)
     return table;
 }
 
+// DC + USA description table. The DC has no sub machine guns, so its table's
+// last real entry is 0x4C ("The battery is still charged.") and 0x4D/0x4E - the
+// two indices the item viewer passes for the INGRAM / MINIMI examine - hold
+// stale pointers outside the string pool (0x80080F3C / 0x80031604), which the
+// generator's tail fallback turns into another copy of 0x4C's text. The port
+// keeps both PC weapons in DC mode, so those two indices take the USA text.
+// Built once, on first use.
+static unsigned char** dc_usa_item_descriptions(void)
+{
+    static unsigned char* table[DC_ITEM_DESCRIPTION_COUNT];
+    static int built = 0;
+    if (!built) {
+        for (int i = 0; i < DC_ITEM_DESCRIPTION_COUNT; ++i) {
+            table[i] = g_dcItemDescriptions[i];
+        }
+        table[0x4d] = g_ItemDescriptions[0x4d];   // A sub machine gun loaded with 9mm bullets.
+        table[0x4e] = g_ItemDescriptions[0x4e];   // A full-automatic light-weight machine gun.
+        built = 1;
+    }
+    return table;
+}
+
 // ============================================================================
 // set_item_description_message (0x00455730)
 // The item viewer's own message setter: shows the examine description of the
@@ -152,7 +174,8 @@ unsigned int set_item_description_message(unsigned short descIndex, unsigned sho
     // by its set_item_description_message at 0x00491a40). The Director's Cut has
     // its own too (SLUS_005.51 0x8008E9C4): item 0x04 reads "A beretta M92FS
     // Automatic. / Custom edition." and the two MOON CREST halves read
-    // "Nothing important.".
+    // "Nothing important." - and it drops the two sub machine gun entries, which
+    // dc_usa_item_descriptions() puts back (the port keeps the PC weapons).
     //
     // Its strings must use STR()'s DOUBLED parser escapes (see
     // tools/gen_dc_item_descriptions.py); a single "\n" became raw 0x0A and hung
@@ -163,7 +186,7 @@ unsigned int set_item_description_message(unsigned short descIndex, unsigned sho
     const int jpn = (GetAssetVersion() != 0);
     unsigned char** descriptions = jpn
         ? (g_bDcMode ? dc_jpn_item_descriptions() : g_ItemDescriptionsJpn)
-        : g_bDcMode ? g_dcItemDescriptions
+        : g_bDcMode ? dc_usa_item_descriptions()
                     : g_ItemDescriptions;
 
     // The original indexes the table unchecked; the entries past the last item

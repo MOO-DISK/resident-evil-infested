@@ -5,8 +5,13 @@
 
 #define DC_ITEM_DESCRIPTION_COUNT 79
 
-// The DC's item description table (SLUS_005.51 0x8008E9C6, indexed by
+// The DC's item description table (SLUS_005.51 0x8008E9C4, indexed by
 // itemId - 1 like the port's g_ItemDescriptions). Only a few entries differ
 // from the USA build - item 0x04 is the Beretta M92FS "Custom edition" text
 // and 0x31/0x32 are the MOON CREST halves.
+//
+// The DC has no sub machine guns: its last real entry is 0x4C and 0x4D/0x4E -
+// the two indices the item viewer passes for the INGRAM / MINIMI examine -
+// point outside the string pool, so the generator repeated 0x4C's text there.
+// RoomInit.cpp's dc_usa_item_descriptions() puts the USA entries back.
 extern unsigned char* g_dcItemDescriptions[DC_ITEM_DESCRIPTION_COUNT];

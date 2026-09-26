@@ -18,6 +18,13 @@ so it was located by searching the image for a known-good string:
 
 This emits `ItemDescriptions.{h,cpp}` in the port's own `STR()` style.
 
+The DC has no sub machine guns, so its table stops one entry short of the
+USA's: 0x4D/0x4E - the two indices the item viewer passes for the INGRAM /
+MINIMI examine - point outside the string pool (0x80080F3C / 0x80031604) and
+the tail fallback above repeats 0x4C's text there. That is the DC's table as
+built; the port keeps the PC weapons in DC mode, so RoomInit.cpp's
+dc_usa_item_descriptions() overrides those two indices with the USA text.
+
     python tools/gen_dc_item_descriptions.py            # show the table
     python tools/gen_dc_item_descriptions.py --write    # emit the C files
 """
@@ -158,10 +165,15 @@ def main():
 
 #define DC_ITEM_DESCRIPTION_COUNT {COUNT}
 
-// The DC's item description table (SLUS_005.51 0x8008E9C6, indexed by
+// The DC's item description table (SLUS_005.51 0x8008E9C4, indexed by
 // itemId - 1 like the port's g_ItemDescriptions). Only a few entries differ
 // from the USA build - item 0x04 is the Beretta M92FS "Custom edition" text
 // and 0x31/0x32 are the MOON CREST halves.
+//
+// The DC has no sub machine guns: its last real entry is 0x4C and 0x4D/0x4E -
+// the two indices the item viewer passes for the INGRAM / MINIMI examine -
+// point outside the string pool, so the generator repeated 0x4C's text there.
+// RoomInit.cpp's dc_usa_item_descriptions() puts the USA entries back.
 extern unsigned char* g_dcItemDescriptions[DC_ITEM_DESCRIPTION_COUNT];
 '''
 
