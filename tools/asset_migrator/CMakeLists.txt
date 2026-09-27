@@ -6,6 +6,10 @@ project(re1_asset_migrator LANGUAGES CXX)
 # video conversions (AVI/STR -> MP4). It is a tool, not part of the game build;
 # Game.vcxproj and the root CMakeLists.txt do not reference it.
 #
+# The generator is the caller's choice; this build.ps1 picks the Visual Studio
+# generator that matches the installed Visual Studio, and CI uses Ninja (the
+# runner image's Visual Studio major version is not stable enough to pin).
+#
 #   cmake -S tools/asset_migrator -B tools/asset_migrator/build \
 #         -G "Visual Studio 18 2026" -A x64 \
 #         -DCMAKE_PREFIX_PATH=C:/Qt/6.8.3/msvc2022_64

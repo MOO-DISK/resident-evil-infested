@@ -105,10 +105,19 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" "${{ steps.stage.outputs.zip }}" --clobber
 
   # The asset migrator is a separate 64-bit Qt 6 tool; the game stays 32-bit
-  # MSVC. It builds with the runner's VS 2022 toolset and the matching Qt
-  # msvc2022_64 kit, and ships as its own zip so the game package stays clean.
-  # The Qt runtime is deployed with windeployqt; ffmpeg is a runtime dependency
-  # for the movie conversions and is deliberately not bundled.
+  # MSVC. It ships as its own zip so the game package stays clean. The Qt
+  # runtime is deployed with windeployqt; ffmpeg is a runtime dependency for
+  # the movie conversions and is deliberately not bundled.
+  #
+  # Ninja, not a Visual Studio generator. A -G "Visual Studio NN YYYY" pin is
+  # wrong twice over: the image's Visual Studio major version moves (17 = VS
+  # 2022, 18 = VS 2026, and the project itself builds locally with VS 2026),
+  # and on top of that CMake resolves the instance through its own
+  # vswhere/COM probe, which is what failed here with "could not find any
+  # instance of Visual Studio". msvc-dev-cmd puts the installed toolset on
+  # PATH from the VS instance it finds, and Ninja needs no VS discovery at all,
+  # so the build survives either image change. Ninja is single-config, hence
+  # CMAKE_BUILD_TYPE and no per-config output subdirectory.
   build-asset-migrator:
     needs: release-please
     runs-on: windows-2025
@@ -118,8 +127,16 @@ jobs:
           # Build the tagged commit when releasing, otherwise the pushed commit.
           ref: ${{ needs.release-please.outputs.tag_name || github.sha }}
 
+      # cl/link plus INCLUDE/LIB for the installed Visual Studio. x64 host and
+      # target: the tool is 64-bit, unlike the game.
+      - name: Set up the MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       # Qt is a ~1 GB download; the action caches it between runs. 6.8.3's
-      # win64_msvc2022_64 kit is built with the runner's v143 toolset.
+      # win64_msvc2022_64 kit is built with the v143 toolset, and links against
+      # the newer toolset msvc-dev-cmd hands us.
       - name: Install Qt
         uses: jurplel/install-qt-action@v4
         with:
@@ -130,31 +147,37 @@ jobs:
       - name: Configure
         run: >
           cmake -S tools/asset_migrator -B tools/asset_migrator/build
-          -G "Visual Studio 17 2022" -A x64
+          -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
 
       - name: Build
-        run: cmake --build tools/asset_migrator/build --config Release
+        run: cmake --build tools/asset_migrator/build
 
-      - name: Deploy Qt runtime
-        run: >
-          windeployqt --release --no-translations --no-system-d3d-compiler
-          --no-opengl-sw
-          "tools/asset_migrator/build/Release/re1_asset_migrator.exe"
-
-      - name: Stage release files
+      - name: Deploy Qt runtime and stage release files
         id: stage
         run: |
           $version = "${{ needs.release-please.outputs.version }}"
           if (-not $version) { $version = $env:GITHUB_SHA.Substring(0,7) }
           $name = "asset-migrator-$version-windows-x64"
-          New-Item -ItemType Directory -Force "stage/$name" | Out-Null
-          Copy-Item "tools/asset_migrator/build/Release/*" "stage/$name" -Recurse
-          # The import library / linker artifacts are build outputs, not runtime.
-          Remove-Item "stage/$name/*.lib","stage/$name/*.exp","stage/$name/*.pdb" -Force -ErrorAction SilentlyContinue
-          Copy-Item "tools/asset_migrator/README.md" "stage/$name"
-          Copy-Item "LICENSE" "stage/$name"
-          Compress-Archive -Path "stage/$name/*" -DestinationPath "$name.zip"
+          $out = "stage/$name"
+          New-Item -ItemType Directory -Force $out | Out-Null
+          # windeployqt assembles the runtime tree itself (the Qt DLLs, the
+          # plugin directories, the VC redist installer) and --dir keeps it out
+          # of the build directory, which Ninja also fills with the build
+          # system's own files: CMakeFiles, the autogen moc output, build.ninja.
+          # The Visual Studio generator avoided that by writing into Release/.
+          windeployqt --release --no-translations --no-system-d3d-compiler
+            --no-opengl-sw --dir $out
+            "tools/asset_migrator/build/re1_asset_migrator.exe"
+          if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
+          # --dir deploys the libraries and plugins but not the binaries.
+          Copy-Item "tools/asset_migrator/build/re1_asset_migrator.exe" $out
+          # The headless core verifier the README documents.
+          Copy-Item "tools/asset_migrator/build/re1am_selftest.exe" $out
+          Copy-Item "tools/asset_migrator/README.md" $out
+          Copy-Item "LICENSE" $out
+          Compress-Archive -Path "$out/*" -DestinationPath "$name.zip"
           "zip=$name.zip" >> $env:GITHUB_OUTPUT
           "name=$name" >> $env:GITHUB_OUTPUT
 

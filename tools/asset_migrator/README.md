@@ -142,7 +142,12 @@ cmake -S tools/asset_migrator -B tools/asset_migrator/build `
 cmake --build tools/asset_migrator/build --config Release
 ```
 
-Produces `tools/asset_migrator/build/Release/re1_asset_migrator.exe`.
+`build.ps1` picks the Visual Studio generator from cmake's own default instead
+of naming one, so it works on both a VS 2022 and a VS 2026 machine; pass
+`-Generator` to override (`-Generator Ninja` also works, from a shell with the
+MSVC environment loaded). The Visual Studio generators are multi-config, so
+`build.ps1` writes `tools/asset_migrator/build/Release/re1_asset_migrator.exe`;
+a single-config generator writes it at the root of the build directory.
 
 ## Package a portable folder
 
@@ -157,13 +162,18 @@ machine with no Qt installed. `ffmpeg.exe` is not bundled.
 ## Releases (CI)
 
 `.github/workflows/release.yml` has a `build-asset-migrator` job that installs Qt
-6.8.3 (`jurplel/install-qt-action`), builds the tool with the runner's VS 2022
-toolset, deploys the Qt runtime and publishes
+6.8.3 (`jurplel/install-qt-action`), builds the tool with Ninja on the runner's
+MSVC toolset (`ilammy/msvc-dev-cmd`), deploys the Qt runtime and publishes
 `asset-migrator-<version>-windows-x64.zip` as its own release asset (next to the
 game's `residentevil-<version>-windows-x86.zip` and the Linux bundle). It runs on
 every push to `main` as a compile check, and attaches the zip to the GitHub
 release when release-please cuts one. ffmpeg is not bundled, so players need it
 on `PATH` (or browsed to) for the movie conversions.
+
+The job pins no Visual Studio generator: the generator name depends on which
+Visual Studio the runner image ships (17 for VS 2022, 18 for VS 2026) and CMake
+resolves the instance through its own probe, which is what broke when the image
+moved. Ninja needs no such probe.
 
 ## Headless verification
 
