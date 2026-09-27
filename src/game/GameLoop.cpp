@@ -20,6 +20,7 @@
 #include <cstring>
 #include <cstdarg>
 #include "../DebugPrint.h"
+#include "../system/AssetPath.h"
 
 // Forward declarations for functions only used within game_loop
 extern void FUN_00473f10(int* baseAddr, unsigned int bitIndex);
@@ -137,7 +138,14 @@ LAB_00480c33:
                     // Title load flow (TitleScreen.cpp cases 2/3): the restored
                     // card carries 0x10000000 in g_main_state_flags, so
                     // InitializeGame's continue branch rebuilds the saved stage
-                    DebugQuick_LoadSlot(g_debugLoadSlot);
+                    //
+                    // Port-only: a refused slot (DC TRAINING/ADVANCED in OG
+                    // mode, or a vanished file) must NOT chain game_start - the
+                    // debug list already greys those out, this is the backstop.
+                    if (!DebugQuick_LoadSlot(g_debugLoadSlot)) {
+                        g_debugLoadScreenState = 0;
+                        break;
+                    }
                     g_loadSaveStateFlag = 0;
                     Game_timer = g_gameTimerSnapshot;
                     g_main_state_flags = (g_main_state_flags & ~MSF_SCREEN_MODE_MASK) | MSF_SCREEN_STANDALONE;
@@ -367,13 +375,24 @@ LAB_00480e89:
             else {
                 // ----- Countdown timer active (self-destruct sequence) -----
                 if (g_CountdownTimer != 180) {
-                    // 0x00480cb4-0x00480d7c: Display countdown timer
+                    // 0x00480cb4-0x00480d7c: Display countdown timer.
+                    // The two builds place the same 8-glyph "%2d:%02d:%d%d"
+                    // string at different x, because the Japanese FONT.TIM
+                    // cell is 14px wide against the USA fontus.tim's 8px:
+                    // USA 0x84 -> 132..196 (mid 164), JPN 0x68 -> 104..216
+                    // (mid 160, dead centre). Verified in both executables -
+                    // USA 0x00480d6f `push 0x84`, Biohazard.exe 0x0048d019
+                    // `PrintText8x14(0x68,0x20,...)`. Both use y = 0x20.
+                    // The glyph bytes are plain ASCII and unchanged by
+                    // version: PrintText8x14 has no +2 row bias, so '0'..'9'
+                    // land on the same cells in both sheets.
                     sprintf(PRINT_TEXT_BUFFER, "%2d:%02d:%d%d",
                             2 - g_CountdownTimer / 60,
                             59 - (unsigned int)g_CountdownTimer % 60,
                             DAT_004d2294 / -3 + 9,
                             (DAT_004d2294 + 1) % 10);
-                    PrintText8x14(0x84, 0x20, (0x77 < g_CountdownTimer) + 1, 0);
+                    PrintText8x14((short)((GetAssetVersion() != 0) ? 0x68 : 0x84),
+                                 0x20, (0x77 < g_CountdownTimer) + 1, 0);
                     goto LAB_00480d7c;
                 }
                 // 0x00480cbd-0x00480cee: Timer expired - trigger explosion FMV

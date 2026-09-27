@@ -92,6 +92,25 @@ const char*  GetSaveRoot(void);
 // 1 when the JPN (Biohazard) asset tree is active, 0 for the USA default.
 int          GetAssetVersion(void);
 
+// Content-mode overlay (config.ini [Game] Mode). The base tree selected above
+// is always complete and is never written to; a non-OG mode ships only the
+// files it changes or adds, in a sibling folder named after the mode
+// ("<base>/DC/", and with no [Assets] Path the same shape as the base root -
+// "./assets/DC/" in a dev build, ".\dc\" in retail).
+//
+// ResolveAssetRoot then searches OVERLAY FIRST, BASE SECOND: a file the overlay
+// does not carry falls through to the base tree unchanged. That is what lets
+// one install hold several releases at once, keeps OG byte-identical to today
+// (with no overlay set the probe does not run at all), and means a mode only
+// has to supply its diff rather than a whole duplicated tree.
+//
+// Pass NULL or "" for OG (no overlay). The name is used verbatim as the folder
+// name; case does not matter, since Windows is case-insensitive and
+// plat_normalize_path resolves components case-insensitively elsewhere.
+void         SetAssetMode(const char* mode);
+// The active overlay's folder name, "" when none (OG).
+const char*  GetAssetModeName(void);
+
 // Rewrites whichever known asset-root form a path was compiled with (debug
 // ".\assets\USA\" or retail ".\usa\") to the current runtime root, writing the
 // result into `out` (outSize bytes) and returning `out`. Returns `path`

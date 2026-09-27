@@ -133,23 +133,30 @@ void plat_cursor_show(BOOL show);
 // src/video/VideoPlayback.cpp owns the 4-state machine, the per-FMV skip masks,
 // the g_videoSkipCounter grace period and the prologue scenario cut; the
 // decoder is platform-specific. On Windows MCI opens the AVI and renders it
-// into the game window itself (video.cpp). On Linux ffmpeg decodes
-// Cinepak into a texture that the backend uploads, draws as a full-screen quad
-// and presents (video.cpp).
+// into the game window itself, or Media Foundation decodes a modern container
+// into a texture (video.cpp). On Linux ffmpeg decodes into a texture that the
+// backend uploads, draws as a full-screen quad and presents (video.cpp).
 //
-// Frames are addressed by index, not seconds: the AVIs are 10 fps and MCI's
-// frame time format is what the original's cut points were authored in.
+// Cut points are MILLISECONDS, not frame indices: the PC prologue uses frames
+// 1778/1885 at 10 fps, while the DC STR stream uses its 15-fps frame points.
+// Each backend turns the selected time into its own stream frames.
 // ---------------------------------------------------------------------------
+
+// Called each presented movie frame with the frame's texture and its stream
+// time in milliseconds, after the backbuffer is cleared. TRUE = the callback
+// drew the frame itself, so the backend skips its full-screen quad.
+typedef BOOL (*PlatVideoOverlayCallback)(DWORD32 frameTexture, int frameMs);
+void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback);
 
 // Probe the decoder backend. FALSE means "no FMV available, skip the movie".
 BOOL plat_video_init(void);
 
-// Open `path` and start playing. playToFrame > 0 stops at that frame (the
+// Open `path` and start playing. playToMs > 0 stops at that time (the
 // prologue's Chris-only beat); 0 plays through to the end.
-BOOL plat_video_open_and_play(const char* path, int playToFrame);
+BOOL plat_video_open_and_play(const char* path, int playToMs);
 
-// Resume the already-open movie from fromFrame through to the end.
-void plat_video_play_from(int fromFrame);
+// Resume the already-open movie from fromMs through to the end.
+void plat_video_play_from(int fromMs);
 
 // Stop playback (user skip) and close the movie.
 void plat_video_stop(void);

@@ -104,6 +104,72 @@ jobs:
         run: |
           gh release upload "${{ needs.release-please.outputs.tag_name }}" "${{ steps.stage.outputs.zip }}" --clobber
 
+  # The asset migrator is a separate 64-bit Qt 6 tool; the game stays 32-bit
+  # MSVC. It builds with the runner's VS 2022 toolset and the matching Qt
+  # msvc2022_64 kit, and ships as its own zip so the game package stays clean.
+  # The Qt runtime is deployed with windeployqt; ffmpeg is a runtime dependency
+  # for the movie conversions and is deliberately not bundled.
+  build-asset-migrator:
+    needs: release-please
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Build the tagged commit when releasing, otherwise the pushed commit.
+          ref: ${{ needs.release-please.outputs.tag_name || github.sha }}
+
+      # Qt is a ~1 GB download; the action caches it between runs. 6.8.3's
+      # win64_msvc2022_64 kit is built with the runner's v143 toolset.
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: "6.8.3"
+          arch: win64_msvc2022_64
+          cache: true
+
+      - name: Configure
+        run: >
+          cmake -S tools/asset_migrator -B tools/asset_migrator/build
+          -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build tools/asset_migrator/build --config Release
+
+      - name: Deploy Qt runtime
+        run: >
+          windeployqt --release --no-translations --no-system-d3d-compiler
+          --no-opengl-sw
+          "tools/asset_migrator/build/Release/re1_asset_migrator.exe"
+
+      - name: Stage release files
+        id: stage
+        run: |
+          $version = "${{ needs.release-please.outputs.version }}"
+          if (-not $version) { $version = $env:GITHUB_SHA.Substring(0,7) }
+          $name = "asset-migrator-$version-windows-x64"
+          New-Item -ItemType Directory -Force "stage/$name" | Out-Null
+          Copy-Item "tools/asset_migrator/build/Release/*" "stage/$name" -Recurse
+          # The import library / linker artifacts are build outputs, not runtime.
+          Remove-Item "stage/$name/*.lib","stage/$name/*.exp","stage/$name/*.pdb" -Force -ErrorAction SilentlyContinue
+          Copy-Item "tools/asset_migrator/README.md" "stage/$name"
+          Copy-Item "LICENSE" "stage/$name"
+          Compress-Archive -Path "stage/$name/*" -DestinationPath "$name.zip"
+          "zip=$name.zip" >> $env:GITHUB_OUTPUT
+          "name=$name" >> $env:GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.stage.outputs.name }}
+          path: ${{ steps.stage.outputs.zip }}
+
+      - name: Attach build to release
+        if: needs.release-please.outputs.release_created == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" "${{ steps.stage.outputs.zip }}" --clobber
+
   # Linux x86-32. Shares every game translation unit with Windows; the SDL2 +
   # OpenGL platform layer stands in for the MarniDX/Win32 backend. The runner is
   # the Ubuntu 24.04 reference environment from docs/LINUX_PORT.md, and

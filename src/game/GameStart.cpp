@@ -2,6 +2,8 @@
 // game_start, InitializeGame and all player/inventory initialization.
 // All functions decompiled from Ghidra with original addresses
 #include "../Globals.h"
+#include "dc/ItemTables.h"
+#include "dc/Items.h"
 #include "../marni/MarniSystem.h"
 #include "FileLoader.h"
 #include "SpriteRenderer.h"
@@ -148,6 +150,22 @@ void SetInitialItems(void)
         g_ItemsSlots[slot_index].Id = 0;
         g_ItemsSlots[slot_index].qty = 0;
     }
+
+    // DC ADVANCED (and ADVANCED*): the start handgun is the Beretta M92FS custom
+    // (item 4) instead of the plain Beretta (item 2). PS1 SetInitialItems
+    // overrides the start list's second entry and the Rebecca slot when
+    // g_status_flags & 0x20000, keeping the same 15 rounds; TRAINING and
+    // STANDARD keep item 2 (SLUS_005.51 0x8002c7a8).
+    if (g_bDcMode && (g_main_state_flags2 & MSF2_DC_ADVANCED) != 0) {
+        for (slot_index = 0; slot_index < total_items_slots; slot_index++) {
+            if (g_ItemsSlots[slot_index].Id == ITEM_BERETTA) {
+                g_ItemsSlots[slot_index].Id = DC_ITEM_BERETTA_CUSTOM;
+            }
+        }
+        if (g_RebeccaItemSlots[0].Id == ITEM_BERETTA) {
+            g_RebeccaItemSlots[0].Id = DC_ITEM_BERETTA_CUSTOM;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -281,6 +299,87 @@ void InitPlayerEntity(void)
 }
 
 // ===========================================================================
+// dc_apply_mode_flags (port-only; PS1 equivalent is g_abDcGameMode ->
+// g_status_flags in FUN_80019638)
+// Derive the DC mode bits in g_main_state_flags2 from g_DcDifficulty. The bits
+// are free in the USA build; the DC's repurposed RDT scripts test them and take
+// the arrange branch, so they must be clear for the USA path and for STANDARD.
+// ===========================================================================
+void dc_apply_mode_flags(void)
+{
+    g_main_state_flags2 &= ~MSF2_DC_MODE_MASK;
+    if (!g_bDcMode) {
+        return;
+    }
+
+    if ((g_main_state_flags2 & MSF2_ATTRACT_DEMO) != 0) {
+        g_DcDifficulty = DC_DIFFICULTY_STANDARD;
+        g_DcGameMode = DC_DIFFICULTY_STANDARD;
+        return;
+    }
+
+    // The mode travels in the save, at card +0x233 (PS1 g_abDcGameMode), so a
+    // continued game runs in the mode it was started in rather than in
+    // whatever config.ini currently says - this is the PS1's 0x80019638, which
+    // ORs the saved byte into its mode bits on the load path. A new game goes
+    // the other way: the title submenu's choice is written into the card the
+    // save will copy. bio_card.dat has a zero there, and a USA save does too,
+    // so an OG save loaded in DC mode is STANDARD.
+    if ((g_main_state_flags & MSF_CONTINUE_GAME) != 0) {
+        g_DcDifficulty = (g_DcGameMode <= DC_DIFFICULTY_ADVANCED_HOLD)
+                             ? (int)g_DcGameMode : DC_DIFFICULTY_STANDARD;
+    } else {
+        g_DcGameMode = (unsigned char)g_DcDifficulty;
+    }
+
+    switch (g_DcDifficulty) {
+    case DC_DIFFICULTY_TRAINING:
+        g_main_state_flags2 |= MSF2_DC_TRAINING;
+        break;
+    case DC_DIFFICULTY_ADVANCED:
+        g_main_state_flags2 |= MSF2_DC_ADVANCED;
+        break;
+    case DC_DIFFICULTY_ADVANCED_HOLD:
+        g_main_state_flags2 |= MSF2_DC_ADVANCED | MSF2_DC_ADVANCED_HOLD;
+        break;
+    default:                        // DC_DIFFICULTY_STANDARD: the original game
+        break;
+    }
+}
+
+// ===========================================================================
+// dc_apply_item_tables (port-only)
+// Swap the port's item tables for the Director's Cut's when DcMode is on.
+// The PS1 tables are 1-based and their image-lookup table overlaps the
+// max-quantity table by one byte (exactly as in the PC build); the generated
+// ItemTables.cpp holds them re-based for the port's indexing, so this is a
+// straight copy plus re-pointing the combine table at its new offsets.
+// Called once per game start from InitializeGame.
+// ===========================================================================
+void dc_apply_item_tables(void)
+{
+    unsigned int i;
+    if (!g_bDcMode) {
+        return;
+    }
+    memcpy(g_ItemImageLookupTable, g_dcItemImageLookupTable, DC_ITEM_LOOKUP_BYTES);
+    memcpy(g_ItemCombineData, g_dcItemCombineData, DC_ITEM_COMBINE_BYTES);
+    memcpy(g_ItemImageTypeTable, g_dcItemImageTypeTable, DC_ITEM_IMAGE_TYPE_COUNT);
+    for (i = 0; i < DC_ITEM_COMBINE_COUNT; i++) {
+        g_ItemCombinePtrs[i] = g_ItemCombineData +
+            (unsigned int)(g_dcItemCombinePtrs[i] - g_dcItemCombineData);
+    }
+
+    // The max-quantity table overlaps the image lookup by one byte, exactly as on
+    // the PS1 (g_ItemMaxQty 0x004bd81c / lookup 0x004bd81d; PS1 0x8008E18C /
+    // 0x8008E18D), so the DC's is just the DC lookup shifted by one - no separate
+    // extraction is needed.
+    for (i = 1; i < sizeof(g_ItemMaxQty); i++) {
+        g_ItemMaxQty[i] = g_ItemImageLookupTable[i - 1];
+    }
+}
+
+// ===========================================================================
 // InitializeGame (0x004807a0)
 // Main game initialization. Loads bio_card.dat, sets up player entity, health,
 // inventory, character data, room SFX, character SFX, and initializes the
@@ -327,6 +426,19 @@ void InitializeGame(void)
         g_SpecialRoomLightState = (short)0xFFFF;
         g_CharacterModelId = g_playerEntity.id;
 
+        // BEFORE InitPlayerData, not after. SetInitialItems reads
+        // MSF2_DC_ADVANCED to decide whether Jill's start handgun is the
+        // Beretta M92FS custom (item 4) or the plain Beretta, and this is the
+        // call that derives that bit from g_DcDifficulty. Running it after the
+        // player init - where it used to sit, shared with the continue path -
+        // meant the bit was still clear when the inventory was built, so an
+        // ADVANCED game always started with the plain Beretta. The PS1 has no
+        // such window: its mode bits live in g_status_flags, already set by
+        // the title screen when SetInitialItems (0x8002c7a8) tests 0x20000.
+        // It must still follow the bio_card memcpy above, which is what
+        // g_DcGameMode is written into.
+        dc_apply_mode_flags();
+
         if ((g_main_state_flags2 & MSF2_ATTRACT_DEMO) == 0) {
             InitPlayerData();
             /*
@@ -335,8 +447,25 @@ void InitializeGame(void)
             */
             g_playerEntity.health = (short)((g_playerEntity.id & 1) * -44 + 140);
             g_PlayerHealthCopy = g_playerEntity.health;
+
+            if (g_bDcMode) {
+                // DC InitializeGame's mode block. TRAINING and ADVANCED replace
+                // the base 140/96 (PS1: (charId & 1) * -0x1e + 0xb4 / + 0x64).
+                // ADVANCED* shares ADVANCED's 100/70 - it is the held confirm.
+                if (g_DcDifficulty == DC_DIFFICULTY_TRAINING) {
+                    g_playerEntity.health = (short)((g_playerEntity.id & 1) * -30 + 180);
+                    g_PlayerHealthCopy = g_playerEntity.health;
+                } else if (g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+                    g_playerEntity.health = (short)((g_playerEntity.id & 1) * -30 + 100);
+                    g_PlayerHealthCopy = g_playerEntity.health;
+                }
+            }
         } else {
             LoadAttractModePlayerData();
+            if (g_bDcMode) {
+                g_playerEntity.health = (short)((g_playerEntity.id & 1) * -44 + 140);
+                g_PlayerHealthCopy = g_playerEntity.health;
+            }
         }
     } else {
         memcpy(&g_BioCardData[0], g_loadDataDestPointer, 0x200);
@@ -360,7 +489,36 @@ void InitializeGame(void)
             Game_timer = 0;
         }
         g_SavesCounter = g_SavesCounter + 1;
+
+        // The continue path's own copy: it has to follow the memcpy above,
+        // which is where the saved g_DcGameMode arrives, so this session runs
+        // in the mode the save was made in rather than whatever config.ini
+        // currently says. The new-game branch calls it earlier for the reason
+        // given there; there is no single point that serves both.
+        dc_apply_mode_flags();
     }
+
+    // Director's Cut gameplay always runs the "second playthrough" (hard)
+    // branch. The DC replaced the USA's first-playthrough/cleared-once
+    // difficulty with the title's STANDARD/TRAINING/ADVANCED choice, so its
+    // gameplay code has no SCENARIO_FLAG_SECOND_PLAYTHROUGH branch left: the
+    // DC STAGE1 overlay never reads g_gameOptionsFlags bit 0x7B, its zombie bite
+    // uses the hard damage table unconditionally (STAGE1.EXE 0x8012137c =
+    // 12,12,9,9), and cmd_item_model_set / check_typewriter /
+    // check_typewriter_state / InitializeGame / check_desk_state all dropped the
+    // flag branch. Force the flag in DC mode so the port's USA branches behave
+    // the same (Jill needs ink ribbons, the main-hall ribbon stays, enemies hit
+    // harder). Not set for attract demos - those replay recorded input against
+    // the mode bits dc_apply_mode_flags() pins to STANDARD.
+    if (g_bDcMode && (g_main_state_flags2 & MSF2_ATTRACT_DEMO) == 0) {
+        Flg_on((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH);
+    }
+
+    // Director's Cut item tables (lookup + combine); no-op for DcMode=0.
+    dc_apply_item_tables();
+
+    // Director's Cut zombie dispatch entry (behaviour 11); no-op for DcMode=0.
+    dc_apply_zombie_tables();
 
     g_deadMoveValue = (DWORD)&g_identityMatrixData;
     g_RoomCameraDataCopy = (DWORD)&g_RoomCameraData;
@@ -384,6 +542,21 @@ void InitializeGame(void)
     g_playerEntity.pSca_hit_data = (DWORD)g_entityDataBlock;
 
     g_playerEntity.maxHealth = (unsigned char)((g_playerEntity.id & 1) * -44 + 140);
+
+    if (g_bDcMode) {
+        // DC InitializeGame's second mode block (PS1 DAT_800c5299 =
+        // g_playerEntity + 0x175). The starting health above is only half the
+        // story: max health has to follow it, or the EKG - which derives its
+        // state from (health - 1) / (maxHealth >> 2) - reads an ADVANCED Jill
+        // at 70/96 and shows CAUTION on a full bar. Both branches run
+        // unconditionally in the DC, after the new-game / continue split, so
+        // a continued game gets the mode its save was made in.
+        if (g_DcDifficulty == DC_DIFFICULTY_TRAINING) {
+            g_playerEntity.maxHealth = (unsigned char)((g_playerEntity.id & 1) * -30 + 180);
+        } else if (g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+            g_playerEntity.maxHealth = (unsigned char)((g_playerEntity.id & 1) * -30 + 100);
+        }
+    }
 
     // Placeholder only: SetupCharacterData (called below) replaces it with the
     // character's own record. Same value as the original's initial store.
@@ -488,7 +661,7 @@ void LoadItemImage(int item_id, int image_index, int img_buffer) // 0x00443000
 void LoadAttractModePlayerData(void)
 {
     // 0x00481753: wrap the demo index around after pdemo3.dat
-    if (g_CurrentAttractModeId > 3) {
+    if (g_CurrentAttractModeId > (g_bDcMode ? 2 : 3)) {
         g_CurrentAttractModeId = 0;
     }
 
@@ -499,6 +672,14 @@ void LoadAttractModePlayerData(void)
     // 0x0048178d: LoadFile copies the entire file; stage it here and then
     // scatter the pieces onto the globals that overlap the original block.
     static BYTE pdemoFile[0x994];
+    // Clear before loading. The original never needs this because every PC reel
+    // is exactly 0x994 bytes, but the Director's Cut's pdemo0.dat is 0x990 -
+    // four short, with no controller/health tail at +0x990 at all. This buffer
+    // is static and reused across reels, so reading the tail out of a short
+    // file would hand the attract player the PREVIOUS reel's recorded health.
+    // Zero is also what the data means: every shipped reel except the PC's
+    // pdemo2 records health 0 here.
+    memset(pdemoFile, 0, sizeof(pdemoFile));
     LoadFile(FILE_PATH, pdemoFile, 0x20);
     memcpy(&g_AttractDemoData, pdemoFile, sizeof(g_AttractDemoData));
     memcpy(g_demoPadData, pdemoFile + 0x30, sizeof(g_demoPadData));

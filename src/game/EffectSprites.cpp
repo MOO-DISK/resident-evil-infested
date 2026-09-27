@@ -715,7 +715,7 @@ static int BakeWeaponSheetFromPage(int slot, const char* pageName)
 void RebakeWeaponSheetsForRoom(void)
 {
     unsigned char nameIdx = g_RoomEffectSpriteTable
-        [((unsigned int)g_stageId * 0x20 + (unsigned int)g_roomId) * 4 + 1];
+        [(get_stage_id() * 0x20 + (unsigned int)g_roomId) * 4 + 1];
     if (nameIdx == 0xFF) return;
     const char* pageName = (const char*)(g_EffectSpriteNames + nameIdx);
     for (int slot = 4; slot < 8; slot++) {

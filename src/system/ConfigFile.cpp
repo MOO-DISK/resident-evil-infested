@@ -278,6 +278,47 @@ const char* ConfigFile_Find(void)
 }
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// [Game] Mode <-> GAME_MODE_*.
+//
+// The name doubles as the asset overlay's folder name (SetAssetMode), so these
+// two functions are the only place a mode name is spelled out. An unknown or
+// missing name falls back to OG rather than refusing to start: a typo should
+// give the stock game, not a black screen.
+// ---------------------------------------------------------------------------
+static const char* const kGameModeNames[] = { "OG", "DC", "SATURN", "DS" };
+static const int kGameModeCount =
+    (int)(sizeof(kGameModeNames) / sizeof(kGameModeNames[0]));
+
+static const char* GameModeName(int mode)
+{
+    if (mode < 0 || mode >= kGameModeCount) {
+        return kGameModeNames[GAME_MODE_OG];
+    }
+    return kGameModeNames[mode];
+}
+
+static int ParseGameMode(const char* name)
+{
+    if (name == NULL || name[0] == '\0') {
+        return GAME_MODE_OG;
+    }
+    for (int i = 0; i < kGameModeCount; i++) {
+        const char* a = name;
+        const char* b = kGameModeNames[i];
+        while (*a != '\0' && *b != '\0') {
+            char ca = (*a >= 'a' && *a <= 'z') ? (char)(*a - 32) : *a;
+            if (ca != *b) break;
+            a++;
+            b++;
+        }
+        if (*a == '\0' && *b == '\0') {
+            return i;
+        }
+    }
+    return GAME_MODE_OG;
+}
+
 void ConfigFile_EnsureExists(void)
 {
     const char* path = ConfigFile_Find();
@@ -329,6 +370,30 @@ void ConfigFile_EnsureExists(void)
         "; the original used, and an existing save/ or Save/ is found as well.\n"
         "Path=\n"
         "\n"
+        "[Game]\n"
+        "; Which release's content to run. This one key selects BOTH the code\n"
+        "; branches and the asset overlay folder searched ahead of the [Assets]\n"
+        "; tree, so the two can never disagree.\n"
+        ";   OG     = the PC release (the original PS1 game's content). Default,\n"
+        ";            and the only mode that uses no overlay folder at all.\n"
+        ";   DC     = Director's Cut (Japanese MediaKite / SLUS_005.51). Needs a\n"
+        ";            DC/ folder beside USA/ holding only the files it changes or\n"
+        ";            adds; anything it does not carry falls back to the tree\n"
+        ";            [Assets] Version selects.\n"
+        ";   SATURN, DS = folder names reserved; no code behind them yet.\n"
+        "Mode=%s\n"
+        "; 1 = use the PS1 staff-credit overlay in the ending FMVs. DC enables it\n"
+        "; automatically; OG leaves it off unless this key is set.\n"
+        "Ps1EndingCredits=%d\n"
+        "; 1 = draw the JPN PS1 subtitle lines over the prologue FMV, as the\n"
+        "; Biohazard Director's Cut disc does. Needs the JPN asset tree; the USA\n"
+        "; disc has no such subtitles.\n"
+        "Ps1FmvSubtitles=%d\n"
+        "; 1 = let every FMV be skipped with the usual buttons. The original's\n"
+        "; per-movie mask leaves the endings, the staff rolls and two of the\n"
+        "; cutscenes unskippable; set this to 1 to make those skippable too.\n"
+        "SkipUnskippableFmv=%d\n"
+        "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
         "; texture viewer, F8 collision overlay. 0 = off, 1 = on.\n"
@@ -346,6 +411,10 @@ void ConfigFile_EnsureExists(void)
         (unsigned)g_dwScreenWidth, (unsigned)g_dwScreenHeight,
         (unsigned)g_dwBitDepth, g_bVSync ? 1 : 0,
         (GetAssetVersion() == 1) ? "JPN" : "USA",
+        GameModeName(g_GameMode),
+        g_bPs1EndingCredits ? 1 : 0,
+        g_bPs1FmvSubtitles ? 1 : 0,
+        g_bSkipUnskippableFmv ? 1 : 0,
 #ifdef _DEBUG
         1,
 #else
@@ -423,6 +492,31 @@ BOOL ConfigFile_Load(void)
                                      0
 #endif
                                      );
+
+    // Content mode. [Game] Mode is the single switch: it sets g_GameMode AND
+    // the asset overlay folder.
+    char modeName[16];
+    if (ReadValue(path, "Game", "Mode", modeName, sizeof(modeName))) {
+        g_GameMode = ParseGameMode(modeName);
+    } else {
+        // Pre-Mode config files said [Game] DcMode=1. Honour it rather than
+        // silently booting OG against a config the user believes selects the
+        // Director's Cut; writing the file back replaces it with Mode=.
+        g_GameMode = ReadInt(path, "Game", "DcMode", 0) ? GAME_MODE_DC
+                                                        : GAME_MODE_OG;
+    }
+    // OG uses no overlay; every other mode overlays a folder of its own name.
+    SetAssetMode(g_GameMode == GAME_MODE_OG ? "" : GameModeName(g_GameMode));
+    g_bPs1EndingCredits = ReadInt(path, "Game", "Ps1EndingCredits", 0) != 0;
+    // JPN FMV subtitle overlay. Off by default: the assets only exist in the
+    // JPN tree, and the USA build has no equivalent.
+    g_bPs1FmvSubtitles = ReadInt(path, "Game", "Ps1FmvSubtitles", 0) != 0;
+    // Port-added: overrides the per-FMV skip mask so the movies the original
+    // marks unskippable can be skipped too. Off unless the key is set.
+    g_bSkipUnskippableFmv = ReadInt(path, "Game", "SkipUnskippableFmv", 0) != 0;
+    dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
+               GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
+               g_bPs1EndingCredits ? 1 : 0);
 
     // The port always renders in hardware; the original's adapter picker is gone.
     g_dwSelectedDisplayAdapterID = 1;

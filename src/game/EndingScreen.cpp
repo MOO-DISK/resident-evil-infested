@@ -25,6 +25,7 @@
 #include "../marni/MarniSystem.h"
 #include "../marni/PSXTexture.h"
 #include "FileLoader.h"
+#include "Ps1EndingCredits.h"
 #include "SpriteRenderer.h"
 #include "BioCard.h"
 #include "PrintText.h"
@@ -96,11 +97,24 @@ static const EndingRow s_endingTable[8] = {
 };
 
 // ============================================================================
-// RESULT-screen entry table (0x004b37e0), 8 bytes each.
+// RESULT-screen entry table, 8 bytes each.
 //
 // Entries 0-4 are the "background" layout (endings 4-7), 7-11 the plain one
 // (endings 1-3); ending_result_build picks the base from the row's background
 // flag. Entries 5-6 belong to the rocket-launcher epilogue instead.
+//
+// The Japanese release ships its OWN copy of this table (Biohazard.exe
+// 0x004b20d0) and the only differences are the x of the four type 3 / type 5
+// value slots - exactly (14 - 8) * character_count, so the strings keep the
+// same centre once the 14px Japanese cell replaces the 8px USA one:
+//
+//   entry  1  clear time  USA 0x30  JPN 0x18   (8 chars -> -24)
+//   entry  3  save count  USA 0x48  JPN 0x42   (2 chars ->  -6)
+//   entry  8  clear time  USA 0x80  JPN 0x68
+//   entry 10  save count  USA 0x98  JPN 0x92
+//
+// Without those the values sit 24px / 6px right of the label. Verified
+// byte-for-byte in both executables.
 // ============================================================================
 struct CreditEntry {
     short         type;
@@ -110,7 +124,7 @@ struct CreditEntry {
     unsigned char height;
 };
 
-static const CreditEntry s_creditEntries[12] = {
+static const CreditEntry s_creditEntries[12] = {          // 0x004b37e0
     { 2, 0x00, 0x30, 0x00, 0x18 },   //  0
     { 3, 0x30, 0x50, 0x00, 0x00 },   //  1 - clear time
     { 2, 0x00, 0x74, 0x18, 0x18 },   //  2
@@ -124,6 +138,27 @@ static const CreditEntry s_creditEntries[12] = {
     { 5, 0x98, 0xB8, 0x00, 0x00 },   // 10 - save count
     { 2, 0x25, 0x66, 0x30, 0x28 },   // 11
 };
+
+static const CreditEntry s_creditEntriesJpn[12] = {       // 0x004b20d0 (Biohazard.exe)
+    { 2, 0x00, 0x30, 0x00, 0x18 },   //  0
+    { 3, 0x18, 0x50, 0x00, 0x00 },   //  1 - clear time
+    { 2, 0x00, 0x74, 0x18, 0x18 },   //  2
+    { 5, 0x42, 0x94, 0x00, 0x00 },   //  3 - save count
+    { 2, 0x25, 0x66, 0x30, 0x28 },   //  4
+    { 2, 0x20, 0x20, 0x58, 0x30 },   //  5 - epilogue
+    { 2, 0x20, 0xC0, 0x88, 0x20 },   //  6 - epilogue
+    { 2, 0x20, 0x16, 0x00, 0x36 },   //  7
+    { 3, 0x68, 0x58, 0x00, 0x00 },   //  8 - clear time
+    { 2, 0x20, 0x7A, 0x36, 0x36 },   //  9
+    { 5, 0x92, 0xB8, 0x00, 0x00 },   // 10 - save count
+    { 2, 0x25, 0x66, 0x30, 0x28 },   // 11
+};
+
+// The two originals each read one absolute table, so the version picks which.
+static const CreditEntry* credit_entries(void)
+{
+    return (GetAssetVersion() != 0) ? s_creditEntriesJpn : s_creditEntries;
+}
 
 // ============================================================================
 // The fabricated room the RESULT screen runs inside.
@@ -258,29 +293,38 @@ static void ending_slot_alloc(void)
 }
 
 // ============================================================================
-// ending_draw_text (0x00411da0)
+// ending_draw_text (USA 0x00411da0, Biohazard.exe 0x0043e900)
 // Draws PRINT_TEXT_BUFFER through the current slot's descriptor using the
-// ending's own 18-column glyph sheet: u = (c % 18) * 8, v = (c / 18) * 14.
+// current font's 18-column glyph sheet: u = (c % 18) * glyphW,
+// v = (c / 18) * 14. glyphW is 8 for the USA font (fontus.tim) and 14 for the
+// Japanese one (data\FONT.TIM), exactly as the two originals differ:
+//   USA     texU = (c % 0x12) * 8,   pen += 8
+//   Biohazard.exe texU = (c % 0x12) * 0x0E, pen += 0x0E
 // Spaces are skipped but still advance the pen, and the pen advance is NOT
 // undone - ending_result_draw rewrites screenX from the slot position at the
 // top of every frame, which is what puts it back.
 // ============================================================================
 static void ending_draw_text(void)
 {
+    // 8px cells in fontus.tim, 14px cells in the Japanese FONT.TIM. See the
+    // sibling renderers PrintText8x14 / PrintFormattedText / draw_item_name,
+    // which switch on the same flag.
+    const int glyphW = (GetAssetVersion() != 0) ? 14 : 8;
+
     const unsigned char* p = (const unsigned char*)PRINT_TEXT_BUFFER;
     do {
         if (*p != 0x20) {
-            s_drawCursor->tex.texU = (unsigned char)((*p % 0x12) * 8);
+            s_drawCursor->tex.texU = (unsigned char)((*p % 0x12) * glyphW);
             s_drawCursor->tex.texV = (unsigned char)((*p / 0x12) * 0x0E);
             AddTintSprite(&s_drawCursor->tex, 2);
         }
         p++;
-        s_drawCursor->tex.screenX = (short)(s_drawCursor->tex.screenX + 8);
+        s_drawCursor->tex.screenX = (short)(s_drawCursor->tex.screenX + glyphW);
     } while (*p != 0);
 }
 
 // ============================================================================
-// ending_result_draw (0x00410f40)
+// ending_result_draw (USA 0x00410f40, Biohazard.exe 0x0043daa0)
 // One pass over all 21 slots: step the fade, refresh the descriptor from the
 // slot position, then dispatch on the slot type.
 // ============================================================================
@@ -323,9 +367,13 @@ static void ending_result_draw(void)
 
         case 3:
             // Clear time. The game timer ticks at 30Hz: 0x1a5e0 = 1h,
-            // 0x708 = 1min, 0x1e = 1s. 0x5e is the sheet's separator glyph.
+            // 0x708 = 1min, 0x1e = 1s. 0x5e is the sheet's separator glyph -
+            // both originals pass the same byte here, and it reads as a kana
+            // in the Japanese sheet ('く', L[5][4]) exactly as Biohazard.exe
+            // does. Cell width follows the font: USA 0x00410f40 writes 8,
+            // Biohazard.exe 0x0043daa0 writes 0xe.
             s->tex.texturePage         = 0x1E;
-            s->tex.width         = 8;
+            s->tex.width         = (unsigned short)((GetAssetVersion() != 0) ? 0x0E : 8);
             s->tex.height        = 0x0E;
             s->tex.clutX         = 0x100;
             s->tex.clutY = 0x1E0;
@@ -341,7 +389,7 @@ static void ending_result_draw(void)
             // Save count. The counter is one ahead of the number of saves the
             // player actually made, so it is decremented unless it is zero.
             s->tex.texturePage         = 0x1E;
-            s->tex.width         = 8;
+            s->tex.width         = (unsigned short)((GetAssetVersion() != 0) ? 0x0E : 8);
             s->tex.height        = 0x0E;
             s->tex.clutX         = 0x100;
             s->tex.clutY = 0x1E0;
@@ -386,16 +434,17 @@ static void ending_effects_enable(void)
 }
 
 // ============================================================================
-// ending_result_build (0x00411640)
+// ending_result_build (USA 0x00411640, Biohazard.exe 0x0043e1a0)
 // Claims the five RESULT slots and installs the fabricated room.
 // ============================================================================
 static void ending_result_build(void)
 {
+    const CreditEntry* entries = credit_entries();
     int base = (s_endingTable[s_endingId].background == 0) ? 7 : 0;
 
     for (int i = 0; i < 5; i++) {
         ending_slot_alloc();
-        const CreditEntry* e = &s_creditEntries[base + i];
+        const CreditEntry* e = &entries[base + i];
 
         s_alloc->active = 1;
         s_alloc->type   = e->type;
@@ -632,7 +681,7 @@ static void ending_result_update(void)
 }
 
 // ============================================================================
-// ending_epilogue_build (0x00411a90)
+// ending_epilogue_build (USA 0x00411a90)
 // The rocket-launcher reward scene: rc1121.pix behind a spinning i73v model.
 // ============================================================================
 static void ending_epilogue_build(void)
@@ -644,10 +693,13 @@ static void ending_epilogue_build(void)
     // empty_00470960(0): empty in the original - call dropped
 
     // Entries 5 and 6 are the epilogue's two caption plates, both fully faded
-    // in from the start (fadeLevel 0x8000).
+    // in from the start (fadeLevel 0x8000). Both originals read them out of the
+    // same version-specific table the RESULT screen does; entries 5-6 happen
+    // to be byte-identical, so this is not a behavioural difference.
+    const CreditEntry* entries = credit_entries();
     for (int i = 5; i < 7; i++) {
         ending_slot_alloc();
-        const CreditEntry* e = &s_creditEntries[i];
+        const CreditEntry* e = &entries[i];
 
         s_alloc->active            = 1;
         s_alloc->type              = e->type;
@@ -822,8 +874,19 @@ void ending_state(void)
 
     // The backdrop is the character's "escaped" still. Flag 0x7B is the
     // already-cleared-once bit, which swaps in the alternate stills.
+    //
+    // The Director's Cut's ENDING overlay (ENDING_DC.EXE) never READS 0x7B: its
+    // only 0x7B reference is the Flg_on that marks the next cycle cleared
+    // (0x800e1a74), and its only g_gameOptionsFlags read is bit 0x7E (infinite
+    // rocket launcher, 0x800e1688). The cleared-once art swap is
+    // a USA/PC behaviour the DC dropped, so in DC mode take the first-run branch
+    // even though InitializeGame forces the flag for gameplay (GameStart.cpp).
     const char* bgPath;
-    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
+    if (g_bDcMode) {
+        bgPath = ((g_playerEntity.id & 3) == CHAR_CHRIS)
+                     ? GAME_DATA_ROOT "data\\clis01.pix"
+                     : GAME_DATA_ROOT "data\\jill01.pix";
+    } else if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
         bgPath = ((g_playerEntity.id & 3) == CHAR_CHRIS)
                      ? GAME_DATA_ROOT "data\\clis01.pix"
                      : GAME_DATA_ROOT "data\\jill01.pix";
@@ -892,8 +955,17 @@ void ending_state(void)
     } else {
         g_selectedFmvId = 27;
     }
-    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
+    // DC ending has no cleared-once congratulations-FMV swap (see the backdrop
+    // note above).
+    if (!g_bDcMode &&
+        Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
         g_selectedFmvId = 26;
+    }
+
+    if (g_bIsSoftwareRendering == 0 && Ps1EndingCredits_IsEnabled()) {
+        // The overlay keys its movie and tables on the player character
+        // (0x800c5125 & 3), not on the rocket-launcher congratulations id.
+        Ps1EndingCredits_Begin(s_endingId, g_playerEntity.id & 3);
     }
 
     if (g_bIsSoftwareRendering == 0) {
@@ -903,6 +975,11 @@ void ending_state(void)
 
     if (s_endingTable[s_endingId].staffRoll == 1) {
         if (g_bIsSoftwareRendering == 0) {
+            g_main_state_flags =
+                (g_main_state_flags & ~MSF_SCREEN_MODE_MASK) | MSF_SCREEN_STANDALONE;
+            g_spriteAnimR = 0;
+            g_spriteAnimG = 0;
+            g_spriteAnimB = 0;
             Task_sleep(0x96);
         } else {
             QueueVideoPlayback(g_selectedFmvId, 0);
@@ -914,6 +991,7 @@ void ending_state(void)
         g_main_state_flags |= MSF_FMV_REQUEST;
         Task_sleep(1);
     }
+    Ps1EndingCredits_End();
 
     // ------------------------------------------------------------------
     // RESULT screen
@@ -952,7 +1030,9 @@ void ending_state(void)
         }
     }
 
-    if ((s_endingTable[s_endingId].epilogue == 1) && (s_hasSpecialKey == 0)) {
+    if ((s_endingTable[s_endingId].epilogue == 1) &&
+        (!g_bDcMode || g_DcDifficulty < DC_DIFFICULTY_ADVANCED) &&
+        (s_hasSpecialKey == 0)) {
         s_stepTimer = 0;
         s_stepDone = 0;
         s_step = 0;
@@ -977,6 +1057,9 @@ void ending_state(void)
     if (g_SavesCounter == 1) s_grantRocket = 1;
 
     LoadFile(GAME_DATA_ROOT "data\\bio_card.dat", g_BioCardData, 0x20);
+    if (g_bDcMode) {
+        g_DcGameMode = (unsigned char)g_DcDifficulty;
+    }
     g_fading_state = (short)0xFFFF;
     ending_slots_clear();
 
@@ -986,7 +1069,20 @@ void ending_state(void)
     g_playerEntity.health = (short)((g_playerEntity.id & 1) * -44 + 140);
     g_PlayerHealthCopy = g_playerEntity.health;
 
+    // The DC's ending raises MSF2_DC_ADVANCED for the SetInitialItems call and
+    // clears it again straight after (ENDING_DC.EXE 0x800e17d0-0x800e1830), so
+    // the next-cycle save an ADVANCED run leaves behind starts with the Beretta
+    // M92FS custom (item 4) instead of the plain Beretta. The PS1 can test the
+    // bit itself because its ending overlay snapshots g_status_flags on entry,
+    // while the bits are still set from the run; here game_start has already run
+    // them through MSF2_RESET_KEEP_MASK, which does not keep 0x70000. The
+    // completed run's mode is g_DcDifficulty - what the rest of this function's
+    // DC branches already test - so use that to stand in for the PS1's snapshot.
+    if (g_bDcMode && g_DcDifficulty >= DC_DIFFICULTY_ADVANCED) {
+        g_main_state_flags2 |= MSF2_DC_ADVANCED;
+    }
     SetInitialItems();
+    g_main_state_flags2 &= ~MSF2_DC_ADVANCED;
 
     unsigned char slot = g_TotalHeldItems;
     if ((s_effectsEnabled != 0) || (s_grantRocket != 0)) {
@@ -998,7 +1094,8 @@ void ending_state(void)
         g_TotalHeldItems++;
         slot++;
     }
-    if (s_hasSpecialKey != 0) {
+    if (s_hasSpecialKey != 0 &&
+        (!g_bDcMode || g_DcDifficulty < DC_DIFFICULTY_ADVANCED)) {
         g_ItemsSlots[slot].Id = ITEM_SPECIAL_KEY;
         g_ItemsSlots[slot].qty = 1;
         g_TotalHeldItems++;
@@ -1009,7 +1106,22 @@ void ending_state(void)
             ((g_playerEntity.id & 3) != CHAR_CHRIS) ? ITEM_INGRAM : ITEM_MINIMI;
         g_ItemsSlots[slot].qty = 1;
         g_TotalHeldItems++;
+        slot++;
     }
+
+    // Director's Cut's ending bonus (0x800e1914): 
+    // an ADVANCED run that reaches ending 6 or 7 - the
+    // best ending for Chris and for Jill - grants infinite
+    // Colt Python Magnum
+    if (g_bDcMode && g_DcDifficulty >= DC_DIFFICULTY_ADVANCED
+        && (s_endingId == 6 || s_endingId == 7)) {
+        Flg_on((int)g_ScenarioFlags, DC_SCENARIO_FLAG_INF_COLT_PYTHON);
+        g_ItemsSlots[slot].Id = ITEM_COLT_PYTHON_MAG;
+        g_ItemsSlots[slot].qty = 1;
+        g_TotalHeldItems++;
+        slot++;
+    }
+    (void)slot;
 
     Flg_on((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH);
 

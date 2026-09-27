@@ -31,6 +31,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(RE1_SOURCES
     src/Globals.cpp
     src/system/AssetPath.cpp
+    src/system/AudioFile.cpp
+    src/system/PngImage.cpp
     src/system/ConfigFile.cpp
 
     src/marni/MarniBits.cpp
@@ -52,6 +54,8 @@ set(RE1_SOURCES
     src/game/EffectSprites.cpp
     src/game/EffectSystem.cpp
     src/game/EndingScreen.cpp
+    src/game/Ps1EndingCredits.cpp
+    src/game/Ps1FmvSubtitles.cpp
     src/game/EntityModelLoader.cpp
     src/game/FadeSprite.cpp
     src/game/FileLoader.cpp
@@ -88,6 +92,15 @@ set(RE1_SOURCES
     src/game/TmdAnimation.cpp
     src/game/TmdRenderer.cpp
     src/game/WeaponDamage.cpp
+    src/game/dc/WeaponDamageTables.cpp
+    src/game/dc/ItemTables.cpp
+    src/game/dc/ItemNames.cpp
+    src/game/dc/ItemModels.cpp
+    src/game/dc/ItemDescriptions.cpp
+    src/game/dc/Items.cpp
+    src/game/dc/EntityModels.cpp
+    src/game/dc/ArrangeStages.cpp
+    src/game/dc/ArrangeSoundRows.cpp
 
     src/game/entities/Adder.cpp
     src/game/entities/BlackTiger.cpp

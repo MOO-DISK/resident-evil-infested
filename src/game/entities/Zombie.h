@@ -60,6 +60,15 @@ enum ZombieBehavior {
     ZOMBIE_BEH_8                = 8,
     ZOMBIE_BEH_9                = 9,
     ZOMBIE_BEH_10               = 10, // lying on floor
+    // Director's Cut only - the one entry its zombie_states_table adds, which
+    // lands on behaviour 11 (the port's spare states[21]). dc_standup_lunge.
+    ZOMBIE_BEH_DC_STANDUP       = 11,
+    // The DC's three spawn markers. zombie_init rewrites them in place into
+    // behaviour 0 or 1 and sets Entity::dc_double_step, so nothing ever
+    // dispatches on these values. (docs/PSX_DC_ENEMY_AI.md)
+    ZOMBIE_BEH_DC_FAST_0        = 12, // -> behaviour 0, double step
+    ZOMBIE_BEH_DC_FAST_1        = 13, // -> behaviour 1, double step
+    ZOMBIE_BEH_DC_FAST_TOUGH    = 14, // -> behaviour 0, double step, +100 HP
 };
 
 // Behavior flags (entity->behavior_flags bits)
@@ -70,7 +79,8 @@ enum ZombieBehavior {
 
 // g_pZombieScaInfo @ 0x004bb280 - per-id SCA record (collision radius at +0x0A);
 // zombie_init stores one of these two into ENTITY->Sca_info.
-extern const short* const g_pZombieScaInfo[2];
+// [2] is Director's Cut only (behaviour 11); the PC build's table has two.
+extern const short* const g_pZombieScaInfo[3];
 
 // zombie_states_table @ 0x004bb2c8 - indexed by entity->state. 22 entries, not
 // 16: entries 16-21 belong to the behaviour view below, which shares the block.

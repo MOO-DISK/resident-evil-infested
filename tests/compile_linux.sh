@@ -13,7 +13,7 @@ FLAGS="-m32 -std=c++17 -Isrc -c -w"
 # Windows-only TUs are excluded here; each has its own phase (backends, MCI,
 # registry/dbghelp, DXGI). See docs/LINUX_PORT.md section 6.1.
 SRC=$(ls src/game/*.cpp src/game/entities/*.cpp \
-         src/system/AssetPath.cpp src/system/ConfigFile.cpp \
+         src/system/AssetPath.cpp src/system/AudioFile.cpp src/system/ConfigFile.cpp \
          src/marni/MarniBits.cpp src/marni/PSXTexture.cpp \
          src/marni/Marni3DObject.cpp src/marni/MarniSystem.cpp \
          src/video/VideoPlayback.cpp \

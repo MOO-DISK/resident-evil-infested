@@ -166,8 +166,9 @@ GPU — on Arch/CachyOS that means `lib32-mesa`, which SteamOS and any
 X11/Wayland and ALSA/PulseAudio clients, so the bundle does not depend on the
 target's 32-bit package set.
 
-Game data is not included, same as the Windows release — put the `USA/` (and
-optionally `JPN/`) tree next to the launcher.
+Game data is not included, same as the Windows release — migrate your own copy
+into place with the asset migrator (below) and put the `USA/` (and optionally
+`JPN/`, and the Director's Cut `DC/`) trees next to the launcher.
 
 ### Running the game
 
@@ -175,6 +176,11 @@ The decompilation took as base the GOG USA version, which is the same binary
 released in 1997, so this build expects the assets of any of those versions.
 
 Some features of the Japanese PC release (*Biohazard* Mediakite version) is supported as well
+
+The PS1 Director's Cut's content also runs, as an overlay on top of either base
+tree. Use the asset migrator (below) to lay out `USA/`, `JPN/` and the
+Director's Cut `DC/` overlay. The PS1 ending credits can replace the PC's
+credit movies in either mode; see [PS1 ending credits](#ps1-ending-credits).
 
 Every asset path is built against a data root that is resolved at startup:
 
@@ -195,6 +201,7 @@ RE1/
   config.ini
   USA/
   JPN/
+  DC/        (Director's Cut overlay; optional)
   SAVE/
 ```
 
@@ -208,8 +215,8 @@ The game reads `config.ini` from the executable's directory first (falling back
 to the working directory) and creates one with commented defaults if none is
 present. Release packages ship `config.ini.template` from the repository root as
 that initial `config.ini`. The `[Display]`, `[Player]` and `[Input]` keys are
-saved on exit; `[Assets]`, `[Save]` and `[Debug]` are yours to edit and are
-never rewritten.
+saved on exit; `[Assets]`, `[Save]`, `[Game]` and `[Debug]` are yours to edit and
+are never rewritten.
 
 ### Asset version (USA / JPN)
 
@@ -243,6 +250,105 @@ append a symbolized stack trace to `crash.log`.
 > (`0xC0000409`) because the exception cannot be dispatched on the task's
 > switched stack. Use `dbg_printf` / `dbg_safe_str` (`src/DebugPrint.h`),
 > which are gated on `IsDebuggerPresent`.
+
+### Asset migration
+
+No game data is distributed with this repository. The player-facing importer is a
+portable Qt GUI in `tools/asset_migrator/` (released as
+`asset-migrator-<version>-windows-x64.zip`). It has two tabs:
+
+- **PC Assets** — migrates a base tree from a folder (an installed GOG/retail
+  copy) or from a disc image. Choose **USA** or **Japanese** for the destination
+  (`USA/` or `JPN/`), and optionally convert the `Movie/*.avi` files to `.mp4`.
+  The port prefers a `.mp4` sibling of the FMV table's `.avi` and falls back to
+  the AVI, so keeping both is safe. Requires `ffmpeg` on `PATH` for the
+  conversion.
+- **Director's Cut** — builds the `DC/` overlay from a Director's Cut disc image.
+  An image is required: a raw 2352-byte `.bin`/`.cue` keeps the `.STR` movies'
+  CD-XA audio, which a 2048-byte copy truncates. Every DC room and all
+  backgrounds are migrated.
+
+The tool's own `README.md` covers building it, its options and the headless
+verifier. The same migrations are scriptable on either platform through the
+Python tools (`tools/port_dc_assets.py`, `tools/bss_to_pak.py`,
+`tools/str_to_video.py`).
+
+### Director's Cut mode
+
+`[Game] Mode` in `config.ini` picks which release's content runs. It is a single
+key that selects both the code branches and the asset overlay folder, so the two
+can never disagree:
+
+```ini
+[Game]
+; OG = the PC release (default); DC = the PS1 Director's Cut overlay
+Mode=DC
+```
+
+`DC` is an **overlay**, not a second full tree: `DC/` beside `USA/` and `JPN/`
+holds only the files the Director's Cut changes or adds, laid out like a base
+tree. `ResolveAssetRoot` (`src/system/AssetPath.cpp`) probes it first and falls
+through to the base tree for the folders the DC disc genuinely cannot supply, so
+the base trees stay complete and pristine and several releases can share one
+install. Build the overlay with the Director's Cut tab of the asset migrator; the
+full design is in `docs/DC_PORT.md`.
+
+### PS1 ending credits
+
+The PC release plays its credits as movies with the text baked into the
+picture (`stfc_r`, `stfj_r`, `stfz_r`, `staf_r`). The PS1 versions draw them
+live instead, and the port can do the same, following PS1 `ENDING.EXE`:
+
+- **Endings 1-3 (staff roll):** the `STAFF2.STF` credit strips scroll up over a
+  black screen, with the movie playing as music only. The last strips are the
+  RESIDENT EVIL logo, which fades out with the rest.
+- **Endings 4-7 (cast roll):** the character's movie (`STFC` for Chris, `STFJ`
+  for Jill) plays in shots that fade in and out. The `STAFF.STF` name panels
+  appear beside it, a black wipe covers part of one shot, and the roll ends on
+  the zoomed `BIO.TIM` logo.
+
+Director's Cut mode turns it on automatically. In OG mode, turn it on in
+`config.ini`:
+
+```ini
+[Game]
+; 1 = draw the PS1 credits over the ending movies (DC mode is always on)
+Ps1EndingCredits=1
+```
+
+It needs these files in the active tree (the `DC/` overlay, or `USA/` / `JPN/`
+in OG mode):
+
+| File | Holds |
+|---|---|
+| `Data/STAFF.STF` | the cast-roll name panels (endings 4-7) |
+| `Data/STAFF2.STF` | the staff-roll strips (endings 1-3) |
+| `Data/BIO.TIM` | the RESIDENT EVIL logo |
+| `Movie/STFC.mp4`, `Movie/STFJ.mp4` | the PS1 movies, which have no text in them |
+
+The Director's Cut tab of the asset migrator already writes all of these into
+`DC/`. For OG mode, tick **Add PS1 assets from a PS1 disc image** on the PC
+Assets tab and point it at a PS1 disc (the 1996 release or the Director's Cut).
+Use a raw `.bin`/`.cue` image so the movies keep their CD-XA audio. If the
+`.STF` files are missing, the ending plays the PC credit movie as before.
+
+### Skippable FMVs
+
+Each movie carries its own skip mask in the original's FMV table
+(`0x004c39dc`, `src/video/VideoPlayback.cpp`): `0x0fff` for the cutscenes and
+the Capcom/Virgin logos, `0x0000` — unskippable — for the endings (`ED1`-`ED8`,
+`EU4`/`EU5`), the PC credit movies (`stf*_r`) and `DMF` / `DME`. A single
+config key lifts that:
+
+```ini
+[Game]
+; 1 = let every FMV be skipped, including the ones the original locks
+SkipUnskippableFmv=1
+```
+
+It is off by default, so the shipped behaviour is the original's masks. The
+original's 100-frame grace period still applies, so a press during the first few
+seconds of a movie is ignored.
 
 ## Controls
 

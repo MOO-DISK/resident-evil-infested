@@ -162,6 +162,22 @@ void  MarniGetRenderScale(float* outScaleX, float* outScaleY);
 BOOL  MarniCreateTexture(int width, int height, int bpp, const void* pixelData,
                          MarniHandle* outTex);
 
+// STP knock-out twin of a model texture handle: a copy of the same texture
+// holding ONLY its opaque texels (every texel whose palette entry carries the
+// PS1 STP bit forced to palette index 0, i.e. fully transparent). Created by
+// [6] CreateTextureHandle for a material whose palette marks some - but not
+// all - of its used texels STP, and destroyed with its source texture by [8]
+// DeleteTextureHandle.
+//
+// FlushTmdObjects draws a semi-transparent TMD object once through the texture
+// and once through this twin at full alpha, which is how the per-texel rule
+// the PS1 GPU applies (ABE texels blend, non-ABE texels stay opaque) is
+// reproduced without per-texel blending. See the note above MarniStpKnockoutTwin's
+// definition in MarniSystem.cpp and the two-pass note in TmdRenderer.cpp.
+//
+// Returns MARNI_NULL_HANDLE when the texture has no twin.
+MarniHandle MarniStpKnockoutTwin(MarniHandle tex);
+
 void* MarniGetDevice(void);
 void  PresentFrame(void);             // alias for MarniPresent
 void  ClearScreen(void);             // alias for MarniClear

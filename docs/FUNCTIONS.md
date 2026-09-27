@@ -951,8 +951,9 @@ void UpdateVideoPlayback(void);
 #### Prologue Scenario Cut (FMV 1)
 
 The post-character-select prologue (`PU.avi` USA / `PJ.avi` JPN) is authored for the Chris
-scenario: frames **1778..1884** are a Chris-only dialogue beat. Both files run at 10 fps, so
-that is 2:57.8 - 3:08.4 of a 3:45.9 movie.
+scenario. The PC movies cut frames **1778..1884** at 10 fps; the PS1/DC STR
+stream uses frames **2430..2590** at 15 fps. The port converts those two frame
+ranges to time points so the generated MP4s cut at the same source beat.
 
 `main_loop` latches `g_FmvCharacterId = g_SelectedCharactedId` (`0x008f879c`) when it consumes
 the `MSF_FMV_REQUEST` flag. When that id is non-zero (Jill), `UpdateVideoPlayback` plays the
@@ -968,10 +969,9 @@ additionally gated on `g_videoFlagA4` (`DAT_008f87a4`, set in state 0 and cleare
 notification), so only the *first* notification resumes and the second ends the FMV. Chris
 (`g_FmvCharacterId == 0`) plays the movie whole with a single un-ranged `play movie notify`.
 
-The constants are raw frame numbers - MCIAVI's default time format is frames, and the port
-pins it with `set movie time format frames` before playing. They come from the USA executable;
-the JPN prologue is 2 frames longer overall and no JPN binary was available to confirm its own
-cut points, so the same values are reused for both regions.
+The PC cut points remain the default in OG mode. In DC mode the shared state
+machine uses the PS1 15-fps frame points instead, because the generated DC MP4s
+retain the STR's CD-sector timing.
 
 #### FMV Skip Mechanism
 

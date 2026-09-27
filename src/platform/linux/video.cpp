@@ -9,9 +9,9 @@
 // the video clock, so the picture cannot drift from the sound. When a movie has
 // no audio the wall clock stands in.
 //
-// Frames are addressed by index (the AVIs are 10 fps and the original's cut
-// points are frame numbers), so the shared state machine's playTo/playFrom
-// semantics carry over unchanged.
+// The state machine's cut points are times; this backend turns them into
+// frames with the stream's own rate, so a source-timed or PC-retimed movie
+// still cuts at the same moment.
 #include "../platform.h"
 
 #include "../../Globals.h"
@@ -38,6 +38,8 @@ void plat_audio_stream_stop(void);
 long plat_audio_stream_pos(void);
 
 namespace {
+
+PlatVideoOverlayCallback s_overlayCallback = NULL;
 
 AVFormatContext* s_fmt     = NULL;
 AVCodecContext*  s_vctx    = NULL;
@@ -267,6 +269,35 @@ BOOL ConvertAndStore(void)
             }
         }
         return TRUE;
+    case AV_PIX_FMT_YUV420P:
+        {
+            const unsigned char* yp = s_frame->data[0];
+            const unsigned char* up = s_frame->data[1];
+            const unsigned char* vp = s_frame->data[2];
+            const int yStride = s_frame->linesize[0];
+            const int uStride = s_frame->linesize[1];
+            const int vStride = s_frame->linesize[2];
+            for (int y = 0; y < s_height; ++y) {
+                const unsigned char* yRow = yp + (size_t)y * yStride;
+                const unsigned char* uRow = up + (size_t)(y / 2) * uStride;
+                const unsigned char* vRow = vp + (size_t)(y / 2) * vStride;
+                unsigned char* d = dst + (size_t)y * s_rgbaPitch;
+                for (int x = 0; x < s_width; ++x) {
+                    const int yy = yRow[x] - 16;
+                    const int uu = uRow[x / 2] - 128;
+                    const int vv = vRow[x / 2] - 128;
+                    const int r = (298 * yy + 409 * vv + 128) >> 8;
+                    const int g = (298 * yy - 100 * uu - 208 * vv + 128) >> 8;
+                    const int b = (298 * yy + 516 * uu + 128) >> 8;
+                    d[0] = (unsigned char)(r < 0 ? 0 : r > 255 ? 255 : r);
+                    d[1] = (unsigned char)(g < 0 ? 0 : g > 255 ? 255 : g);
+                    d[2] = (unsigned char)(b < 0 ? 0 : b > 255 ? 255 : b);
+                    d[3] = 255;
+                    d += 4;
+                }
+            }
+        }
+        return TRUE;
     default:
         fprintf(stderr, "[VIDEO] unsupported pixel format %d\n", s_frame->format);
         return FALSE;
@@ -392,9 +423,13 @@ void Present(void)
     if (bw == 0 || bh == 0) return;
 
     dx->Clear(0.0f, 0.0f, 0.0f, 1.0f);
-    dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
-                   0.0f, 0.0f, 1.0f, 1.0f,
-                   0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT, MARNI_BLEND_DISABLE);
+    const int frameMs = s_frameIndex > 0
+        ? (int)((double)s_frameIndex * 1000.0 / s_fps + 0.5) : 0;
+    if (s_overlayCallback == NULL || !s_overlayCallback(s_tex, frameMs)) {
+        dx->DrawSprite(0.0f, 0.0f, (float)bw, (float)bh,
+                       0.0f, 0.0f, 1.0f, 1.0f,
+                       0xFFFFFFFFu, s_tex, MARNI_SAMPLER_POINT, MARNI_BLEND_DISABLE);
+    }
     dx->Present();
 }
 
@@ -404,12 +439,17 @@ void Present(void)
 // Backend entry points (see platform.h)
 // ===========================================================================
 
+void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback)
+{
+    s_overlayCallback = callback;
+}
+
 BOOL plat_video_init(void)
 {
     return TRUE;   // ffmpeg is linked in; nothing to probe
 }
 
-BOOL plat_video_open_and_play(const char* path, int playTo)
+BOOL plat_video_open_and_play(const char* path, int playToMs)
 {
     FreeAll();
 
@@ -479,7 +519,11 @@ BOOL plat_video_open_and_play(const char* path, int playTo)
         DecodeAllAudio();
     }
 
-    s_playToFrame = playTo;
+    // The cut point arrives as a time; turn it into this movie's frames (the
+    // stream rate is known now, and a converted movie's rate need not be the
+    // originals' 10 fps).
+    s_playToFrame = (playToMs > 0)
+        ? (int)((double)playToMs / 1000.0 * s_fps + 0.5) : 0;
     s_active = TRUE;
     s_endEvent = FALSE;
     SeekTo(0);
@@ -490,15 +534,16 @@ BOOL plat_video_open_and_play(const char* path, int playTo)
     return TRUE;
 }
 
-void plat_video_play_from(int fromFrame)
+void plat_video_play_from(int fromMs)
 {
     if (s_fmt == NULL) return;
+    const int fromFrame = (int)((double)fromMs / 1000.0 * s_fps + 0.5);
     s_playToFrame = 0;
     s_endEvent = FALSE;
     s_active = TRUE;
     SeekTo(fromFrame);
-    fprintf(stderr, "[VIDEO] play_from(%d) -> index %d eof=%d\n",
-            fromFrame, s_frameIndex, (int)s_eof);
+    fprintf(stderr, "[VIDEO] play_from(%dms -> frame %d) index %d eof=%d\n",
+            fromMs, fromFrame, s_frameIndex, (int)s_eof);
     Present();
 }
 

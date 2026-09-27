@@ -307,6 +307,16 @@ void wsp_state0(void)
     WS_HITSTATE = 0;
     WS_ANIM_ID  = 0;
 
+    // DC behavior, this is the death spawn animation of the webspinner
+    // Wesker killed in the Guardhouse cutscene after you kill Plant42
+    const bool dcDeadSpawn = g_bDcMode && ENTITY->behavior_flags == 4;
+    if (dcDeadSpawn) {
+        ENTITY->behavior_flags = 0;
+        euw(ENTITY, 0x72) = 0;
+        euw(ENTITY, 0x76) = 0;
+        WS_HITSTATE = 0x11;
+    }
+
     // Spawn kind decides the resting altitude. 0/1 sit on the floor (Y = 0);
     // variant 2 hangs from the ceiling.
     if (ENTITY->behavior_flags < 2) {
@@ -328,7 +338,7 @@ void wsp_state0(void)
     }
 
     ResetJointTransforms();
-    eub(ENTITY, 0x84) = 1;             // state -> run
+    eub(ENTITY, 0x84) = dcDeadSpawn ? 3 : 1;
     Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400);
 
     g_svecScratch.z = 0;
@@ -342,6 +352,9 @@ void wsp_state0(void)
 
     rand();                            // discarded
     ENTITY->health = (short)(unsigned short)ws_health_table[rand() & 0xf];
+    if (dcDeadSpawn) {
+        ENTITY->health = -1;
+    }
 
     ENTITY->Sca_info = (unsigned int)(uintptr_t)ws_sca_info_big;
     ENTITY->status_flags = (unsigned char)(ENTITY->status_flags & 0x1F);

@@ -323,7 +323,13 @@ struct Entity {
     // within 256 units of the room origin.
     short          player_pos_x;        // 0x166 - waypoint X
     short          player_pos_z;        // 0x168 - waypoint Z
-    unsigned char  pad_16a[2];          // 0x16A-0x16B
+    unsigned char  pad_16a;             // 0x16A
+    // 0x16B - Director's Cut only. zombie_init sets it to 1 for the DC's new
+    // behaviour_flags nibbles 0xC/0xD/0xE and zombie_chase_walk reads it in
+    // three places, each time repeating the call above it (two Joint_move and
+    // two Add_speedXZ per frame) - which is the whole "fast zombie". Unused and
+    // always zero with DcMode=0. (docs/PSX_DC_ENEMY_AI.md)
+    unsigned char  dc_double_step;      // 0x16B
 
     // ---- Extended movement state (0x16C - 0x173) ----
     unsigned char  attacking_direction; // 0x16C

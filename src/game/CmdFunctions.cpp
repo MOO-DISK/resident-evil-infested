@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 #include "../DebugPrint.h"
+#include "dc/ArrangeStages.h"   // room_file_stage() - see cmd_state_word_set
 
 // Forward declarations for functions defined in other files
 extern unsigned int set_message_display(unsigned short msg_id, unsigned short pause_game);
@@ -674,10 +675,11 @@ int cmd_item_model_set(void)
             DAT_008e1c78 = g_TextureBankID;
             DAT_008e1c70 = g_TextureCurrentPage;
             ClearTmdProcessingFlag();
-            // Item types 'R' (0x52) and 'P' (0x50) get their 256-entry 5551 palette
-            // darkened: each 5-bit channel drops by 9, clamped at 0, bit 15 kept.
-            // This loop was missing entirely.
-            if ((char)g_ScdOpcodes[10] == 'R' || (char)g_ScdOpcodes[10] == 'P') {
+            // The two map items - guardhouse (0x52) and courtyard (0x50) - get
+            // their 256-entry 5551 palette darkened: each 5-bit channel drops by
+            // 9, clamped at 0, bit 15 kept. This loop was missing entirely.
+            if ((char)g_ScdOpcodes[10] == ITEM_MAP_GUARDHOUSE ||
+                (char)g_ScdOpcodes[10] == ITEM_MAP_COURTYARD) {
                 unsigned short* pal = (unsigned short*)(itemModelData[1] + 0x14);
                 for (int n = 0; n < 256; n++) {
                     unsigned short c = *pal;
@@ -697,7 +699,7 @@ int cmd_item_model_set(void)
             ProcessTmdTextures(2, (unsigned int*)(unsigned int)*itemModelData, DAT_008e1c78, DAT_008e1c70);
         }
         FUN_00473ea0(*itemModelData, modelPtr + 0xc, (ScaMatrixData*)(modelPtr + 0x1c));
-        if ((char)g_ScdOpcodes[10] == 0x1e) {
+        if ((char)g_ScdOpcodes[10] == ITEM_CRANK_HEX) {
             FUN_004870d0(*(int*)(modelPtr + 0x18));
         }
 
@@ -1075,7 +1077,7 @@ int cmd_omodel_set(void)
 
             // Mansion 2F (stages 2/7) room 11: fix transparent colors.
             // The original zeroes palette entry 0 before the scan; that was missing.
-            if ((g_stageId + 1) % 5 == 2 && g_roomId == ROOM_FRONT_LESSON_ROOM && (g_ScdOpcodes[1] & 0x3f) == 0) {
+            if ((get_stage_id() + 1) % 5 == 2 && g_roomId == ROOM_FRONT_LESSON_ROOM && (g_ScdOpcodes[1] & 0x3f) == 0) {
                 unsigned short* colorPtr = (unsigned short*)(modelData[1] + 0x14);
                 *colorPtr = 0;
                 for (int i = 0; i < 256; i++) {
@@ -1103,13 +1105,13 @@ int cmd_omodel_set(void)
     }
 
     // Stage-specific adjustments
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 1) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 1) {
         DAT_004d2be0 = 0x30;
     }
     if (g_stageId == STAGE_MANSION_1F && g_roomId == ROOM_TIGER_STATUE_ROOM && (g_ScdOpcodes[1] & 0x3f) == 1) {
         FUN_00473e40(*modelData);
     }
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 0) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_STUDY_2F && (g_ScdOpcodes[1] & 0x3f) == 0) {
         FUN_00484d90(modelData[1], DAT_008e1c7c, DAT_008e1c74);
         FUN_00484e40(*modelData, DAT_008e1c7c, DAT_008e1c74);
     }
@@ -1180,7 +1182,7 @@ setupObject:
         *(short*)(objPtr + 0x6e) = -5;
         *(int*)(objPtr + 0x38) = -5;
     }
-    if ((g_stageId + 1) % 5 == MANSION_2F && g_roomId == ROOM_FRONT_LESSON_ROOM) {
+    if ((get_stage_id() + 1) % 5 == MANSION_2F && g_roomId == ROOM_FRONT_LESSON_ROOM) {
         if ((g_ScdOpcodes[1] & 0x3f) == 0) {
             short adjZ = scd_read_s16(8) + 10;
             *(short*)(objPtr + 0x70) = adjZ;
@@ -1719,7 +1721,46 @@ int cmd_state_word_set(void)
     // Original: MOV word ptr [ECX + 0xbe9834],AX with ECX = (op1 >> 7) & ~1.
     // That is a BYTE offset ((op1 >> 8) * 2), not an element index - indexing a
     // short* with it doubled the offset and wrote into the wrong field.
-    *(unsigned short*)((char*)&g_fading_state + (((unsigned int)op1 >> 7) & 0xFFFFFFFEu)) = value;
+    //
+    // The index space is confirmed against the PS1 build, which does the same
+    // thing as an element index into a ushort array: cmd_state_word_set
+    // (SLUS_001.70 0x8004553c) is `(&g_fadeOutCounter)[op1 >> 8] = value`, and
+    // the three globals sit at 0x800c8674 / 0x800c8676 / 0x800c8678 - i.e.
+    // index 1 is specialRoomLightState and index 2 is specialRoomLightDelta,
+    // exactly as here.
+    const unsigned int byteOffset = ((unsigned int)op1 >> 7) & 0xFFFFFFFEu;
+
+    // PORT-ONLY, Director's Cut. The arrange wardrobe's outfit-change script
+    // (Stage8/ROOM81C0 event 1) ramps the special-room-light overlay to full
+    // black over 15 frames, freezes it with `state_word_set index 2 = 0`
+    // (delta), and then one frame later writes `index 1 = 0` (state) - which
+    // drops the overlay and un-blanks the screen.
+    //
+    // That is correct on a PlayStation: the console is blocked on the CD for
+    // the whole "Just a moment please." interlude (~300 frames of clothing
+    // SFX), so it keeps showing the black frame it last presented and the
+    // write is just post-load bookkeeping. This port loads instantly and keeps
+    // rendering, so the room came back with its 20 masks under the message -
+    // the grey screen with overlays showing through.
+    //
+    // Nothing in either original suppresses that render, so hold the blank
+    // instead: ignore the write that would clear a fade the script has already
+    // driven to full and frozen. The overlay then keeps painting opaque black
+    // until room re-init (RoomInit.cpp sets specialRoomLightState = 0xffff),
+    // which is exactly where the sequence ends (`room_action [00 01 81]`).
+    //
+    // Scoped so nothing else can reach it: DC mode only, arrange rooms only
+    // (so the stage-3 ROOM4110 flashing emergency light, the other script that
+    // writes these two fields, is untouched), and only when the fade really is
+    // parked at full black with its delta already zeroed.
+    if (byteOffset == 2 && value == 0 && g_bDcMode &&
+        room_file_stage() >= STAGE_ARRANGE_FIRST &&
+        g_SpecialRoomLightDelta == 0 &&
+        (short)g_SpecialRoomLightState >= 0x7F00) {
+        return 1;
+    }
+
+    *(unsigned short*)((char*)&g_fading_state + byteOffset) = value;
     return 1;
 }
 
@@ -2829,10 +2870,10 @@ void scd_model_tint_apply(short p1, short p2, short p3, unsigned short p4, unsig
 
     if (e[3] == e[4] && e[3] == e[5]) {
         int obj = (int)g_omodel_table[(unsigned char)p6 & 0x7F];
-        TmdObjectSetLightScale(*(void**)(obj + 0x18), (int)(char)e[3]);
+        TmdObjectSetLightScale(*(void**)((unsigned char*)obj + 0x18), (int)(char)e[3]);
     } else {
         int obj = (int)g_omodel_table[(unsigned char)p6 & 0x3F];
-        TmdObjectTintAdd(*(void**)(obj + 0x18), (int)p1, (int)p2, (int)p3);
+        TmdObjectTintAdd(*(void**)((unsigned char*)obj + 0x18), (int)p1, (int)p2, (int)p3);
     }
 }
 

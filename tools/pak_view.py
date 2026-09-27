@@ -65,14 +65,19 @@ class PakDecoder:
                 if code == 0x101:
                     self.code_size += 1
                     continue
-                # KwKwK case: decode previous string + its first char
+                # KwKwK case: the code is not in the table yet, so the string
+                # is the PREVIOUS one with its own first character appended.
+                #
+                # Fixed 2026-09-14: this used to prepend that character and take
+                # `first` from the result, i.e. it produced prevFirst + S(prev)
+                # where unpack_pakfile_ produces S(prev) + prevFirst. The
+                # original writes the appended char into stringBuf[0] and then
+                # emits the buffer from charCount DOWN to 0, so index 0 comes out
+                # LAST (FileLoader.cpp, 0x00425b20-0x00425b64). Any pak whose
+                # encoder used the KwKwK case decoded wrong here - which is how
+                # it was found, round-tripping tools/bss_to_pak.py output.
                 special = self.next_code <= code
-                if special:
-                    string = [prev_first]
-                    lookup = prev_code
-                else:
-                    string = []
-                    lookup = code
+                lookup = prev_code if special else code
                 # decode_string (0x00425bc0): walk prefix chain (reversed)
                 chars = []
                 c = lookup
@@ -81,8 +86,10 @@ class PakDecoder:
                     chars.append(ch)
                     c = prefix
                 chars.append(c)
-                string.extend(reversed(chars))
-                first = string[0]
+                string = list(reversed(chars))
+                first = string[0]          # first char of S(lookup), both cases
+                if special:
+                    string.append(first)
                 prev_first = first
                 self.out.extend(string)
                 self.dict[self.next_code] = (prev_code, first)

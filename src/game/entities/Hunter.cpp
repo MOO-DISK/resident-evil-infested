@@ -445,7 +445,7 @@ static void hunter_state_init(void) // 0x00416020
     if ((ENTITY->behavior_flags & 0x20) != 0) {
         ENTITY->Sca_info = (unsigned int)(uintptr_t)hunter_sca_info_b;
     }
-    if (g_stageId > 4) {
+    if (get_stage_id() > 4) {
         ENTITY->Sca_info = (unsigned int)(uintptr_t)hunter_sca_info_b;
     }
 

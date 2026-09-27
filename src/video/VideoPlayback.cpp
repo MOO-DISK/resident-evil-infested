@@ -6,6 +6,8 @@
 // skip grace period and the prologue scenario cut.
 
 #include "../Globals.h"
+#include "../game/Ps1EndingCredits.h"
+#include "../game/Ps1FmvSubtitles.h"
 #include "../platform/platform.h"
 #include "../system/AssetPath.h"
 #include "../marni/MarniSystem.h"
@@ -100,6 +102,10 @@ static const int g_FMVTableCount = sizeof(g_FMVTableUSA) / sizeof(g_FMVTableUSA[
 static_assert(sizeof(g_FMVTableJPN) == sizeof(g_FMVTableUSA),
               "USA and JPN FMV tables must have the same layout/ID count");
 
+// Bits 0..11 of the PSX button word - the full set of accept/skip buttons every
+// skippable entry in the table above carries.
+#define FMV_SKIP_ALL_BUTTONS 0x0fff
+
 // Active table for the configured version (config.ini [Assets] Version).
 static const FMVEntry* GetFmvTable(void)
 {
@@ -107,20 +113,49 @@ static const FMVEntry* GetFmvTable(void)
 }
 
 // ============================================================================
-// FMV 1 (PU.avi / PJ.avi) scenario cut
-// The prologue movie is authored for the Chris scenario: frames 1778..1884
-// (2:57.8 - 3:08.4 at the movie's 10 fps) are a Chris-only dialogue beat. When
-// Jill was selected, the original plays the movie in two chunks and drops that
-// range - see UpdateVideoPlayback @0x00474e00, which calls
-// video_mci_window_helper(0, 0x6f2) in state 1 and video_mci_window_helper(
-// 0x75d, 0) on the first MCI_NOTIFY, gated on
-// (g_CurrentFMVID == 1 && g_FmvCharacterId != 0 && g_videoFlagA4 != 0).
-// Both AVIs are 10 fps (USA 2259 frames, JPN 2261) and the MCIAVI default time
-// format is frames, so the two constants are raw frame numbers in both regions.
+// GetFmvSkipMask - the button mask that skips an FMV. Port-added override:
+// [Game] SkipUnskippableFmv=1 hands every movie the full button mask, so the
+// ones the original left unskippable (mask 0x0000) can be skipped too. The
+// per-entry masks are what ship.
 // ============================================================================
-#define FMV_PROLOGUE_ID          1
-#define FMV_PROLOGUE_CUT_START   0x6f2   // 1778 - last frame before the Chris beat
-#define FMV_PROLOGUE_CUT_END     0x75d   // 1885 - first frame after the Chris beat
+static WORD GetFmvSkipMask(int fmvId)
+{
+    if (g_bSkipUnskippableFmv) {
+        return (WORD)FMV_SKIP_ALL_BUTTONS;
+    }
+    if (fmvId < 0 || fmvId >= g_FMVTableCount) {
+        return 0;
+    }
+    return (WORD)GetFmvTable()[fmvId].isSkippable;
+}
+
+// ============================================================================
+// FMV 1 (PU.avi / PJ.avi) scenario cut; UpdateVideoPlayback @0x00474e00 uses
+// millisecond cut points so the PC and DC streams select their native frames.
+// ============================================================================
+#define FMV_PROLOGUE_ID                 1
+#define FMV_PROLOGUE_CUT_START_USAGE_MS 177800
+#define FMV_PROLOGUE_CUT_END_USAGE_MS   188500
+#define FMV_PROLOGUE_CUT_START_DC_FRAME 2430 // SLUS_001.70 PlayFMV @0x80037020: 0x97e
+#define FMV_PROLOGUE_CUT_END_DC_FRAME   2591 // SLUS_001.70 PlayFMV @0x80037020: 0xa1f
+#define FMV_PROLOGUE_DC_FPS             15
+
+static int DcFrameToMs(int frame)
+{
+    return (frame * 1000 + FMV_PROLOGUE_DC_FPS / 2) / FMV_PROLOGUE_DC_FPS;
+}
+
+static int GetPrologueCutStartMs(void)
+{
+    return g_bDcMode ? DcFrameToMs(FMV_PROLOGUE_CUT_START_DC_FRAME)
+                     : FMV_PROLOGUE_CUT_START_USAGE_MS;
+}
+
+static int GetPrologueCutEndMs(void)
+{
+    return g_bDcMode ? DcFrameToMs(FMV_PROLOGUE_CUT_END_DC_FRAME)
+                     : FMV_PROLOGUE_CUT_END_USAGE_MS;
+}
 
 // ============================================================================
 // Global video playback state (file-scope, persistent across UpdateVideoPlayback calls)
@@ -130,6 +165,17 @@ static DWORD g_videoFlagA4 = 0;
 static WORD  g_videoSkipInput = 0;
 static int   g_videoSkipCounter = 0;
 static char  g_videoFilePath[MAX_PATH] = {};
+static BOOL  s_overlayCallbackRegistered = FALSE;
+
+static BOOL Ps1VideoOverlayCallback(DWORD32 frameTexture, int frameMs)
+{
+    // Whoever claims the frame draws the movie too, so the chain is ordered:
+    // the credits overlay owns the whole picture when it is running.
+    if (Ps1EndingCredits_RenderFrame((MarniHandle)frameTexture, frameMs)) {
+        return TRUE;
+    }
+    return Ps1FmvSubtitles_RenderFrame((MarniHandle)frameTexture, frameMs);
+}
 
 // ============================================================================
 // ResolveVideoPath - Normalize the FMV path's data root to the selected version.
@@ -151,25 +197,84 @@ static const char* ResolveVideoPath(const char* originalPath, char* outPath, siz
 // The path is normalised through the platform layer (separators + case) so the
 // backend can open exactly what was probed here.
 // ============================================================================
+static BOOL FileReadable(const char* path)
+{
+    FILE* f = fopen(path, "rb");
+    if (f == NULL) return FALSE;
+    fclose(f);
+    return TRUE;
+}
+
+// Resolve a path through the asset root and the platform's case resolution.
+// `out` receives the usable path; returns FALSE when normalization fails.
+static BOOL NormalizeVideoPath(const char* filename, char* out, size_t size)
+{
+    char resolvedPath[MAX_PATH];
+    const char* filePath = ResolveVideoPath(filename, resolvedPath, sizeof(resolvedPath));
+    if (filePath == NULL) filePath = filename;
+    plat_normalize_path(filePath, out, size);
+    return out[0] != '\0';
+}
+
+// Prefer a modern container over the legacy Cinepak AVI when one sits beside
+// it. The FMV table still names the .avi, so the modern file is the same
+// rooted path with the extension swapped; resolve it through the active
+// asset overlay before falling back to the base tree.
+static BOOL PreferModernSibling(const char* aviPath, char* out, size_t size)
+{
+    const char* dot = strrchr(aviPath, '.');
+    if (dot == NULL || _stricmp(dot, ".avi") != 0) return FALSE;
+
+    char candidate[MAX_PATH];
+    const size_t prefix = (size_t)(dot - aviPath);
+    if (prefix + 5 > MAX_PATH) return FALSE;
+    memcpy(candidate, aviPath, prefix);
+    strcpy_s(candidate + prefix, sizeof(candidate) - prefix, ".mp4");
+
+    char resolved[MAX_PATH];
+    const char* candidatePath = ResolveVideoPath(candidate, resolved, sizeof(resolved));
+    if (candidatePath == NULL) candidatePath = candidate;
+
+    char normalized[MAX_PATH];
+    plat_normalize_path(candidatePath, normalized, sizeof(normalized));
+    if (!FileReadable(normalized)) return FALSE;
+
+    strcpy_s(out, size, normalized);
+    return TRUE;
+}
+
 BOOL CheckVideoFileExists(const char* filename)
 {
     if (filename == NULL) return FALSE;
 
-    char resolvedPath[MAX_PATH];
-    const char* filePath = ResolveVideoPath(filename, resolvedPath, sizeof(resolvedPath));
-    if (filePath == NULL) filePath = filename;
+    char creditsPath[MAX_PATH];
+    if (Ps1EndingCredits_ResolveVideoPath(g_CurrentFMVID, creditsPath,
+                                          sizeof(creditsPath)) &&
+        FileReadable(creditsPath)) {
+        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), creditsPath);
+        Ps1EndingCredits_SetVideoPath(g_videoFilePath);
+        return TRUE;
+    }
+
+    char modern[MAX_PATH];
+    if (PreferModernSibling(filename, modern, sizeof(modern))) {
+        strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), modern);
+        Ps1EndingCredits_SetVideoPath(g_videoFilePath);
+        return TRUE;
+    }
 
     char normalized[MAX_PATH];
-    filePath = plat_normalize_path(filePath, normalized, sizeof(normalized));
-
-    FILE* f = fopen(filePath, "rb");
-    if (f == NULL) {
-        dbg_printf("[VIDEO] Could not open file: %s\n", filePath);
+    if (!NormalizeVideoPath(filename, normalized, sizeof(normalized))) {
         return FALSE;
     }
-    fclose(f);
 
-    strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), filePath);
+    if (!FileReadable(normalized)) {
+        dbg_printf("[VIDEO] Could not open file: %s\n", normalized);
+        return FALSE;
+    }
+
+    strcpy_s(g_videoFilePath, sizeof(g_videoFilePath), normalized);
+    Ps1EndingCredits_SetVideoPath(g_videoFilePath);
     return TRUE;
 }
 
@@ -188,6 +293,10 @@ static BOOL UsesScenarioCut(void)
 // ============================================================================
 void UpdateVideoPlayback(void)
 {
+    if (!s_overlayCallbackRegistered) {
+        plat_video_set_overlay_callback(Ps1VideoOverlayCallback);
+        s_overlayCallbackRegistered = TRUE;
+    }
     if (g_bIsSoftwareRendering) {
         g_bMCINotifyEnabled = FALSE;
         return;
@@ -220,6 +329,8 @@ void UpdateVideoPlayback(void)
 
                 if (!plat_video_init()) {
                     dbg_safe_str("[VIDEO] Failed to init video system, skipping FMV\n");
+                    Ps1EndingCredits_End();
+                    Ps1FmvSubtitles_End();
                     g_bMCINotifyEnabled = FALSE;
                     plat_video_close();
                     setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -227,9 +338,15 @@ void UpdateVideoPlayback(void)
                     return;
                 }
 
+                // JPN prologue subtitle track, if the config asked for it and
+                // the JPN assets are present.
+                Ps1FmvSubtitles_Begin(g_CurrentFMVID);
+
                 g_FMVPlaybackState = 1;
             } else {
                 // No video file - skip FMV
+                Ps1EndingCredits_End();
+                Ps1FmvSubtitles_End();
                 g_bMCINotifyEnabled = FALSE;
                 plat_video_close();
                 setMenuScreenOffset(320, 240, 0, 0, 0);
@@ -241,16 +358,16 @@ void UpdateVideoPlayback(void)
     case 1: // Open and start playing
         {
             // Jill: stop the first chunk right before the Chris-only dialogue.
-            int playTo = UsesScenarioCut() ? FMV_PROLOGUE_CUT_START : 0;
+            int playTo = UsesScenarioCut() ? GetPrologueCutStartMs() : 0;
 
+            Ps1EndingCredits_StartVideo();
             if (!plat_video_open_and_play(g_videoFilePath, playTo)) {
                 g_FMVPlaybackState = 3;
                 break;
             }
 
             g_FMVPlaybackState = 2;
-
-            plat_video_tick();   // present the first frame before polling input
+            plat_video_tick();
 
             InputUpdate();
             g_videoSkipInput = (WORD)PlayerPad_Update();
@@ -270,7 +387,7 @@ void UpdateVideoPlayback(void)
             WORD currentInput = (WORD)PlayerPad_Update();
 
             // Check for skip input (per-FMV skip mask from g_FMVTable[i].isSkippable)
-            WORD skipMask = (WORD)GetFmvTable()[g_CurrentFMVID].isSkippable;
+            WORD skipMask = GetFmvSkipMask(g_CurrentFMVID);
             if (((skipMask & ~g_videoSkipInput & currentInput) != 0) && (g_videoSkipCounter == 0)) {
                 // Skip requested - stop playback
                 plat_video_stop();
@@ -278,13 +395,19 @@ void UpdateVideoPlayback(void)
 
             g_videoSkipInput = currentInput;
 
+            // The staff roll leaves its loop on its own counter (0x1c20),
+            // a moment before the STR runs out.
+            if (Ps1EndingCredits_IsFinished()) {
+                plat_video_stop();
+            }
+
             // Segment/film-end notification from the backend
             if (plat_video_take_end_event()) {
                 if (UsesScenarioCut() && g_videoFlagA4 != 0) {
                     // The first chunk ended at the cut point: jump past the
                     // Chris-only beat and play the remainder. g_videoFlagA4 is
                     // cleared below, so the next notification ends the FMV.
-                    plat_video_play_from(FMV_PROLOGUE_CUT_END);
+                    plat_video_play_from(GetPrologueCutEndMs());
                 } else {
                     plat_video_stop();
                 }
@@ -307,6 +430,8 @@ void UpdateVideoPlayback(void)
     case 3: // Cleanup
         {
             plat_video_close();
+            Ps1EndingCredits_End();
+            Ps1FmvSubtitles_End();
             ResumeGameSoundsAsync();
 
             g_FMVPlaybackState = 0;

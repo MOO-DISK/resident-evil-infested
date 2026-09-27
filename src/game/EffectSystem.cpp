@@ -23,6 +23,7 @@
 #include "SpriteRenderer.h"
 #include "Entities.h"
 #include "BioCard.h"
+#include "dc/ArrangeStages.h"   // room_effect_page_entry()
 #include "../DebugPrint.h"
 #include <cstring>
 #include <cstdlib>
@@ -517,9 +518,16 @@ static const int g_EffectLightRecords[7][3] = {
 // ============================================================================
 static unsigned int effect_depth_record(void)
 {
-    int idx = ((int)g_stageId * 0x20 + (int)g_roomId) * 4
-            + (int)g_TextureDesc.texturePage - 0x18;
+    int base = ((int)get_stage_id() * 0x20 + (int)g_roomId) * 4;
+    int slot = (int)g_TextureDesc.texturePage - 0x18;
+    int idx  = base + slot;
     if (idx < 0 || idx >= (int)sizeof(g_RoomEffectSpriteTable)) return 0xFF;
+    // The room's own four pages come through the arrange-aware row
+    // (dc/ArrangeStages.cpp): an arrange room has no row of its own in the PC
+    // table, and where ADVANCED adds an effect its base row still says 0xFF -
+    // which drops the effect entirely, below. texY past 0x1B keeps the
+    // original's read into the next room's bytes.
+    if (slot >= 0 && slot < 4) return room_effect_page_entry()[slot];
     return g_RoomEffectSpriteTable[idx];
 }
 
@@ -2619,8 +2627,8 @@ static void effect_submit_sprite(Effect* eff, short screenX, short screenY,
     static const unsigned char kRoomArtNoTint[3] = { 0xff, 0xff, 0xff };
     if (roomArt) color = kRoomArtNoTint;
 
-    unsigned int stage = (unsigned int)g_stageId;
-    if (g_stageId > 4) stage -= 5;
+    unsigned int stage = get_stage_id();
+    if (stage > 4) stage -= 5;
     unsigned int iCam = ((unsigned int)g_roomId + stage * 0x20) * 8 + (unsigned int)g_roomCameraId;
     if (iCam >= sizeof(g_EffectCameraLightIndex)) return;   // port-only guard
     unsigned int lightRec = g_EffectCameraLightIndex[iCam];
@@ -3014,9 +3022,9 @@ void Matrix_MulMatrix(MATRIX* m0, MATRIX* m1)
 // ============================================================================
 void FUN_0047d0e0(void)
 {
+    const unsigned char* row = room_effect_page_entry();
     for (int i = 0; i < 4; i++) {
-        if (g_RoomEffectSpriteTable[((unsigned int)g_stageId * 0x20
-                                     + (unsigned int)g_roomId) * 4 + i] != 0xFF) {
+        if (row[i] != 0xFF) {
             TexturePage_Create(i);
         }
     }

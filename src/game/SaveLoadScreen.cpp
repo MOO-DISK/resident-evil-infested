@@ -12,6 +12,7 @@
 #include "SpriteRenderer.h"
 #include "SFXIds.h"
 #include "PrintText.h"
+#include "dc/Items.h"    // lockpick item id (is_lockpick_item)
 #include <cstdio>
 #include <cstring>
 #include "../system/AssetPath.h"
@@ -33,6 +34,9 @@ typedef struct SaveSlotInfo
     uint32_t stageId;       // +0x08  file[0x200]  (g_BioCard.stageId)
     uint32_t roomId;        // +0x0C  file[0x201]  (g_BioCard.roomId)
     uint32_t hasData;       // +0x10  file exists flag
+    // Director's Cut only: file[0x233], the mode the save was made in
+    // (g_BioCard.dcGameMode). The DC colour-codes each slot row by it.
+    uint32_t dcGameMode;
 } SaveSlotInfo;
 
 typedef enum {
@@ -60,6 +64,7 @@ typedef enum {
 #define OFFSET_ROOM_ID       0x201
 #define OFFSET_SAVES_COUNT   0x228
 #define OFFSET_CHARACTER_ID  0x22B
+#define OFFSET_DC_MODE       0x233   // Director's Cut mode byte (g_DcGameMode)
 #define OFFSET_PAD_REMAP     0x41C   // 32 bytes  (g_padRemapSubTable3)
 #define OFFSET_CONTROLLER_CFG 0x43C  // 1 byte   (g_controllerConfig)
 #define OFFSET_KEY_BINDINGS  0x800   // 32 bytes  (g_keyBindingData)
@@ -477,6 +482,55 @@ void EnsureDirectoryExists(const char* path)
 }
 
 // ============================================================================
+// DcSaveRowColour (port-only)
+// The Director's Cut colour-codes each save slot by the mode it was made in
+// (PS1 0x800191b4 passes the slot record's +0xA33 byte - the port's
+// g_BioCard.dcGameMode - as the colour argument of the row's text print).
+//
+// The two builds pack that colour differently. The PS1 font CLUT is 17 palettes
+// wide by 3 rows at VRAM (0x100, 0x1E0), and the print maps the byte to
+// `clutX = 0x100 + (colour & 3) * 0x10, clutY = 0x1E0 + (colour >> 2)`, so the
+// mode picks a palette COLUMN: 0 = the ordinary cream, 1 = green, 2 = red,
+// 3 = a dimmer grey. The port's PrintFormattedText keeps clutX at 0x100 (this
+// build's TextureDesc.clutX is write-only) and selects on the low nibble as a
+// palette ROW instead. So DC mode ships those same four palettes as four CLUT
+// rows in its own `Data/fontus.tim` (tools/port_dc_assets.py, step `font`; the
+// PC font's 16 colours are byte-identical to the PS1 CLUT's column 0, so
+// row 0 is the file the port already had) and the mode byte is the row index.
+//
+// ADVANCED* is drawn at the ADVANCED colour plus the extra pass the caller
+// makes at 0x11 - brightness 1 in the TRAINING row.
+// ============================================================================
+static unsigned char DcSaveRowColour(unsigned int dcGameMode)
+{
+    if (!g_bDcMode) {
+        return 0;                       // the USA build's only colour
+    }
+    unsigned char mode = (unsigned char)(dcGameMode & 3);
+    if (mode == DC_DIFFICULTY_ADVANCED_HOLD) {
+        mode = DC_DIFFICULTY_ADVANCED;
+    }
+    return mode;
+}
+
+// ============================================================================
+// SaveSlotLoadBlocked (port-only)
+// In OG mode a slot written by a Director's Cut TRAINING / ADVANCED / ADVANCED*
+// game cannot be loaded: those modes bring rules the OG game does not have
+// (double pick-ups, the arranged damage/health tables). The row is drawn grey
+// and the load is refused, but the slot can still be chosen in the SAVE menu
+// and overwritten - only the load side is gated. An OG save and a DC STANDARD
+// save both carry mode 0, so they keep loading. DC mode loads everything.
+// ============================================================================
+static int SaveSlotLoadBlocked(const SaveSlotInfo* slot)
+{
+    if (g_bDcMode || !slot->hasData) {
+        return 0;
+    }
+    return (slot->dcGameMode & 3) != DC_DIFFICULTY_STANDARD;
+}
+
+// ============================================================================
 // GetSaveLocationIndex (0x00494000)
 // Maps stageId/roomId to a location name table index (0-6).
 // ============================================================================
@@ -553,7 +607,7 @@ void use_room_action_item(void)
     g_usedItemId = g_selectedItemId;
 
     // Lockpick doesn't consume
-    if (g_selectedItemId == ITEM_LOCK_PICK) return;
+    if (is_lockpick_item(g_selectedItemId)) return;
 
     // Find the item in inventory
     unsigned char index = 0;
@@ -808,6 +862,7 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
                     save_slots[slotIndex].savesCount    = saveBuffer[OFFSET_SAVES_COUNT];
                     save_slots[slotIndex].stageId       = saveBuffer[OFFSET_STAGE_ID];
                     save_slots[slotIndex].roomId        = saveBuffer[OFFSET_ROOM_ID];
+                    save_slots[slotIndex].dcGameMode    = (unsigned char)saveBuffer[OFFSET_DC_MODE];
 
                     fclose(fp);
                 }
@@ -873,6 +928,13 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
                     Task_sleep(4);
                     Task_chain((void*)title_state);
                 } else {
+                    // Port-only: a DC TRAINING/ADVANCED slot is greyed and
+                    // cannot be loaded in OG mode. Saving over it is still
+                    // allowed, so only the load path (mode 1) is refused.
+                    if (mode == 1 && SaveSlotLoadBlocked(&save_slots[selected_slot])) {
+                        play_sfx(sfxBank, 29);
+                        break;
+                    }
                     // Non-exit slot selected → go to mode-specific state
                     // (original: state = mode + 3 → 3 = save, 4 = load)
                     play_sfx(sfxBank, 31);
@@ -953,6 +1015,11 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
         // ================================================================
         case STATE_LOAD_SLOT_SELECTED:
         {
+            // Belt and braces: refused here too in case the slot list changed.
+            if (SaveSlotLoadBlocked(&save_slots[selected_slot])) {
+                state = STATE_IDLE;
+                break;
+            }
             if (save_slots[selected_slot].hasData) {
                 sprintf(g_saveFileName, "%ssavedat%d.dat", GetSaveRoot(), selected_slot + 1);
                 EnsureDirectoryExists(GetSaveRoot());
@@ -1138,7 +1205,9 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
                 return;
             }
 
-            PrintFormattedText(55, (short)(16 * selected_slot + 45), 0, (unsigned char*)animBuf);
+            PrintFormattedText(55, (short)(16 * selected_slot + 45),
+                               DcSaveRowColour((unsigned int)g_DcGameMode),
+                               (unsigned char*)animBuf);
 
             // "Typewriter" tick — plays for every revealed non-space char
             // (the char two back from the copy end; spaces are 0x00).
@@ -1153,7 +1222,9 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
         // ================================================================
         case STATE_SAVE_ANIM_STEP2:
         {
-            PrintFormattedText(55, (short)(16 * selected_slot + 45), 0, (unsigned char*)animBuf);
+            PrintFormattedText(55, (short)(16 * selected_slot + 45),
+                               DcSaveRowColour((unsigned int)g_DcGameMode),
+                               (unsigned char*)animBuf);
 
             // Original tests the old value, then decrements; on old<=0 → step 1
             if (anim_timer <= 0) {
@@ -1195,23 +1266,41 @@ void LoadSaveGameState(int mode, int flags, int useInkRibbon, int sfxBank, int c
             const SaveSlotInfo* slot = &save_slots[i];
 
             if (slot->hasData) {
+                // The row's colour is the mode the save was made in (DC only;
+                // 0 everywhere else, which is what the USA build always draws).
+                unsigned char rowColour = DcSaveRowColour(slot->dcGameMode);
+                const int loadBlocked = SaveSlotLoadBlocked(slot);
+                if (loadBlocked) {
+                    // Grey tint (AddTintSprite maps clutY 0x1E3 to 204,204,204).
+                    rowColour = 3;
+                }
+                unsigned char charIdx = (unsigned char)(save_slots[i].characterId & 3);
+
+                // ADVANCED* draws the name once more first, in the TRAINING
+                // palette at brightness 1 (PS1 0x800191b4 truncates its row
+                // buffer after the five name cells and prints it at colour
+                // 0x11, then prints the whole row at colour 2). Skipped for a
+                // greyed blocked row.
+                if (!loadBlocked && rowColour != 0 && (slot->dcGameMode & 3) == DC_DIFFICULTY_ADVANCED_HOLD) {
+                    PrintFormattedText(55, (short)y, 0x11, L.charNames[charIdx]);
+                }
+
                 // Filled slot: draw the separator template, then overlay the
                 // character name on it
-                PrintFormattedText(55, (short)y, 0, L.filledSlot);
+                PrintFormattedText(55, (short)y, rowColour, L.filledSlot);
 
                 // Character name overlay at same X=55 (from PTR_DAT_004d4118 /
                 // the JPN 0x004b1020)
-                unsigned char charIdx = (unsigned char)(save_slots[i].characterId & 3);
-                PrintFormattedText(55, (short)y, 0, L.charNames[charIdx]);
+                PrintFormattedText(55, (short)y, rowColour, L.charNames[charIdx]);
 
                 // Save count (sprintf + PrintText8x14 from assembly)
                 int saveNum = save_slots[i].savesCount % 100;
                 sprintf(PRINT_TEXT_BUFFER, "%02d", saveNum);
-                PrintText8x14(L.countX, (short)y, 0, 0);
+                PrintText8x14(L.countX, (short)y, rowColour, 0);
 
                 // Location name (from PTR_DAT_004d42b8 / the JPN 0x004b1110)
                 int locIdx = GetSaveLocationIndex(save_slots[i].stageId, save_slots[i].roomId);
-                PrintFormattedText(L.locX, (short)y, 0, L.locNames[locIdx]);
+                PrintFormattedText(L.locX, (short)y, rowColour, L.locNames[locIdx]);
             } else {
                 // Empty slot: full dash template
                 PrintFormattedText(55, (short)y, 0, L.emptySlot);

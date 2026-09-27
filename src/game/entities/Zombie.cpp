@@ -56,11 +56,20 @@ static void zombie_attack_headless_death(void);
 // ScaInfo layout matches CharacterNpc.cpp's CharScaInfo: field_04 is the hit-box
 // extent and +0x0A is the collision radius that check_room_collision reads.
 // Standard zombie r=422, naked zombie r=322.
-static const short zombie_sca_info[2][8] = {
-    // 0x004bb260
+//
+// The third record is Director's Cut only: the DC's pointer table has three
+// entries (PS1 0x80121244 -> 0x80121220 / 0x8012122c / 0x80121238, 12 bytes
+// each) where the OG's and the PC's have two, and zombie_init hands it to a
+// behaviour-11 zombie. Its collision radius is 1000 against the standard
+// zombie's 422, and +0x02 is 1000 instead of 0. Nothing selects it with
+// Mode=OG. (docs/PSX_DC_ENEMY_AI.md)
+static const short zombie_sca_info[3][8] = {
+    // 0x004bb260 / PS1 0x80121220
     { (short)0x8001, 0x0000, (short)0xfa06, 0x0000, 0x05fa, 0x01a6, 0x0000, 0x0000 },
-    // 0x004bb270
+    // 0x004bb270 / PS1 0x8012122c
     { (short)0x8001, 0x0000, (short)0xfa06, 0x0000, 0x05fa, 0x0142, 0x0000, 0x0000 },
+    // PS1 DC 0x80121238 - no PC counterpart
+    { (short)0x8001, 0x03e8, (short)0xfa06, 0x0000, 0x05fa, 0x03e8, 0x0000, 0x0000 },
 };
 
 // g_pZombieScaInfo @ 0x004bb280 - indexed by entity->id (0 standard, 1 naked).
@@ -68,9 +77,10 @@ static const short zombie_sca_info[2][8] = {
 // address of THIS table instead of the record it points at, so
 // check_room_collision read Sca_info+10 out of the health table and got a
 // collision radius of 15183 instead of 422.
-const short* const g_pZombieScaInfo[2] = {
+const short* const g_pZombieScaInfo[3] = {
     zombie_sca_info[0],
     zombie_sca_info[1],
+    zombie_sca_info[2],   // DC only - behaviour 11
 };
 
 // 0x004bb288 (g_pZombieScaInfo + 8) - health base, index = random & 0xF.
@@ -85,6 +95,15 @@ const unsigned char zombie_health_tbl[16] = {
 const unsigned char zombie_anim_id_tbl[16] = {
     0, 0, 9, 9, 0, 12, 9, 29,
     0, 0, 9, 0, 0, 0, 0, 0
+};
+
+// The Director's Cut's copy (PS1 0x80121260) differs in exactly one byte:
+// index 11 is 29, the animation its new behaviour-11 handler plays. Indices
+// 12-15 are past the DC's table (its stagger table starts at 0x8012126c) and
+// are carried over from the port's, which never reaches them either.
+static const unsigned char zombie_anim_id_tbl_dc[16] = {
+    0, 0, 9, 9, 0, 12, 9, 29,
+    0, 0, 9, 29, 0, 0, 0, 0
 };
 
 // 0x004bb2a8 (g_pZombieScaInfo + 0x28) - stagger_timer (0x188) poise budget,
@@ -108,6 +127,15 @@ const unsigned char zombie_stagger_tbl[32] = {
 //
 // Entries [22] onward are the bytes of zombie_damage_action_tbl, so the array
 // stops at 22.
+//
+// Length and base verified against both PS1 builds (docs/PSX_DC_ENEMY_AI.md):
+// the OG STAGE1 overlay's table is 20 entries with its behaviour view at
+// states+9, and this one is that table with a NULL inserted at index 9 and
+// another appended at index 21 - which is why the PC's behaviour base is
+// states+10 while the PS1's is states+9, and why behaviour k is the same
+// handler in both. The Director's Cut adds one entry, and it lands on
+// behaviour 11 = [21], the trailing NULL below; dc_apply_zombie_tables()
+// fills it in DC mode.
 // ---------------------------------------------------------------------------
 void* zombie_states_table[22] = {
     (void*)zombie_init,            // [0]  init
@@ -133,13 +161,14 @@ void* zombie_states_table[22] = {
     (void*)zombie_chase_player,    // [18] = behavior[8]
     NULL,                          // [19] = behavior[9]
     (void*)zombie_pushed_back,     // [20] = behavior[10]
-    NULL                           // [21] = behavior[11]
+    NULL                           // [21] = behavior[11] - DC: dc_standup_lunge
 };
 
 // zombie_behavior_tbl @ 0x004bb2f0 - the second view of the block above.
 // Only 0-11 are pointers; 12-15 would read into zombie_damage_action_tbl's
 // bytes. The original does not bounds-check, so behavior_flags & 0xF is never
-// 12-15 in shipped data.
+// 12-15 in shipped data - and in DC mode zombie_init masks the DC's new
+// 0xC/0xD/0xE nibbles down to 0 or 1 before anything dispatches on them.
 void** const zombie_behavior_tbl = &zombie_states_table[10];
 
 // ============================================================================
@@ -185,14 +214,38 @@ void zombie_update(void)
 
         // 0x00433948-0x0043394f: Skip collision if in attack state (5)
         if (ENTITY->state != ZOMBIE_STATE_ATTACK) {
-            // 0x00433955: Set up SCA hit data for collision
-            SetEntityScaHitData(ENTITY);
+            // Director's Cut: behaviour 11 skips the three entity-collision
+            // calls below outright. DC STAGE1 0x8010615c is
+            // `lbu 2($v0)` / `andi 0xf` / `beq 0xb` / branch to the
+            // collisionFlags clear at 0x801061c0 - the DC edits the call site,
+            // it does not touch status_flags. The OG overlay has no such test:
+            // its state!=5 branch (0x80106014) falls straight into them from
+            // 0x8010601c.
+            //
+            // This is what keeps the Forest zombie's body from being shoved
+            // around while it lies on the 2F balcony. Its spawn (zombie_init)
+            // sets status bit 2 only, and that bit is the ROOM-collision gate
+            // (check_room_collision / check_room_collision_two_point) - the
+            // entity pair test in ResolveEntityScaCollision reads bit 1, which
+            // nothing about behaviour 11 sets. So without this branch the
+            // player pushes the prone body (and the body pushes back), which is
+            // the reported defect. Note the trio is skipped, not just its push:
+            // HandleEnemyPlayerCollisions is how an enemy pushes the player, so
+            // the prone body stops being solid in both directions - exactly
+            // what the DC looks like.
+            //
+            // Once dc_standup_lunge completes it clears behavior_flags, so the
+            // standing zombie collides normally from that frame on.
+            if (!(g_bDcMode && (ENTITY->behavior_flags & 0x0F) == ZOMBIE_BEH_DC_STANDUP)) {
+                // 0x00433955: Set up SCA hit data for collision
+                SetEntityScaHitData(ENTITY);
 
-            // 0x0043395e-0x0043396e: Resolve collision vs player
-            ResolveEntityScaCollision((Entity*)&g_playerEntity, ENTITY);
+                // 0x0043395e-0x0043396e: Resolve collision vs player
+                ResolveEntityScaCollision((Entity*)&g_playerEntity, ENTITY);
 
-            // 0x00433971: Handle enemy-player collision response
-            HandleEnemyPlayerCollisions();
+                // 0x00433971: Handle enemy-player collision response
+                HandleEnemyPlayerCollisions();
+            }
 
             // 0x0043397b: Clear collision push flag (bit 3)
             ENTITY->collisionFlags &= ~0x08;
@@ -361,6 +414,15 @@ void zombie_init(void)
         ENTITY->action_state = 2;
     }
 
+    // Director's Cut: behaviour 11 spawns with collision off and the DC's third
+    // ScaInfo record (radius 1000). It sits HERE, before the naked-zombie check,
+    // because the DC puts it there and that check can overwrite Sca_info again -
+    // a naked zombie with behaviour 11 ends up on the naked record.
+    if (g_bDcMode && (ENTITY->behavior_flags & 0x0F) == ZOMBIE_BEH_DC_STANDUP) {
+        ENTITY->status_flags |= 0x04;
+        ENTITY->Sca_info = (unsigned int)g_pZombieScaInfo[2];
+    }
+
     // 0x004336a3-0x004336b0: naked zombie swaps in the narrower record (r=322)
     if (ENTITY->id == ENEMY_ID_NAKED_ZOMBIE) {
         ENTITY->Sca_info = (unsigned int)g_pZombieScaInfo[1];
@@ -381,7 +443,13 @@ void zombie_init(void)
     // 0x00433700-0x0043374f: Set behavior type based on difficulty
     {
         unsigned char behVal;
-        if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0) {
+        if (g_bDcMode) {
+            // DC: both threshold stores are unconditional - the overlay's
+            // zombie_init (STAGE1.EXE 0x80105ad8) and hit handler
+            // (0x80107000-20) always index the hard table with `seed & 0x1f`;
+            // there is no scenario-flag branch and no first-playthrough row.
+            behVal = local_40[g_RandSeed & 0x1F];
+        } else if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0) {
             behVal = local_40[(g_RandSeed & 0x1F) + 32];
         } else {
             behVal = local_40[g_RandSeed & 0x1F];
@@ -394,13 +462,41 @@ void zombie_init(void)
     ((unsigned char*)&ENTITY->subpixel_pos_x)[0] = 0;  // 0x178
     ENTITY->behavior_step = 0;
     ENTITY->move_speed = 45;
+
+    // Director's Cut: three new spawn nibbles, rewritten in place. The DC puts
+    // this block exactly here, between the move_speed and turn_speed stores -
+    // which is also what keeps it zombie-only, since a cerberus spawned with
+    // nibble 0xC (STAGE3/ROOM3040, in BOTH builds) means something else and
+    // never reaches this function. The three tests are sequential rather than a
+    // switch, as in the DC, but each masks its own nibble away so they stay
+    // disjoint. Only 0xC and 0xD appear in the shipped DC data for zombie ids;
+    // 0xE is ported for completeness. (docs/PSX_DC_ENEMY_AI.md)
+    ENTITY->dc_double_step = 0;
+    if (g_bDcMode) {
+        if ((ENTITY->behavior_flags & 0x0F) == 0x0C) {
+            ENTITY->dc_double_step = 1;
+            ENTITY->behavior_flags &= 0xF0;          // -> behaviour 0
+        }
+        if ((ENTITY->behavior_flags & 0x0F) == 0x0D) {
+            ENTITY->dc_double_step = 1;
+            ENTITY->behavior_flags &= 0xF1;          // -> behaviour 1
+        }
+        if ((ENTITY->behavior_flags & 0x0F) == 0x0E) {
+            ENTITY->dc_double_step = 1;
+            ENTITY->behavior_flags &= 0xF0;          // -> behaviour 0
+            ENTITY->health = (short)(ENTITY->health + 100);
+        }
+    }
+
     ENTITY->turn_speed = 24;
     ENTITY->action_counter = 0;
     ENTITY->internal_timer = 0;
     ENTITY->blend_counter = 0;
 
     // 0x0043379f-0x004337cf: Set initial animation ID
-    ENTITY->animationId = zombie_anim_id_tbl[ENTITY->behavior_flags & 0xF];
+    // The DC's copy of this table differs in one byte: index 11 is 29.
+    ENTITY->animationId = (g_bDcMode ? zombie_anim_id_tbl_dc
+                                     : zombie_anim_id_tbl)[ENTITY->behavior_flags & 0xF];
     ENTITY->animation_frame_id = 0;
     ENTITY->timing_control = 0;
 
@@ -869,7 +965,16 @@ static void zombie_chase_walk(void)
             }
         }
         Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400);
+        // Director's Cut fast zombie: advance the walk cycle a second time.
+        if (g_bDcMode && ENTITY->dc_double_step != 0) {
+            Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400);
+        }
         ENTITY->move_speed_current = 45;
+        // A DC addition that is inert in the shipped data: zombie_init sets
+        // move_speed to 45 and nothing raises it. Ported as written.
+        if (g_bDcMode && ENTITY->move_speed > 45) {
+            ENTITY->move_speed_current = (unsigned short)ENTITY->move_speed;
+        }
 
         if ((short)ENTITY->next_turn_timer != 0) {
             // Weaving: turn at MINUS twice turn_speed and crawl at 10.
@@ -907,6 +1012,9 @@ static void zombie_chase_walk(void)
 
     case 4:
         Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400);
+        if (g_bDcMode && ENTITY->dc_double_step != 0) {
+            Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400);
+        }
         if (--ENTITY->action_ticks_counter == 0) {
             ENTITY->ignore_player_flag = 0;
             ENTITY->action_state = 0;
@@ -915,6 +1023,12 @@ static void zombie_chase_walk(void)
     }
 
     Add_speedXZ(0);
+    // ...and apply the frame's XZ motion a second time. Two Joint_move calls
+    // plus two Add_speedXZ calls per frame is the whole "fast zombie" - the DC
+    // introduces no new speed constant for it.
+    if (g_bDcMode && ENTITY->dc_double_step != 0) {
+        Add_speedXZ(0);
+    }
 }
 // ---------------------------------------------------------------------------
 // fast_player_facing @ 0x00435c60
@@ -1041,7 +1155,12 @@ void zombie_damaged(void)
                 if ((ENTITY->behavior_flags & ZOMBIE_FLAG_LAYING_DOWN) == 0) {
                     // hit threshold exceeded → trigger falldown
                     ENTITY->action_speed = 0x80;
-                    if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0)
+                    if (g_bDcMode) {
+                        // DC: the overlay's reload (STAGE1.EXE 0x80107000-20)
+                        // is unconditional - always the hard table (see the
+                        // note on zombie_init's threshold store).
+                        ENTITY->hit_threshold = zombie_hit_threshold_hard_tbl[g_RandSeed & 0x1F];
+                    } else if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) == 0)
                         ENTITY->hit_threshold = zombie_hit_threshold_normal_tbl[g_RandSeed & 0x1F];
                     else
                         ENTITY->hit_threshold = zombie_hit_threshold_hard_tbl[g_RandSeed & 0x1F];
@@ -1881,6 +2000,85 @@ void zombie_action_update(void)
     if (behavior < 14 && zombie_action_tbl_scd[behavior] != NULL) {
         ((void(*)())zombie_action_tbl_scd[behavior])();
     }
+}
+
+// ============================================================================
+// dc_standup_lunge - Director's Cut behaviour 11 (PS1 STAGE1 0x8010cdf8).
+//
+// The DC's zombie_states_table has one entry more than the PS1 OG's, inserted
+// so that it lands on behaviour 11; the port's table already carries that slot
+// as a trailing NULL ([21]), and dc_apply_zombie_tables() points it here.
+// Nothing in the USA data ever produces behaviour 11, and with Mode=OG the
+// slot stays NULL exactly as the PC build ships it.
+//
+// A scripted entrance. zombie_init has already given this zombie the DC's third
+// ScaInfo record (radius 1000) and cleared its collision (status_flags bit 2),
+// so it plays animation 29 through without pushing anything. When Joint_move
+// reports the animation finished it lunges - 487 straight ahead, then 991 at a
+// 0x400 offset - turns 90 degrees, takes the standard hit box and collision
+// back, and hands itself to the ordinary chase behaviour with behavior_flags
+// cleared, so the next frame dispatches through behaviour 0.
+//
+// The only shipped user is entity id 0x16 (the Forest zombie) in the arrange
+// balcony rooms STAGE9/ROOM9120+9121 and STAGEE/ROOME120+E121, which arrive
+// with the DC RDTs.
+// ============================================================================
+static void dc_standup_lunge(void)
+{
+    if (ENTITY->action_state == 0) {
+        ENTITY->action_state = 1;
+        ENTITY->animation_frame_id = 0;
+        ENTITY->timing_control = 0;
+        ENTITY->blend_counter = 3;
+        ENTITY->animationId = 29;
+        // The DC sets this and never reads it back in this handler.
+        ENTITY->action_ticks_counter = (unsigned short)((g_RandSeed & 0x0F) + 0x2D);
+    } else if (ENTITY->action_state != 1) {
+        return;
+    }
+
+    if (ENTITY->animation_frame_id == 0x14) {
+        Snd_em(4);
+    }
+
+    if (Joint_move(0, ENTITY->animHeader, ENTITY->animBase, 0x400) != 0) {
+        ENTITY->move_speed_current = 0x1E7;   // 487
+        Add_speedXZ(0);
+        ENTITY->move_speed_current = 0x3DF;   // 991
+        Add_speedXZ(0x400);
+        ENTITY->angle = (short)(ENTITY->angle + 0x400);
+        ENTITY->behavior_flags = 0;
+        ENTITY->state = ZOMBIE_STATE_IDLE;
+        ENTITY->ignore_player_flag = 1;
+        ENTITY->action_behavior = 3;
+        ENTITY->action_state = 0;
+        ENTITY->Sca_info = (unsigned int)g_pZombieScaInfo[0];
+        ENTITY->status_flags &= 0xFB;         // collision back on
+    }
+}
+
+// ============================================================================
+// dc_apply_zombie_tables (port-only)
+// Install the Director's Cut's two zombie dispatch edits: the extra state entry
+// that lands on behaviour 11, and entity id 0x16 - the Forest zombie - which
+// the DC drives with the ordinary zombie update. Called once per game start
+// from InitializeGame, next to the other dc_apply_* hooks; a no-op with
+// Mode=OG.
+//
+// Id 0x16 is read off the DC's own per-stage entity tables: only DC STAGE2
+// (0x80120a00) and DC STAGE7 (0x8012aa0c) register slot 0x16, both with the
+// same handler their slots 0/1/0x11 carry - the zombie. Neither OG overlay
+// registers it at all. Those two are the overlays the arrange balcony rooms
+// run under (STAGE9 folds onto stage 1 and STAGEE onto stage 6), which is
+// exactly where the id 0x16 + behaviour 0xB records live.
+// ============================================================================
+void dc_apply_zombie_tables(void)
+{
+    if (!g_bDcMode) {
+        return;
+    }
+    zombie_states_table[21] = (void*)dc_standup_lunge;   // = behavior[11]
+    enemies_update_functions_tbl[ENEMY_ZOMBIE_FOREST] = (void*)zombie_update;
 }
 
 // ============================================================================

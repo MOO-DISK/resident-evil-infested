@@ -333,6 +333,21 @@ Item names end with `0x07`, not `0x01`: the message state machine reads that as
 same way `STR()` does for the USA names in `MenuData.cpp`; nothing reads past
 the `0x07`.
 
+**`STR()` escapes have two levels** — get this wrong and the message renderer can
+hang. `STR()` is a constexpr *parser*, so its own escapes must be **doubled** in
+the C source, while a literal quote uses the normal C escape:
+
+| need | write in the C source | why |
+|---|---|---|
+| line break (`0x02`) | `\\n` | the compiler hands the parser `\`+`n`, which it maps |
+| opening quote (`0x78`) | `\\o` | same — the port's `...is \\oMoonlight...` |
+| closing quote (`0x19`) | `\"` | a bare or doubled quote terminates the literal |
+
+A single `\n` becomes raw `0x0A`; the parser then builds a string with no `0x01`
+terminator and the message renderer loops forever. This hung the item viewer on
+item `0x02` on 2026-09-14 (found while porting the DC's description table,
+`tools/gen_dc_item_descriptions.py`).
+
 Messages 27-29 (the opening narration) are **English even in the Japanese
 build**, byte-for-byte the same text as the USA table.
 

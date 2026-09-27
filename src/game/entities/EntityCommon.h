@@ -62,6 +62,13 @@
 #define NPC_CHRIS_LEFT_ARM          0x14 // chris's left arm used in lab computer mode
 #define NPC_CHRIS_RIGHT_ARM         0x15 // chris's right arm used in lab computer mode
 
+// Director's Cut only: the Forest zombie (EM1016 / EM1116), spawned by the
+// arrange balcony rooms STAGE9/ROOM9120+9121 and STAGEE/ROOME120+E121 with
+// behaviour 0xB - the scripted stand-up entrance in Zombie.cpp. The USA build
+// leaves this a filler NPC slot; dc_apply_zombie_tables() points it at
+// zombie_update in DC mode, as the DC's own STAGE2/STAGE7 entity tables do.
+#define ENEMY_ZOMBIE_FOREST         0x16
+
 #define NPC_CHRIS                   0x20
 #define NPC_JILL                    0x21
 #define NPC_BARRY                   0x22
@@ -79,6 +86,7 @@
 // enemies_update_functions_tbl @ 0x004d3c90 - entity type dispatch table
 // Indexed by entity->id. 48 entries: 0-21 monsters, 22-47 the shared human
 // character driver. See the definition in EntityCommon.cpp for why 32 was wrong.
+// Not const: DC mode re-points slot 22 (ENEMY_ZOMBIE_FOREST) at zombie_update.
 // ============================================================================
 extern void* enemies_update_functions_tbl[48];
 

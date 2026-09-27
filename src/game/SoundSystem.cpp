@@ -5,6 +5,8 @@
 #include "../marni/MarniSound.h"
 #include "Entities.h"
 #include "SoundTables.h"
+#include "dc/ArrangeStages.h"     // room_file_stage(), STAGE_ARRANGE_FIRST
+#include "dc/ArrangeSoundRows.h"  // dc_arrange_snd_slots()
 #include "../DebugPrint.h"
 #include <cmath>
 #include <cstdio>
@@ -629,7 +631,7 @@ static void bgm_fade_out_all(void)
 // ----------------------------------------------------------------------------
 static unsigned char bgm_group_for(unsigned char roomId, unsigned char bgmState)
 {
-    unsigned int idx = (unsigned int)(g_stageId * 0x20 + roomId) * 4 + (bgmState & 7);
+    unsigned int idx = (get_stage_id() * 0x20 + roomId) * 4 + (bgmState & 7);
     if (g_bgmDataTable == NULL || idx >= sizeof(g_BgmRoomData)) {
         return 0xFF;
     }
@@ -1195,21 +1197,40 @@ static void voice_load_and_play(unsigned int id)
         g_BgmSoundBank = 0;
     }
 
-    if (g_stageId >= 8 || g_StageVoiceNamesTable[g_stageId] == NULL) {
+    const unsigned int voiceRow = get_stage_id();
+    if (voiceRow >= 8 || g_StageVoiceNamesTable[voiceRow] == NULL) {
         return;
     }
 
-    const char* name = g_StageVoiceNamesTable[g_stageId] + id * 9;
-    if (name[0] == '\0') {
-        return;
-    }
-
+    // Port-added: a PS1-only voice clip, voice\P<row>_<id>.wav, which the asset
+    // migrator writes where the PS1 plays audio at this id that no PC file
+    // holds - an id sharing its name with a different clip (stage 0 ids 99
+    // and 116 are both "V007_0d" and are not the same line), or an id whose
+    // PC name record is empty (stage 4 ids 181/182). `row` is the first table
+    // row sharing this name table, since rows 5/6 reuse rows 0/1. A PC tree
+    // has no such files, so this falls straight through to the original.
     char path[260];
-    sprintf(path, "%s%s%s", GAME_DATA_ROOT "voice\\", name, ".wav");
+    unsigned int row = voiceRow;
+    for (unsigned int r = 0; r < voiceRow; r++) {
+        if (g_StageVoiceNamesTable[r] == g_StageVoiceNamesTable[voiceRow]) {
+            row = r;
+            break;
+        }
+    }
+    sprintf(path, GAME_DATA_ROOT "voice\\P%u_%03X.wav", row, (unsigned int)id);
 
     if (findAndOpenFile(path) == 0) {
-        dbg_printf("[voice] could not open file: %s\n", path);
-        return;
+        const char* name = g_StageVoiceNamesTable[voiceRow] + id * 9;
+        if (name[0] == '\0') {
+            return;
+        }
+
+        sprintf(path, "%s%s%s", GAME_DATA_ROOT "voice\\", name, ".wav");
+
+        if (findAndOpenFile(path) == 0) {
+            dbg_printf("[voice] could not open file: %s\n", path);
+            return;
+        }
     }
 
     g_BgmSoundBank = loadSndBankFromWav(path);
@@ -1366,6 +1387,36 @@ void Snd_em(unsigned char em_snd_id) // 0x0047fca0
 // the room boundary system. They were only ever here because the original's
 // callback table sits next to the sound bank globals.
 
+// Load one enemy-sound record from ./sound/<name>.wav. `slot` is a record index
+// into g_emSndBanks (two ints per record). The body of Room_LoadEnemySoundBanks'
+// loop, shared with the arrange-room override pass at the end of it. A NULL
+// filename leaves the slot empty, which is how a slot gets cleared.
+static void emsnd_load_slot(int slot, const char* filename)
+{
+    int* piVar7 = &g_emSndBanks[slot * 2];
+
+    if (*piVar7 != 0) {
+        destroySndBank(*piVar7);
+    }
+    *piVar7 = 0;
+    *((unsigned char*)(piVar7 + 1)) = 0;
+    *((unsigned char*)(piVar7 + 1) + 1) = 0;
+
+    if (filename == NULL) return;
+
+    char path[260];
+    _snprintf(path, sizeof(path), GAME_DATA_ROOT "sound\\%s.wav", filename);
+    path[sizeof(path) - 1] = '\0';
+    findAndOpenFile(path);
+
+    int bank = loadSndBankFromWav(path);
+    *piVar7 = bank;
+    if (bank != 0) {
+        pan_set(bank, 0);
+        set_volume(bank, g_EnemySndVolume);
+    }
+}
+
 // ============================================================================
 // Room_LoadEnemySoundBanks (0x0047eed0)
 // Loads per-room enemy sound banks. Iterates through g_emSndBanks, destroys
@@ -1387,7 +1438,11 @@ void Room_LoadEnemySoundBanks(void) {
     int iVar6 = 0;
     int* piVar7 = g_emSndBanks;
 
-    const unsigned int roomIdx = (unsigned int)g_stageId * 29 + (unsigned int)g_roomId;
+    // Base row: an arrange room is the same physical room as its base stage's,
+    // so it takes that room's enemy bank list. That is right for the footsteps,
+    // the doors and the props, and wrong for everything ADVANCED changed - the
+    // per-room override table at the end of this function puts those right.
+    const unsigned int roomIdx = get_stage_id() * 29 + (unsigned int)g_roomId;
     const int roomIdxValid =
         roomIdx < sizeof(g_RoomSoundNameTable) / sizeof(g_RoomSoundNameTable[0]);
     if (!roomIdxValid) {
@@ -1399,33 +1454,9 @@ void Room_LoadEnemySoundBanks(void) {
     }
 
     do {
-        // Destroy existing bank if loaded
-        if (*piVar7 != 0) {
-            destroySndBank(*piVar7);
-        }
-        *piVar7 = 0;
-        *((unsigned char*)(piVar7 + 1)) = 0;
-        *((unsigned char*)(piVar7 + 1) + 1) = 0;
-
         // Look up per-room sound name table
         const char** soundTable = roomIdxValid ? g_RoomSoundNameTable[roomIdx] : NULL;
-
-        if (soundTable != NULL) {
-            const char* filename = soundTable[iVar6 / 4];
-            if (filename != NULL) {
-                char path[260];
-                _snprintf(path, sizeof(path), GAME_DATA_ROOT "sound\\%s.wav", filename);
-                path[sizeof(path) - 1] = '\0';
-                findAndOpenFile(path);
-
-                int bank = loadSndBankFromWav(path);
-                *piVar7 = bank;
-                if (bank != 0) {
-                    pan_set(bank, 0);
-                    set_volume(bank, g_EnemySndVolume);
-                }
-            }
-        }
+        emsnd_load_slot(iVar6 / 4, soundTable ? soundTable[iVar6 / 4] : NULL);
 
         iVar6 += 4;
         piVar7 += 2;
@@ -1438,6 +1469,42 @@ void Room_LoadEnemySoundBanks(void) {
         // played: PlayEntitySnd looks up g_emSndBanks[soundType * 2], finds 0 and
         // silently returns.
     } while (piVar7 < (int*)&g_emSndBanks[96]);
+
+    // The row above is the base room's, which is right for everything the room
+    // shares and wrong for everything the DC changed: a swapped enemy, a cue
+    // only ADVANCED uses, a sound the arrange room drops, or an enemy the PC
+    // row never covered at all. Each of those slots is read out of the RDT's
+    // own embedded sound bank; see dc/ArrangeSoundRows.h. A NULL name is
+    // meaningful - it CLEARS the slot.
+    //
+    // DC_SND_ARRANGE entries need the arrange file to be the one loaded, since
+    // the base room's row is correct without it. DC_SND_ANY_DC entries belong
+    // to rooms with no arrange file at all - same RDT in every mode, so they
+    // apply throughout DC mode.
+    if (g_bDcMode) {
+        const int arrangeLoaded = room_file_stage() >= STAGE_ARRANGE_FIRST;
+        int extra = 0, applied = 0;
+        const DcArrangeSndSlot* list = dc_arrange_snd_slots(&extra);
+        for (int i = 0; i < extra; i++) {
+            if (list[i].stage != g_stageId || list[i].room != g_roomId ||
+                list[i].slot >= 48) {
+                continue;
+            }
+            if (list[i].scope == DC_SND_ARRANGE && !arrangeLoaded) {
+                continue;
+            }
+            emsnd_load_slot(list[i].slot, list[i].name);
+            applied++;
+        }
+        // A silent room is either "the table has no row for it" or "the row is
+        // there and the sound still did not play"; those need different fixes,
+        // so say which.
+        if (applied || arrangeLoaded) {
+            dbg_printf("[emsnd] DC stage %u room %u (%s): %d slot override(s)\n",
+                       (unsigned int)g_stageId, (unsigned int)g_roomId,
+                       arrangeLoaded ? "arrange" : "base file", applied);
+        }
+    }
 }
 
 // (0x0047f870) - 3-param play_sfx overload (mode parameter)

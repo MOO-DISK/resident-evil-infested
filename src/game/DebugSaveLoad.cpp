@@ -184,14 +184,26 @@ void DebugQuick_SaveSlot(int slot)
 // Restore savedat<slot+1>.dat and arm the continue path. The caller
 // (GameLoop.cpp's quick-access load machine) then chains game_start, whose
 // InitializeGame continue branch rebuilds the saved stage from the card.
-void DebugQuick_LoadSlot(int slot)
+// Returns 1 when the slot was restored, 0 when it was refused (missing file, or
+// a DC TRAINING/ADVANCED save in OG mode) - the caller must not chain
+// game_start on 0.
+int DebugQuick_LoadSlot(int slot)
 {
     char fileBuffer[DBG_SAVE_FILE_SIZE + 8];
     sprintf(g_saveFileName, "%ssavedat%d.dat", GetSaveRoot(), slot + 1);
     int fileSize = ReadSaveFile(g_saveFileName, fileBuffer);
     if (fileSize < 0x200) {
         dbg_printf("[debugmenu] quick load: slot %d has no valid save\n", slot + 1);
-        return;
+        return 0;
+    }
+    // Port-only: in OG mode a DC TRAINING/ADVANCED save cannot be loaded (its
+    // rules do not exist here). Refuse before touching any live state; the debug
+    // list greys these out, this is the belt-and-braces backstop.
+    if (!g_bDcMode && (((unsigned char)fileBuffer[0x233] & 3) != DC_DIFFICULTY_STANDARD)) {
+        dbg_printf("[debugmenu] quick load: slot %d is a DC mode-%d save; "
+                   "refused in OG mode\n",
+                   slot + 1, (unsigned char)fileBuffer[0x233] & 3);
+        return 0;
     }
     DebugRestoreSaveBlock(fileBuffer, fileSize);
     g_main_state_flags |= MSF_CONTINUE_GAME;   // InitializeGame continue branch
@@ -201,4 +213,5 @@ void DebugQuick_LoadSlot(int slot)
                "char %d variant %d\n",
                slot + 1, g_saveFileName, fileSize, g_SelectedCharactedId,
                (g_main_state_flags & MSF_CHAR_VARIANT) ? 1 : 0);
+    return 1;
 }

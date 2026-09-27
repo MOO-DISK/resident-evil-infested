@@ -468,6 +468,9 @@ extern const unsigned char* g_UnknownItemNamePointers[16] = {
 // g_ItemModelFileNames (0x004BD348, 600 bytes) (75 x 8-byte ASCII model file
 // names, indexed by item image type; each record is a null-padded name, e.g.
 // "i05v". Consumed as a flat record table: (char*)g_ItemModelFileNames + idx*8.
+// The Director's Cut's items reach image type 0x4B (past this table - the USA
+// build's largest is 0x4A) and rename two more, so MainMenu.cpp's
+// item_model_file_name() consults ItemModels.cpp for those.
 extern const unsigned char g_ItemModelFileNames[75][8] = {
     "",     // [ 0]
     "i05v", // [ 1]
@@ -553,7 +556,7 @@ extern const unsigned char g_ItemModelFileNameMINI[8] = "MINI";
 // PTR_DAT_004bd768: item combine tables, indexed by item image type (byte 1 of
 // g_ItemImageLookupTable). Each table: count byte + 4-byte records
 // {otherItem, newForCursor, newForTarget, effect}.
-extern const unsigned char* g_ItemCombinePtrs[35] = {
+extern unsigned char* g_ItemCombinePtrs[38] = {
     g_ItemCombineData + 0, g_ItemCombineData + 5, g_ItemCombineData + 10, g_ItemCombineData + 15,
     g_ItemCombineData + 20, g_ItemCombineData + 25, g_ItemCombineData + 38, g_ItemCombineData + 51,
     g_ItemCombineData + 64, g_ItemCombineData + 73, g_ItemCombineData + 82, g_ItemCombineData + 91,
@@ -563,10 +566,14 @@ extern const unsigned char* g_ItemCombinePtrs[35] = {
     g_ItemCombineData + 364, g_ItemCombineData + 365, g_ItemCombineData + 370, g_ItemCombineData + 379,
     g_ItemCombineData + 400, g_ItemCombineData + 413, g_ItemCombineData + 418, g_ItemCombineData + 427,
     g_ItemCombineData + 436, g_ItemCombineData + 437, g_ItemCombineData + 438,
+    // The three Director's Cut entries (the crest recipes) land at 35..37; in the
+    // USA build these point at the zeroed tail and are never indexed.
+    g_ItemCombineData + 440, g_ItemCombineData + 441, g_ItemCombineData + 442,
 };
 
-// g_ItemCombineData (0x004BD5B0, 440 bytes)
-extern const unsigned char g_ItemCombineData[440] = {
+// g_ItemCombineData (0x004BD5B0, 440 bytes; 454 to hold the DC's three crest
+// recipes, see dc_apply_item_tables)
+extern unsigned char g_ItemCombineData[454] = {
     0x01,0x0B,0x02,0x0B,0x01,0x01,0x0C,0x03,0x0C,0x01,0x01,0x0D,0x04,0x0D,0x01,0x01,
     0x0E,0x05,0x0E,0x01,0x01,0x0F,0x06,0x0F,0x01,0x03,0x10,0x07,0x10,0x01,0x11,0x08,
     0x11,0x06,0x12,0x09,0x12,0x06,0x03,0x10,0x07,0x10,0x06,0x11,0x08,0x11,0x01,0x12,
@@ -595,10 +602,12 @@ extern const unsigned char g_ItemCombineData[440] = {
     0x03,0x44,0x48,0x00,0x00,0x46,0x49,0x00,0x00,0x47,0x4B,0x00,0x00,0x01,0x45,0x49,
     0x00,0x00,0x02,0x44,0x4A,0x00,0x00,0x45,0x4B,0x00,0x00,0x02,0x43,0x49,0x00,0x00,
     0x44,0x4B,0x00,0x00,0x00,0x00,0x00,0x00,
+    // Spare tail for the Director's Cut combine tables (unused in the USA build).
+    0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 };
 
 // g_ItemMaxQty (0x004BD81C, 448 bytes) (max quantity for itemId, byte at +itemId*4)
-extern const unsigned char g_ItemMaxQty[448] = {
+extern unsigned char g_ItemMaxQty[448] = {
     0x00,0x00,0x00,0x00,0x00,0x01,0x80,0x80,0x0F,0x02,0x00,0x80,0x07,0x03,0x01,0x80,
     0x06,0x04,0x02,0x80,0x06,0x04,0x03,0x80,0xF0,0x05,0x04,0x80,0x06,0x06,0x05,0x80,
     0x06,0x06,0x06,0x80,0x06,0x06,0x07,0x80,0x04,0x07,0x80,0x80,0x0F,0x08,0x08,0x80,
@@ -629,16 +638,21 @@ extern const unsigned char g_ItemMaxQty[448] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0xF4,0x01,0x00,0x00,0x00,0x00,0x00,0x80,0x0C,0xFE,
 };
 
-// g_ItemImageTypeTable (0x004BD7F8, 35 bytes) - indexed by the item lookup
-// record's byte 1, giving the 1-based row of the item's icon inside
-// data/item_mix.pix (18 x 1200-byte 20x30 images = the file's 21600 bytes).
+// g_ItemImageTypeTable (0x004BD7F8, 35 bytes; 38 to hold the Director's Cut's)
+// - indexed by the item lookup record's byte 1, giving the 1-based row of the
+// item's icon inside data/item_mix.pix (18 x 1200-byte 20x30 images = the
+// file's 21600 bytes).
 // A previous revision cut this at 32 bytes, but the last three live entries
 // (0x10/0x11/0x12) sit at indices 32-34 and belong to the mixed herbs
 // 0x49/0x4A/0x4B (green+red+blue, 3x green, 2x green+red - their lookup byte 1
 // is 32/33/34). Mixing into any of those read past the array, so
 // menu_item_combine_refresh fed LoadItemImage a garbage row index and painted
 // junk from beyond the .pix over the slot's sprite.
-extern const unsigned char g_ItemImageTypeTable[35] = {
+//
+// Not const: the DC's table (3 more entries, herb rows +3) differs from byte 26
+// on, so dc_apply_item_tables copies it over this one. The USA data below fills
+// indices 0..34 and the spare tail stays zero.
+extern unsigned char g_ItemImageTypeTable[38] = {
     0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x01,0x02,0x00,0x03,0x04,0x05,
     0x06,0x00,0x00,0x07,0x08,0x09,0x0A,0x0B,0x0C,0x00,0x00,0x00,0x00,0x0D,0x0E,0x0F,
     0x10,0x11,0x12,
@@ -660,6 +674,10 @@ extern const unsigned char g_ItemModelDir[24] = "./usa/item_m2/";
 // system/AssetPath.h); the literal retail root only resolves in a release
 // build, so LoadFile silently failed on it and no combine ever got a new icon.
 extern const unsigned char g_ItemMixPixPath[32] = GAME_DATA_ROOT "data\\item_mix.pix";
+
+// The Director's Cut's own item_mix.pix (3 extra mixed-herb rows) lives in its
+// overlay under this same name, so there is no DC twin of this path: the
+// overlay search in ResolveAssetRoot picks the right file.
 
 // g_MedalPixPath (0x004BF330) "./usa/data/medal.pix" - the two 20x30 slot icons
 // (wolf medal row 0, eagle medal row 1) the doom-book examine swaps in. Rooted

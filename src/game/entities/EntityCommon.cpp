@@ -88,7 +88,10 @@ void* enemies_update_functions_tbl[48] = {
     (void*)spiderweb_update,        // [19] spider web (not an enemy, but a spider web that blocks a door in room30Cx) (0x00443640)
     (void*)computer_arm_update,     // [20] em1014 - right forearm, lab terminal (0x00427330)
     (void*)computer_arm_update,     // [21] em1015 - left forearm, lab terminal (0x0040b760)
-    (void*)character_npc_update,    // [22] filler: resolves to em100a placeholder EMDs
+    (void*)character_npc_update,    // [22] filler: resolves to em100a placeholder EMDs.
+                                    //      DC: the Forest zombie (id 0x16) -
+                                    //      dc_apply_zombie_tables() swaps this
+                                    //      slot to zombie_update.
     (void*)character_npc_update,    // [23] filler
     (void*)character_npc_update,    // [24] filler
     (void*)character_npc_update,    // [25] filler

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include "../system/AssetPath.h"
 #include "../DebugPrint.h"
+#include "dc/ArrangeStages.h"   // room_file_stage()
 
 extern void SetSpriteBufferFlag(void);
 
@@ -500,9 +501,29 @@ static inline unsigned short RoomSprBrightnessKey(unsigned short posData)
 // the same value wraps to ~4e9 and drops the overlay behind the entire scene.
 // Clamp instead - a key of 0 is the nearest slot, which is what a bias meant to
 // pull the overlay forward was asking for.
+//
+// The `& ~3` is the ordering-table BUCKET, and it is not cosmetic. The PS1
+// DrawRoomSpr (SLUS_001.70 0x80037964) submits every overlay with
+//
+//     GsSortFastSprite(spr, ot, min(posData >> 2, 0x3ff))
+//
+// so four consecutive posData values share ONE ordering-table slot and their
+// relative order comes from the submission order alone. That is exactly what
+// the backward entry walk below exists to preserve (see the path-flag note) -
+// but only if overlays the original could not tell apart keep one key here too.
+// This port's depthSort is `fade << 4`, four times finer than the original's
+// slot, so two overlapping overlays two posData units apart got reordered.
+//
+// Found on the Director's Cut arrange wardrobe closet (stage 1 room 0x1C ->
+// Stage8/ROOM81C0, camera 0). Groups 1 and 5 are the dressed and the bare
+// mannequin and the room's script leaves BOTH active in that camera, relying
+// on group 1 (the earlier entry) to cover group 5. Group 5's 24x32 chest tile
+// carries posData 220 against group 1's 222: one bucket on PS1, two keys here,
+// and the bare mannequin painted a grey rectangle across the outfit. 61 other
+// (room, camera) pairs in the shipped USA rooms carry the same kind of pair.
 static inline int RoomSprClampSortKey(int fade)
 {
-    return (fade < 0) ? 0 : fade;
+    return (fade < 0) ? 0 : (fade & ~3);
 }
 
 // ==========================================================================
@@ -528,7 +549,7 @@ void DrawRoomSpr(void)
     }
 
     // 0x00475ba4-0x00475bbe: stages 5-9 reuse the stage 0-4 table rows.
-    unsigned int stage = (unsigned int)g_stageId;
+    unsigned int stage = get_stage_id();
     if (stage > 4) stage -= 5;
     const unsigned int roomIdx = (unsigned int)g_roomId + stage * 0x20;
     const unsigned int cam     = (unsigned int)g_roomCameraId;
@@ -589,7 +610,8 @@ void DrawRoomSpr(void)
                 fade  = (int)posData - fadeBias;
             }
 
-            AddSprite(&entry->texDesc, depth, 0, RoomSprClampSortKey(fade));
+            AddSprite(&entry->texDesc, depth, ROOM_MASK_TEXTURE_SLOT,
+                      RoomSprClampSortKey(fade));
         }
         return;
     }
@@ -637,7 +659,8 @@ void DrawRoomSpr(void)
             fade  = (int)posData - fadeBias;
         }
 
-        AddSprite(&entry->texDesc, depth, 0, RoomSprClampSortKey(fade));
+        AddSprite(&entry->texDesc, depth, ROOM_MASK_TEXTURE_SLOT,
+                  RoomSprClampSortKey(fade));
     }
 }
 
@@ -691,9 +714,37 @@ void load_room_masks(int param_1) // 0x00475a90
     RDT_Camera* cameras = (RDT_Camera*)((char*)g_RdtPointer + sizeof(RDT));
     int* spriteGroupPtr = (int*)cameras[param_1].mask_pointer;
 
+    // An arrange room's mask art is not in objspr/ - it is EMBEDDED in the RDT,
+    // at the camera's tim_mask_pointer, and it is already in memory. That is
+    // where the PC's objspr paks come from in the first place: the pak for
+    // stage 2 room 3 camera 0 is that camera's RDT TIM, LZW'd, and the two
+    // match to a single byte in 66080. The base rooms keep reading their paks,
+    // which is the shipped, tested path; the arrange rooms read the RDT
+    // directly.
+    //
+    // Those TIMs are 256 px WIDE but not always 256 tall - Stage8/ROOM81C0
+    // carries 256x176, 256x184, 256x184 and 256x216 for its four cameras. Both
+    // the page upload (LoadEffectTextureSheet) and the UV normalisation take
+    // the height from the TIM header, so a short page samples correctly; do
+    // not reintroduce a 256x256 assumption anywhere on this path.
+    if (*spriteGroupPtr != 0 && room_file_stage() >= STAGE_ARRANGE_FIRST) {
+        void* timMask = (void*)cameras[param_1].tim_mask_pointer;
+        if (timMask != NULL) {
+            TexturePage_SetupFull(timMask, g_TextureBankID, g_TextureCurrentPage,
+                                  ROOM_MASK_TEXTURE_SLOT);
+        } else {
+            TexturePage_DeleteSet(ROOM_MASK_TEXTURE_SLOT);
+        }
+        return;
+    }
+
     if (*spriteGroupPtr != 0) {
+        // The revisit fold, which applies inside the arrange block too - see
+        // load_room_bg. This site does its arithmetic on the ID rather than the
+        // character (`+ 0x2b` is `- 5 + 0x30`), so it is already correct for an
+        // arrange stage: id 12 -> '7'.
         g_maskPathTemplate[GAME_DATA_PATH_IDX(0x11)] = (char)(g_stageId + 0x30);
-        if (g_stageId > 4) {
+        if (get_stage_id() > 4) {
             g_maskPathTemplate[GAME_DATA_PATH_IDX(0x11)] = (char)(g_stageId + 0x2b);
         }
         g_maskPathTemplate[GAME_DATA_PATH_IDX(0x12)] = (char)(g_roomId / 10 + 0x30);
@@ -712,11 +763,13 @@ void load_room_masks(int param_1) // 0x00475a90
         }
         unpack_pakfile_(pakData, g_TimImageBuffer__bitmap);
         // The original passes texture-set parameter 0 here. Its legacy page
-        // handle is stored in texture set 4 internally, while this port keeps
-        // the D3D SRV produced from that image at direct slot 0.
-        TexturePage_SetupFull(g_TimImageBuffer__bitmap, g_TextureBankID, g_TextureCurrentPage, 0);
+        // handle is stored in texture set 4 internally (SetupFull adds the 4),
+        // while this port keeps the D3D SRV at the direct slot - see
+        // ROOM_MASK_TEXTURE_SLOT.
+        TexturePage_SetupFull(g_TimImageBuffer__bitmap, g_TextureBankID,
+                              g_TextureCurrentPage, ROOM_MASK_TEXTURE_SLOT);
     } else {
-        TexturePage_DeleteSet(4);
+        TexturePage_DeleteSet(ROOM_MASK_TEXTURE_SLOT);
     }
 }
 
@@ -731,12 +784,40 @@ void load_room_bg(void) // 0x00462b00
         int cameraIdx = 0;
         if (g_RdtPointer->cameras_count != 0) {
             do {
+                // The stage the FILES come from: g_stageId, or its arrange
+                // twin when ADVANCED has one for this room (dc/ArrangeStages).
+                const unsigned char fileStage = room_file_stage();
                 DAT_004c2090 = g_hexCharTable[cameraIdx];
-                g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_hexCharTable[g_stageId + 1];
+                g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_hexCharTable[fileStage + 1];
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x10)] = g_hexCharTable[g_roomId >> 4];
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x11)] = g_hexCharTable[g_roomId & 0xf];
-                if (g_stageId > 4) {
-                    g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x11)] - 5;
+                // The revisit fold, which applies INSIDE the arrange block too:
+                // STAGED/STAGEE ship no backgrounds of their own and reuse
+                // STAGE8/STAGE9's, exactly as base stages 6/7 reuse stage 1/2's.
+                // get_stage_id() > 4 covers both (base 5,6 and arrange 12,13)
+                // and leaves arrange 7-11, which do have their own art, alone.
+                //
+                // The original's character arithmetic only works inside the run
+                // of decimal digits ('6' - 5 == '1'), so it breaks for an
+                // arrange stage ('d' - 5 is '_'). Arrange recomputes from the
+                // id; the base path keeps the original expression untouched,
+                // including its quirk (see below).
+                //
+                // QUIRK, reproduced: this branch folds from index 0x11 - the
+                // ROOM's low hex digit - where the cached branch below uses
+                // 0x0f, the stage digit. Verified against the original
+                // (0x00462b00): `[0xf] = [0x11] + -5` here, `[0xf] = [0xf] + -5`
+                // there. It is a Capcom bug, and for stage 5/6 it builds a path
+                // with '-' or similar in it that simply fails to load. Left as
+                // it is because the port reproduces the original; normal room
+                // loads take the cached branch.
+                if (STAGE_DATA_ROW_OF(fileStage) > 4) {
+                    if (fileStage >= STAGE_ARRANGE_FIRST) {
+                        g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] =
+                            g_hexCharTable[fileStage - 5 + 1];
+                    } else {
+                        g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x11)] - 5;
+                    }
                 }
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0b)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)];
 
@@ -763,12 +844,29 @@ void load_room_bg(void) // 0x00462b00
         int camCounter = 0;
         if (g_RdtPointer->cameras_count != 0) {
             do {
+                const unsigned char fileStage = room_file_stage();
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x12)] = g_hexCharTable[camCounter];
-                g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_hexCharTable[g_stageId + 1];
+                g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_hexCharTable[fileStage + 1];
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x10)] = g_hexCharTable[g_roomId >> 4];
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x11)] = g_hexCharTable[g_roomId & 0xf];
-                if (g_stageId > 4) {
-                    g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] - 5;
+                // The revisit fold, which applies INSIDE the arrange block too:
+                // STAGED/STAGEE ship no backgrounds of their own and reuse
+                // STAGE8/STAGE9's, exactly as base stages 6/7 reuse stage 1/2's.
+                // get_stage_id() > 4 covers both (base 5,6 and arrange 12,13)
+                // and leaves arrange 7-11, which do have their own art, alone.
+                //
+                // The original's character arithmetic only works inside the run
+                // of decimal digits ('6' - 5 == '1'), so it breaks for an
+                // arrange stage ('d' - 5 is '_'). Arrange recomputes from the
+                // id; the base path keeps the original expression untouched,
+                // including its quirk (see below).
+                if (STAGE_DATA_ROW_OF(fileStage) > 4) {
+                    if (fileStage >= STAGE_ARRANGE_FIRST) {
+                        g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] =
+                            g_hexCharTable[fileStage - 5 + 1];
+                    } else {
+                        g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)] - 5;
+                    }
                 }
                 camCounter++;
                 g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0b)] = g_bgPathTemplate[GAME_DATA_PATH_IDX(0x0f)];
@@ -862,11 +960,16 @@ void load_room_bg_masks(void) // 0x004759d0
             int* maskPointer = (int*)cameras[camCounter].mask_pointer;
 
             int fileSize;
-            if (*maskPointer == 0) {
+            // Nothing to preload for an arrange room: there is no objspr file
+            // for STAGE8-E (the DC disc has no such folder, and the PC only
+            // shipped stages 1-7), and none is needed - load_room_masks reads
+            // that camera's mask TIM straight out of the RDT instead. Naming
+            // the base room's pak here would load a different camera set's art.
+            if (*maskPointer == 0 || room_file_stage() >= STAGE_ARRANGE_FIRST) {
                 fileSize = 0;
             } else {
                 g_maskPathTemplate[GAME_DATA_PATH_IDX(0x11)] = (char)(g_stageId + 0x30);
-                if (g_stageId > 4) {
+                if (get_stage_id() > 4) {   // see load_room_bg
                     g_maskPathTemplate[GAME_DATA_PATH_IDX(0x11)] = (char)(g_stageId + 0x2b);
                 }
                 g_maskPathTemplate[GAME_DATA_PATH_IDX(0x12)] = (char)(g_roomId / 10 + 0x30);
@@ -874,6 +977,15 @@ void load_room_bg_masks(void) // 0x004759d0
                 g_maskPathTemplate[GAME_DATA_PATH_IDX(0x14)] = (char)(camCounter + '0');
 
                 fileSize = (int)LoadFile(g_maskPathTemplate, &g_bgMaskDataBuffer[totalSize], 0x20);
+                // LoadFile answers a miss with (size_t)-1. Added to totalSize
+                // that walks the write cursor BACKWARDS through the buffer and
+                // leaves later cameras with negative offsets, so the next room
+                // unpacks whatever lies before it. A miss is no mask.
+                if (fileSize < 0) {
+                    dbg_printf("[masks] %s missing - camera %d draws without its"
+                               " occlusion layer\n", g_maskPathTemplate, camCounter);
+                    fileSize = 0;
+                }
             }
 
             totalSize += fileSize;

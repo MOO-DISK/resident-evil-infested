@@ -253,8 +253,16 @@ DWORD g_PlayerPadHeld = 0;
 // 0x004bae30
 DWORD g_PlayerPadHeldPrev = 0;
 
-// 0x00bcb430
-BYTE g_ItemsImageBuffer[86400] = {};
+// 0x00bcb430 - the item sprite sheet (data\item_all.pix): 1200-byte rows of
+// 40x30 8bpp indexed art, one row per item image type. The USA sheet is 72 rows
+// (86400 B); the Director's Cut's is 76 (91200 B) - it replaces rows 45/46 with
+// the MOON CREST halves and appends rows 72..75, whose art the custom Beretta
+// M92FS (item 4, image type 0x4B -> row 74) and the crest-halves' neighbours
+// use. Sized for the larger sheet: LoadAllItemsTexture loads the whole file, so
+// an 86400-byte buffer overflowed by 4800 bytes in DC mode and
+// LoadHeldItemsImages read item 4's row out of bounds - the glitched sprite.
+// See docs/DC_PORT.md 3f.
+BYTE g_ItemsImageBuffer[91200] = {};
 
 // 0x00be05b2 (raw pad state snapshot)
 WORD g_RawPadState = 0;
@@ -588,6 +596,7 @@ unsigned char g_titleMode = 0;            // 0x00d22775
 unsigned char g_titleOptionsFading = 0;   // 0x00d22776
 unsigned char g_titleSelectionId = 0;     // 0x00d22774
 short         g_titleDemoTime = 0;        // 0x00d22788 - demo countdown
+unsigned char g_titleHoldTimer = 0;       // DC title submenu hold counter (port-added)
 short         g_titleTexturePageData[8] = {}; // 0x00d22778 - per-selection tpage
 int           g_sceneRenderParam = 0;     // 0x004d6300
 DWORD          g_titlePrimType = 0;        // 0x004d6398
@@ -1276,7 +1285,7 @@ unsigned char DAT_00be9614 = 0;
 // After the 0x4d item entries (0x13c = 316) sits the item-use category
 // threshold table (read at offsets 0x13b..0x144 by FUN_00401070) and at
 // 0x14b+ the heal-effect table (also addressable as DAT_004bd927 + itemId).
-const unsigned char g_ItemImageLookupTable[459] = {
+unsigned char g_ItemImageLookupTable[459] = {
     0x00,0x00,0x00,0x00,0x01,0x80,0x80,0x0F,0x02,0x00,0x80,0x07,
     0x03,0x01,0x80,0x06,0x04,0x02,0x80,0x06,0x04,0x03,0x80,0xF0,
     0x05,0x04,0x80,0x06,0x06,0x05,0x80,0x06,0x06,0x06,0x80,0x06,
@@ -1981,6 +1990,59 @@ int            DAT_004d228c = 0;
 int            g_debugFeaturesEnabled = 1;
 #else
 int            g_debugFeaturesEnabled = 0;
+#endif
+
+// Director's Cut mode (port-added steering globals, Globals.h). g_bDcMode is
+// [Game] DcMode; g_DcDifficulty is the DC title screen's STANDARD/TRAINING/
+// ADVANCED choice (PS1 g_abDcGameMode), also written into the save block.
+int            g_GameMode = GAME_MODE_OG;
+int            g_DcDifficulty = DC_DIFFICULTY_STANDARD;
+bool           g_bPs1EndingCredits = false;
+bool           g_bPs1FmvSubtitles = false;
+bool           g_bSkipUnskippableFmv = false;
+
+// ---------------------------------------------------------------------------
+// re1_rand / re1_srand (port-only)
+// The PS1's rand (SLUS_005.51 0x8005f6d0, SLUS_001.70 equivalent 0x8005f7a4)
+// is seed*0x41c64e6d + 0x3039, returning (state >> 16) & 0x7fff. The PC
+// release called the CRT rand (MSVC: state*214013 + 2531011), and the PC
+// demo reels were recorded against THAT sequence. So the stream is mode
+// data, not a detail: DC sessions must produce the PS1 sequence or every
+// attract demo desyncs from its first random draw (zombie health rolls,
+// knockdown thresholds, Beretta insta-kill), while OG must keep the CRT
+// sequence the PC recordings encode.
+// ---------------------------------------------------------------------------
+static unsigned int g_randState = 1;
+
+// extern "C": the rand/srand macros in Globals.h rewrite the CRT's own
+// declarations inside <stdlib.h>'s extern "C" block, so the port functions
+// must carry C linkage or every TU that includes <cstdlib> after Globals.h
+// fails to link.
+extern "C" void re1_srand(unsigned int seed)
+{
+    g_randState = seed;
+}
+
+extern "C" int re1_rand(void)
+{
+    if (g_GameMode == GAME_MODE_DC) {
+        g_randState = g_randState * 0x41c64e6d + 0x3039;
+        return (int)((g_randState >> 16) & 0x7fff);
+    }
+    g_randState = g_randState * 214013 + 2531011;
+    return (int)((g_randState >> 16) & 0x7fff);
+}
+
+#if defined(__linux__)
+extern "C" int rand() noexcept
+{
+    return re1_rand();
+}
+
+extern "C" void srand(unsigned int seed) noexcept
+{
+    re1_srand(seed);
+}
 #endif
 
 // Port-added debug helpers (no original address; set by F6 in WindowProc

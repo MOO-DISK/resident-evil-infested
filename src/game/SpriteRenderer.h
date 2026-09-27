@@ -205,6 +205,22 @@ int SubmitEffectSprite(TextureDesc* texture, int depth, int textureId,
 int DrawPrim_SpriteLarge(int* params, unsigned short alpha, int tpage,
                          unsigned int u, unsigned int v, unsigned int clut);
 
+// ============================================================================
+// The texture slot the room-mask page lives in.
+//
+// The ORIGINAL keeps it in legacy texture SET tpage+4: TexturePage_SetupFull
+// (0x0046c410) adds the 4 itself, and load_room_masks tears the same set down
+// with TexturePage_DeleteSet(4). This port stores the D3D SRV at the DIRECT
+// slot instead, and DrawRoomSpr passes that slot to AddSprite as its tpage.
+//
+// Name it once so the setup and the teardown cannot drift apart again - they
+// had: load_room_masks set the page up on slot 0 while tearing set 4 down,
+// which clears legacy entries 32..39, a range nothing ever fills. The release
+// was therefore a no-op, which is why a mask page has never actually been
+// dropped in this port.
+// ============================================================================
+#define ROOM_MASK_TEXTURE_SLOT 0
+
 void TexturePage_Load(int slotIndex, void* imageData);
 void TexturePage_ClearAll(void);
 void TexturePage_Create(int slotIndex);

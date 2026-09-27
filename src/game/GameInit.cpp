@@ -153,6 +153,10 @@ void init_and_start_game(void)
 // ---------------------------------------------------------------------------
 static void LoadAllItemsTexture(void)
 {
+    // One path for every mode: the DC's sheet is a superset (4 extra rows plus
+    // the MOON CREST halves replacing USA sprites) and lives in the DC overlay
+    // as its own item_all.pix, so ResolveAssetRoot picks it without a branch
+    // here. g_ItemsImageBuffer is sized for the larger sheet.
     LoadFile(GAME_DATA_ROOT "data\\item_all.pix", g_ItemsImageBuffer, 0x20);
 }
 
