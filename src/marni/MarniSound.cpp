@@ -3,6 +3,7 @@
 #include "MarniSound.h"
 #include "../Globals.h"
 #include "../system/AssetPath.h"
+#include "../system/AudioFile.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
@@ -13,6 +14,11 @@
 static IXAudio2*         g_pXAudio2 = NULL;
 static IXAudio2MasteringVoice* g_pMasterVoice = NULL;
 static IXAudio2SourceVoice*    g_BankVoices[81];  // bank handles 1-80
+// Port-added: a bank's loop region, in sample frames (length 0 = loop the whole
+// buffer, as the original always does). Only set for the asset migrator's PS1
+// audio files - see AudioFile.h.
+static UINT32                  g_BankLoopBegin[81];
+static UINT32                  g_BankLoopLength[81];
 
 // ============================================================================
 // SFX filename sub-tables
@@ -334,9 +340,16 @@ void DirectSound::PlaySound(int bank, unsigned int slot)
         xa2buf.PlayLength = 0;
         xa2buf.LoopBegin = 0;
         xa2buf.LoopLength = 0;
-        // LoopBegin/LoopLength stay 0: DSBPLAY_LOOPING, which this replaces,
-        // always repeats the WHOLE buffer, and the PC build has no loop-region
-        // mechanism anywhere. See the note in SoundSystem.cpp's bgm_load_and_start.
+        // LoopBegin/LoopLength stay 0 for every PC file: DSBPLAY_LOOPING, which
+        // this replaces, always repeats the WHOLE buffer, and the PC build has
+        // no loop-region mechanism anywhere. See the note in SoundSystem.cpp's
+        // bgm_load_and_start. The one exception is port-added: a PS1 audio
+        // file from the asset migrator loops only its loop region, the intro
+        // once, as the PS1 sequencer does.
+        if (slot != 0 && g_BankLoopLength[bank] != 0) {
+            xa2buf.LoopBegin = g_BankLoopBegin[bank];
+            xa2buf.LoopLength = g_BankLoopLength[bank];
+        }
         xa2buf.LoopCount = (slot != 0) ? XAUDIO2_LOOP_INFINITE : 0;
 
         HRESULT hr = voice->SubmitSourceBuffer(&xa2buf, NULL);
@@ -475,65 +488,26 @@ int DirectSound::CreateSound(const char* wavName)
     char resolved[260];
     const char* actualPath = ResolveAssetRoot(wavName, resolved, sizeof(resolved));
 
-
-    HANDLE hFile = CreateFileA(actualPath, GENERIC_READ, FILE_SHARE_READ, NULL,
-                               OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-    if (hFile == INVALID_HANDLE_VALUE) {
-        sprintf(dbg, "[DEBUG]   FAILED to open file (err=%d)\n", GetLastError());
+    // Port-added: AudioFile opens the WAV - or, where the asset migrator wrote
+    // the PS1 audio as Ogg Vorbis, the .ogg beside it - and hands back PCM.
+    // Its buffer takes the place of the original's whole-file malloc and is
+    // released the same way (free(BANK_WAV_PTR) in DestroySound).
+    char found[260];
+    AudioFileData af;
+    if (!AudioFile_Find(actualPath, found, sizeof(found)) || !AudioFile_Load(found, &af)) {
+        _snprintf(dbg, sizeof(dbg), "[DEBUG]   FAILED to load %s\n", actualPath);
+        dbg[sizeof(dbg) - 1] = '\0';
         OutputDebugStringA(dbg);
         return 0;
     }
+    const WORD channels = (WORD)af.channels;
+    const DWORD sampleRate = (DWORD)af.sampleRate;
+    const WORD bitsPerSample = (WORD)af.bitsPerSample;
 
-    DWORD fileSize = GetFileSize(hFile, NULL);
-
-    BYTE* wavData = (BYTE*)malloc(fileSize);
-    if (wavData == NULL) { CloseHandle(hFile); return 0; }
-    DWORD bytesRead;
-    if (!ReadFile(hFile, wavData, fileSize, &bytesRead, NULL)) {
-        free(wavData); CloseHandle(hFile); return 0;
-    }
-    CloseHandle(hFile);
-
-    if (bytesRead < 44 || wavData[0] != 'R' || wavData[1] != 'I' ||
-        wavData[2] != 'F' || wavData[3] != 'F') {
-        sprintf(dbg, "[DEBUG]   invalid WAV header\n");
-        OutputDebugStringA(dbg);
-        free(wavData); return 0;
-    }
-
-    DWORD offs = 12;
-    WORD channels = 1;
-    DWORD sampleRate = 22050;
-    WORD bitsPerSample = 8;
-    DWORD dataSize = 0;
-    BYTE* pcmData = NULL;
-    DWORD pcmSize = 0;
-    while (offs + 8 <= bytesRead) {
-        DWORD chunkSize = *(DWORD*)(wavData + offs + 4);
-        if (*(DWORD*)(wavData + offs) == 0x20746D66) {
-            if (chunkSize >= 16) {
-                channels = *(WORD*)(wavData + offs + 10);
-                sampleRate = *(DWORD*)(wavData + offs + 12);
-                bitsPerSample = *(WORD*)(wavData + offs + 22);
-            }
-        } else if (*(DWORD*)(wavData + offs) == 0x61746164) {
-            dataSize = chunkSize;
-            pcmData = wavData + offs + 8;
-            pcmSize = chunkSize;
-        }
-        offs += 8 + chunkSize;
-    }
-
-    if (dataSize == 0) {
-        sprintf(dbg, "[DEBUG]   no data chunk found\n");
-        OutputDebugStringA(dbg);
-        free(wavData); return 0;
-    }
-
-    BANK_WAV_PTR(bank) = wavData;
-    BANK_DATA_SZ(bank) = dataSize;
-    BANK_PCM_PTR(bank) = pcmData;
-    BANK_PCM_SZ(bank) = pcmSize;
+    BANK_WAV_PTR(bank) = af.buffer;
+    BANK_DATA_SZ(bank) = af.pcmSize;
+    BANK_PCM_PTR(bank) = af.pcm;
+    BANK_PCM_SZ(bank) = af.pcmSize;
     BANK_SR(bank) = sampleRate;
     BANK_CH(bank) = channels;
     BANK_BPS(bank) = bitsPerSample;
@@ -542,6 +516,12 @@ int DirectSound::CreateSound(const char* wavName)
     BANK_VOL(bank) = 0;
     BANK_STATUS(bank) = 0;
     BANK_ACTIVE(bank) = 1;
+
+    // A PS1 file's loop region (AudioFile reports one only for files the
+    // migrator marked; the PC tree's BGM_33.WAV has a smpl chunk the original
+    // ignored).
+    g_BankLoopBegin[bank] = af.loopBegin;
+    g_BankLoopLength[bank] = af.loopEnd > af.loopBegin ? af.loopEnd - af.loopBegin : 0;
 
     // Create the DirectSound buffer for this bank
     NewDirectSoundBuffer((DWORD*)BANK_BASE(bank));
@@ -630,7 +610,12 @@ void InitializeSoundSystem(void)
         OutputDebugStringA(dbg);
         g_pXAudio2 = NULL;
     } else {
-        hr = g_pXAudio2->CreateMasteringVoice(&g_pMasterVoice, 2, 22050, 0, NULL, NULL);
+        // 22050 Hz, the rate every PC WAV is at. A tree the asset migrator
+        // gave the PS1 audio (37.8 / 44.1 kHz) mixes at 44.1 kHz instead, or
+        // the extra bandwidth would be thrown away.
+        hr = g_pXAudio2->CreateMasteringVoice(&g_pMasterVoice, 2,
+                                              AudioFile_TreeHasPs1Audio() ? 44100 : 22050,
+                                              0, NULL, NULL);
         if (FAILED(hr)) {
             sprintf(dbg, "[XA2] CreateMasteringVoice failed: 0x%08X\n", hr);
             OutputDebugStringA(dbg);

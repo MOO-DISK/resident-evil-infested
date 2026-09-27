@@ -10,6 +10,7 @@
 #include "../Globals.h"
 #include "../platform/platform.h"
 #include "../system/AssetPath.h"
+#include "../system/AudioFile.h"
 #include "marni/MarniSound.h"
 
 // ---------------------------------------------------------------------
@@ -346,10 +347,7 @@ int findAndOpenFile(char* path)
     char rooted[260];
     const char* src = ResolveAssetRoot(path, rooted, sizeof(rooted));
 
-    char norm[1024];
-    const char* resolved = plat_normalize_path(src, norm, sizeof(norm));
-    FILE* f = fopen(resolved, "rb");
-    if (f == NULL) return 0;
-    fclose(f);
-    return 1;
+    // AudioFile_Find: the .wav, or the .ogg the asset migrator wrote instead.
+    char found[260];
+    return AudioFile_Find(src, found, sizeof(found));
 }

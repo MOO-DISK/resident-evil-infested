@@ -96,6 +96,7 @@ of guessed. Run them from the repo root.
 - `mine_room_scd.py` — dump and decode an RDT's per-frame SCD room script.
 - `scd_widths.py` — derive SCD command argument widths from the original's dispatch table (`0x4c1110`).
 - `progress_report.py` — how many original functions are implemented in `src/` (needs a Ghidra function-entry dump; see its header).
+- `gen_ps1_audio_manifest.py` — name every PS1 sound effect, voice clip and BGM track after the PC `.wav` it replaces (PC slot tables for the candidates, audio correlation to confirm) and emit the asset migrator's `Ps1AudioManifest.h`. Needs a raw PS1 image.
 
 **Verifiers — run them after touching what they cover**
 - `verify_msg_encoding.py` — replicates the `STR()` `Encoded` constructor and compares the encoded global messages against the original bytes.

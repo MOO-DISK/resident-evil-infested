@@ -1202,17 +1202,35 @@ static void voice_load_and_play(unsigned int id)
         return;
     }
 
-    const char* name = g_StageVoiceNamesTable[voiceRow] + id * 9;
-    if (name[0] == '\0') {
-        return;
-    }
-
+    // Port-added: a PS1-only voice clip, voice\P<row>_<id>.wav, which the asset
+    // migrator writes where the PS1 plays audio at this id that no PC file
+    // holds - an id sharing its name with a different clip (stage 0 ids 99
+    // and 116 are both "V007_0d" and are not the same line), or an id whose
+    // PC name record is empty (stage 4 ids 181/182). `row` is the first table
+    // row sharing this name table, since rows 5/6 reuse rows 0/1. A PC tree
+    // has no such files, so this falls straight through to the original.
     char path[260];
-    sprintf(path, "%s%s%s", GAME_DATA_ROOT "voice\\", name, ".wav");
+    unsigned int row = voiceRow;
+    for (unsigned int r = 0; r < voiceRow; r++) {
+        if (g_StageVoiceNamesTable[r] == g_StageVoiceNamesTable[voiceRow]) {
+            row = r;
+            break;
+        }
+    }
+    sprintf(path, GAME_DATA_ROOT "voice\\P%u_%03X.wav", row, (unsigned int)id);
 
     if (findAndOpenFile(path) == 0) {
-        dbg_printf("[voice] could not open file: %s\n", path);
-        return;
+        const char* name = g_StageVoiceNamesTable[voiceRow] + id * 9;
+        if (name[0] == '\0') {
+            return;
+        }
+
+        sprintf(path, "%s%s%s", GAME_DATA_ROOT "voice\\", name, ".wav");
+
+        if (findAndOpenFile(path) == 0) {
+            dbg_printf("[voice] could not open file: %s\n", path);
+            return;
+        }
     }
 
     g_BgmSoundBank = loadSndBankFromWav(path);

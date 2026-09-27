@@ -122,6 +122,7 @@
     <ClCompile Include="src\system\DisplayConfig.cpp" />
     <ClCompile Include="src\system\Cleanup.cpp" />
     <ClCompile Include="src\system\AssetPath.cpp" />
+    <ClCompile Include="src\system\AudioFile.cpp" />
     <ClCompile Include="src\system\PngImage.cpp" />
     <ClCompile Include="src\game\FileLoader.cpp" />
     <ClCompile Include="src\game\DoorSystem.cpp" />

@@ -4,6 +4,7 @@
 #include "core/DcOverlay.h"
 #include "core/DiscImage.h"
 #include "core/Jimaku.h"
+#include "core/Ps1Audio.h"
 #include "core/Util.h"
 #include "core/Video.h"
 
@@ -175,6 +176,17 @@ bool migratePs1Supplement(const PcMigrationOptions& opts,
                           "credits need both");
     }
 
+    if (opts.ps1Audio) {
+        Ps1AudioOptions ao;
+        ao.sfx = opts.ps1AudioSfx;
+        ao.voices = opts.ps1AudioVoices;
+        ao.bgm = opts.ps1AudioBgm;
+        ao.format = opts.ps1AudioOgg ? AudioFormat::Ogg : AudioFormat::Wav;
+        ao.oggQuality = opts.ps1AudioOggQuality;
+        ao.ffmpegPath = opts.ffmpegPath;
+        if (!migratePs1Audio(img, destRoot, ao, progress, error)) return false;
+    }
+
     progress.info("PS1 credits in OG mode: set [Game] Ps1EndingCredits=1 in "
                   "config.ini");
     if (planes > 0)
@@ -201,6 +213,11 @@ bool migratePcAssets(const PcMigrationOptions& opts, const Progress& progress,
         if (error) *error = "cannot create " + destRoot;
         return false;
     }
+
+    // A PC copy restores the PC release's sounds: first drop what an earlier
+    // PS1 audio migration wrote (its .ogg files would otherwise still win over
+    // the restored .wav), then the copy puts the originals back.
+    if (!opts.sourcePath.empty()) removePs1Audio(destRoot, progress);
 
     if (opts.sourcePath.empty()) {
         progress.info("no PC source: adding the PS1 assets to the existing tree");

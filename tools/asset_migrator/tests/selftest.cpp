@@ -14,12 +14,16 @@
 //                     [--no-ps1-movies] [--ps1-replace]
 //   re1am_selftest dc <image> <target> <USA|JPN> [--no-bg] [--no-movies]
 //                     [--no-subs] [--no-verify]
+//   re1am_selftest ps1audio <image> <tree> [--no-sfx] [--no-voices] [--no-bgm]
+//                     [--ogg] [--ogg-q N] [--ffmpeg <path>]
+//   re1am_selftest bgm <image> <BGM name> <out.wav>
 
 #include "core/Assets.h"
 #include "core/Bss.h"
 #include "core/DiscImage.h"
 #include "core/Jimaku.h"
 #include "core/Migrate.h"
+#include "core/Ps1Audio.h"
 #include "core/Util.h"
 #include "core/Video.h"
 
@@ -249,6 +253,9 @@ int cmdPc(int argc, char** argv) {
             o.ps1FmvSubtitles = false;
         if (std::strcmp(argv[i], "--no-ps1-movies") == 0) o.ps1Movies = false;
         if (std::strcmp(argv[i], "--ps1-replace") == 0) o.ps1ReplaceMovies = true;
+        if (std::strcmp(argv[i], "--ps1-audio") == 0) o.ps1Audio = true;
+        if (std::strcmp(argv[i], "--ps1-ogg") == 0) o.ps1AudioOgg = true;
+        if (std::strcmp(argv[i], "--ffmpeg") == 0 && i + 1 < argc) o.ffmpegPath = argv[++i];
     }
     re1::Progress p = consoleProgress();
     std::string err;
@@ -271,6 +278,42 @@ int cmdDc(int argc, char** argv) {
     re1::Progress p = consoleProgress();
     std::string err;
     return migrateDcAssets(o, p, &err) ? 0 : 1;
+}
+
+int cmdPs1Audio(int argc, char** argv) {
+    DiscImage img;
+    std::string err;
+    if (!img.open(argv[2], &err)) {
+        std::printf("ERROR: %s\n", err.c_str());
+        return 1;
+    }
+    Ps1AudioOptions o;
+    for (int i = 4; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--no-sfx") == 0) o.sfx = false;
+        if (std::strcmp(argv[i], "--no-voices") == 0) o.voices = false;
+        if (std::strcmp(argv[i], "--no-bgm") == 0) o.bgm = false;
+        if (std::strcmp(argv[i], "--ogg") == 0) o.format = AudioFormat::Ogg;
+        if (std::strcmp(argv[i], "--ogg-q") == 0 && i + 1 < argc) o.oggQuality = std::atoi(argv[++i]);
+        if (std::strcmp(argv[i], "--ffmpeg") == 0 && i + 1 < argc) o.ffmpegPath = argv[++i];
+    }
+    re1::Progress p = consoleProgress();
+    p.step = [](int, int, const std::string&) { return true; };
+    if (!migratePs1Audio(img, argv[3], o, p, &err)) {
+        std::printf("ERROR: %s\n", err.c_str());
+        return 1;
+    }
+    return 0;
+}
+
+int cmdBgm(const std::string& image, const std::string& name,
+           const std::string& out) {
+    DiscImage img;
+    std::string err;
+    if (!img.open(image, &err) || !renderPs1Bgm(img, name, out, &err)) {
+        std::printf("ERROR: %s\n", err.c_str());
+        return 1;
+    }
+    return 0;
 }
 
 }  // namespace
@@ -296,6 +339,8 @@ int main(int argc, char** argv) {
     if (cmd == "jimaku" && argc >= 4) return cmdJimaku(argv[2], argv[3]);
     if (cmd == "pc" && argc >= 5) return cmdPc(argc, argv);
     if (cmd == "dc" && argc >= 5) return cmdDc(argc, argv);
+    if (cmd == "ps1audio" && argc >= 4) return cmdPs1Audio(argc, argv);
+    if (cmd == "bgm" && argc >= 5) return cmdBgm(argv[2], argv[3], argv[4]);
     std::printf("unknown or incomplete command\n");
     return 2;
 }

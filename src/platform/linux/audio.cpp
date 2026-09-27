@@ -16,6 +16,7 @@
 #include "platform/platform.h"
 #include "marni/MarniSound.h"
 #include "system/AssetPath.h"
+#include "system/AudioFile.h"
 
 #include <SDL2/SDL.h>
 
@@ -25,7 +26,12 @@
 #include <string.h>
 #include <unistd.h>   // access() - the silent-null-device check
 
-#define OUT_RATE     22050     // matches the Windows mastering voice
+// Mixing rate: 22050 Hz like the Windows mastering voice, the rate of every
+// PC WAV; 44100 Hz when the tree carries the asset migrator's PS1 audio
+// (37.8/44.1 kHz files). Set in InitializeSoundSystem, after the config (and so
+// the tree) is known.
+static int s_outRate = 22050;
+#define OUT_RATE     s_outRate
 #define MAX_BANKS    81        // 1..80
 
 namespace {
@@ -45,6 +51,13 @@ struct Bank {
     int      slot;
     int      status;           // 1 playing / 0 stopped
     double   pos;              // fractional frame index
+    // Port-added, the asset migrator's PS1 audio files only (AudioFile.h): the
+    // loop region in frames ([loopBegin, loopEnd), loopEnd 0 = loop the whole
+    // buffer) and linear interpolation, which the nearest-frame stepping the
+    // PC's 22 kHz files get would alias on 37.8 kHz material.
+    size_t   loopBegin;
+    size_t   loopEnd;
+    bool     ps1;
     char     name[64];
 };
 
@@ -130,15 +143,30 @@ void MixCallback(void* /*userdata*/, Uint8* stream, int len)
         const float panL = (float)(10000 - bank.pan) / 20000.0f;
         const float panR = (float)(10000 + bank.pan) / 20000.0f;
 
+        const size_t end = (bank.loop && bank.loopEnd != 0) ? bank.loopEnd : totalFrames;
         for (int f = 0; f < frames; ++f) {
             size_t i = (size_t)bank.pos;
-            if (i >= totalFrames) {
-                if (bank.loop) { bank.pos = 0.0; i = 0; }
+            if (i >= end) {
+                if (bank.loop) {
+                    const size_t begin = bank.loopEnd != 0 ? bank.loopBegin : 0;
+                    bank.pos -= (double)(end - begin);
+                    i = (size_t)bank.pos;
+                    if (i >= end) { bank.pos = (double)begin; i = begin; }
+                }
                 else { bank.playing = false; bank.status = 0; break; }
             }
 
             Sint32 l, r;
-            if (bank.channels == 1) {
+            if (bank.ps1) {
+                // Next frame for the interpolation: the loop start at the
+                // loop's end, silence past a one-shot's.
+                size_t j = i + 1;
+                if (j >= end) j = bank.loop ? (bank.loopEnd != 0 ? bank.loopBegin : 0) : i;
+                const double t = bank.pos - (double)i;
+                const int ch1 = bank.channels == 1 ? 0 : 1;
+                l = (Sint32)((1.0 - t) * ReadSample(bank, i, 0) + t * ReadSample(bank, j, 0));
+                r = (Sint32)((1.0 - t) * ReadSample(bank, i, ch1) + t * ReadSample(bank, j, ch1));
+            } else if (bank.channels == 1) {
                 l = r = ReadSample(bank, i, 0);
             } else {
                 l = ReadSample(bank, i, 0);
@@ -293,9 +321,11 @@ int DirectSound::CreateSound(const char* wavName)
     char resolved[260];
     const char* actualPath = ResolveAssetRoot(wavName, resolved, sizeof(resolved));
 
-    size_t fileSize = 0;
-    BYTE* wavData = (BYTE*)plat_file_read_all(actualPath, &fileSize);
-    if (wavData == NULL || fileSize < 44) {
+    // Same loader as the Windows backend (system/AudioFile): the WAV, or the
+    // .ogg the asset migrator wrote in its place.
+    char found[260];
+    AudioFileData af;
+    if (!AudioFile_Find(actualPath, found, sizeof(found)) || !AudioFile_Load(found, &af)) {
         // Bounded: a missing asset tree would otherwise print one line per slot.
         static int s_failLogged = 0;
         if (s_failLogged < 4) {
@@ -304,43 +334,9 @@ int DirectSound::CreateSound(const char* wavName)
                 fprintf(stderr, "[AUDIO] (further bank load failures suppressed)\n");
             }
         }
-        free(wavData);
         return 0;
     }
-    if (wavData[0] != 'R' || wavData[1] != 'I' ||
-        wavData[2] != 'F' || wavData[3] != 'F') {
-        free(wavData);
-        return 0;
-    }
-
-    // Same RIFF walk as the Windows backend.
-    DWORD offs = 12;
-    WORD  channels = 1;
-    DWORD sampleRate = 22050;
-    WORD  bitsPerSample = 8;
-    BYTE* pcmData = NULL;
-    DWORD pcmSize = 0;
-
-    while (offs + 8 <= fileSize) {
-        DWORD chunkSize = *(DWORD*)(wavData + offs + 4);
-        if (*(DWORD*)(wavData + offs) == 0x20746D66) {          // 'fmt '
-            if (chunkSize >= 16) {
-                channels      = *(WORD*)(wavData + offs + 10);
-                sampleRate    = *(DWORD*)(wavData + offs + 12);
-                bitsPerSample = *(WORD*)(wavData + offs + 22);
-            }
-        } else if (*(DWORD*)(wavData + offs) == 0x61746164) {   // 'data'
-            pcmData = wavData + offs + 8;
-            pcmSize = chunkSize;
-        }
-        offs += 8 + chunkSize;
-    }
-
-    if (pcmData == NULL || pcmSize == 0 ||
-        (bitsPerSample != 8 && bitsPerSample != 16)) {
-        free(wavData);
-        return 0;
-    }
+    BYTE* wavData = af.buffer;
 
     if (s_dev != 0) SDL_LockAudioDevice(s_dev);
 
@@ -357,11 +353,11 @@ int DirectSound::CreateSound(const char* wavName)
     Bank& b = s_banks[bank];
     FreeBank(b);
     b.wavData       = wavData;
-    b.pcm           = pcmData;
-    b.pcmSize       = pcmSize;
-    b.sampleRate    = (int)sampleRate;
-    b.channels      = (int)channels;
-    b.bitsPerSample = (int)bitsPerSample;
+    b.pcm           = af.pcm;
+    b.pcmSize       = af.pcmSize;
+    b.sampleRate    = af.sampleRate;
+    b.channels      = af.channels;
+    b.bitsPerSample = af.bitsPerSample;
     b.vol           = 0;
     b.pan           = 400;      // same default as the Windows backend
     b.slot          = 0;
@@ -370,6 +366,9 @@ int DirectSound::CreateSound(const char* wavName)
     b.loop          = false;
     b.pos           = 0.0;
     b.active        = true;
+    b.ps1           = af.ps1 != 0;
+    b.loopBegin     = af.loopBegin;
+    b.loopEnd       = af.loopEnd > af.loopBegin ? af.loopEnd : 0;
 
     const char* slash = strrchr(wavName, '/');
     const char* backslash = strrchr(wavName, '\\');
@@ -400,6 +399,8 @@ void InitializeSoundSystem(void)
         fprintf(stderr, "[AUDIO] SDL_InitSubSystem failed: %s\n", SDL_GetError());
         return;
     }
+
+    s_outRate = AudioFile_TreeHasPs1Audio() ? 44100 : 22050;
 
     SDL_AudioSpec want = {};
     want.freq     = OUT_RATE;

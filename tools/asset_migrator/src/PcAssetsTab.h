@@ -8,6 +8,7 @@ class QCheckBox;
 class QComboBox;
 class QGroupBox;
 class QLineEdit;
+class QSpinBox;
 class RunPanel;
 
 class PcAssetsTab : public QWidget {
@@ -39,5 +40,11 @@ private:
     QCheckBox* m_ps1Subs = nullptr;
     QCheckBox* m_ps1Movies = nullptr;
     QCheckBox* m_ps1Replace = nullptr;
+    QCheckBox* m_ps1Audio = nullptr;
+    QCheckBox* m_ps1AudioSfx = nullptr;
+    QCheckBox* m_ps1AudioVoices = nullptr;
+    QCheckBox* m_ps1AudioBgm = nullptr;
+    QComboBox* m_ps1AudioFormat = nullptr;
+    QSpinBox* m_ps1AudioQuality = nullptr;
     RunPanel* m_run = nullptr;
 };

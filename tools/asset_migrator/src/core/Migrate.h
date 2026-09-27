@@ -41,6 +41,18 @@ struct PcMigrationOptions {
     // prologue FMV subtitles ([Game] Ps1FmvSubtitles=1). Only the JPN releases
     // carry them; a disc without them is skipped, not an error.
     bool ps1FmvSubtitles = true;
+    // Replace the tree's sound effects, voices and BGM with the disc's (the
+    // files in <tree>/Sound and <tree>/Voice, under the PC's names). Every
+    // name the PS1 cannot supply keeps the tree's file; everything replaced is
+    // listed in Sound/PS1AUDIO.TXT. A later run with a PC source restores the
+    // PC files. Off by default.
+    bool ps1Audio = false;
+    bool ps1AudioSfx = true;
+    bool ps1AudioVoices = true;
+    bool ps1AudioBgm = true;
+    // WAV, or Ogg Vorbis at ps1AudioOggQuality (needs ffmpeg with libvorbis).
+    bool ps1AudioOgg = false;
+    int ps1AudioOggQuality = 6;
 };
 
 struct DcMigrationOptions {

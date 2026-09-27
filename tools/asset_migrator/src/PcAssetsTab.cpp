@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSpinBox>
 #include <QStandardPaths>
 #include <QVBoxLayout>
 
@@ -27,6 +28,24 @@ QWidget* pathRow(QLineEdit* edit, QPushButton* browse) {
     l->addWidget(browse);
     return w;
 }
+
+// A word-wrapped QLabel reports a minimum height for a guessed width, not the
+// one it ends up with, so the window's minimum size can come out too short and
+// the layout crops the text. Pin the minimum height to the wrapped height at
+// the label's real width so the window grows to fit it instead.
+class WrappedNote : public QLabel {
+public:
+    WrappedNote(const QString& text, QWidget* parent) : QLabel(text, parent) {
+        setWordWrap(true);
+    }
+
+protected:
+    void resizeEvent(QResizeEvent* e) override {
+        QLabel::resizeEvent(e);
+        const int h = heightForWidth(width());
+        if (h > 0 && h != minimumHeight()) setMinimumHeight(h);
+    }
+};
 
 }  // namespace
 
@@ -80,6 +99,22 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
     m_ps1Movies->setChecked(true);
     m_ps1Replace = new QCheckBox(
         tr("Replace the tree's own movies with the PS1 versions"), m_ps1);
+    m_ps1Audio = new QCheckBox(
+        tr("Replace the tree's sounds, voices and music with the PS1 audio"), m_ps1);
+    m_ps1AudioFormat = new QComboBox(m_ps1);
+    m_ps1AudioFormat->addItem(tr("WAV (lossless, ~525 MB)"), false);
+    m_ps1AudioFormat->addItem(tr("Ogg Vorbis (needs ffmpeg, ~1/5 the size)"), true);
+    m_ps1AudioQuality = new QSpinBox(m_ps1);
+    m_ps1AudioQuality->setRange(0, 10);
+    m_ps1AudioQuality->setValue(6);
+    m_ps1AudioQuality->setToolTip(tr("Vorbis quality (-q:a). 6 is transparent for "
+                                     "these sources; higher is larger."));
+    m_ps1AudioSfx = new QCheckBox(tr("Sound effects (VAB banks)"), m_ps1);
+    m_ps1AudioSfx->setChecked(true);
+    m_ps1AudioVoices = new QCheckBox(tr("Voices (CD-XA, needs a raw .bin/.cue)"), m_ps1);
+    m_ps1AudioVoices->setChecked(true);
+    m_ps1AudioBgm = new QCheckBox(tr("BGM (rendered from the PS1 sequences)"), m_ps1);
+    m_ps1AudioBgm->setChecked(true);
     {
         auto* ps1Form = new QFormLayout(m_ps1);
         ps1Form->addRow(tr("PS1 image:"), pathRow(m_ps1Image, browsePs1));
@@ -87,15 +122,32 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
         ps1Form->addRow(QString(), m_ps1Subs);
         ps1Form->addRow(QString(), m_ps1Movies);
         ps1Form->addRow(QString(), m_ps1Replace);
-        auto* ps1Note = new QLabel(
+        ps1Form->addRow(QString(), m_ps1Audio);
+        auto* audioRow = new QHBoxLayout();
+        audioRow->setContentsMargins(24, 0, 0, 0);
+        audioRow->addWidget(m_ps1AudioSfx);
+        audioRow->addWidget(m_ps1AudioVoices);
+        audioRow->addWidget(m_ps1AudioBgm);
+        audioRow->addStretch(1);
+        ps1Form->addRow(QString(), audioRow);
+        auto* formatRow = new QHBoxLayout();
+        formatRow->setContentsMargins(24, 0, 0, 0);
+        formatRow->addWidget(new QLabel(tr("Format:"), m_ps1));
+        formatRow->addWidget(m_ps1AudioFormat);
+        formatRow->addWidget(new QLabel(tr("Quality:"), m_ps1));
+        formatRow->addWidget(m_ps1AudioQuality);
+        formatRow->addStretch(1);
+        ps1Form->addRow(QString(), formatRow);
+        auto* ps1Note = new WrappedNote(
             tr("For the PS1 staff and cast rolls in OG mode "
-               "([Game] Ps1EndingCredits=1) and the Japanese prologue FMV "
-               "subtitles ([Game] Ps1FmvSubtitles=1, read from the JPN tree). "
-               "Use a raw .bin/.cue so the movie audio is intact. With a PS1 "
-               "image the PC source may be left empty to update an existing "
-               "tree."),
+               "([Game] Ps1EndingCredits=1), the Japanese prologue FMV "
+               "subtitles ([Game] Ps1FmvSubtitles=1, read from the JPN tree) "
+               "and the PS1 sound effects, voices and music, which replace the "
+               "tree's own files (running with a PC source again restores "
+               "them). Use a raw .bin/.cue so the movie audio and the voices "
+               "are intact. With a PS1 image the PC source may be left empty "
+               "to update an existing tree."),
             m_ps1);
-        ps1Note->setWordWrap(true);
         ps1Form->addRow(ps1Note);
     }
 
@@ -110,12 +162,11 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
 
     m_run = new RunPanel(this);
 
-    auto* note = new QLabel(
+    auto* note = new WrappedNote(
         tr("Copies the release's asset folders into <target>/USA or "
            "<target>/JPN. From a disc image the folders are extracted first. "
            "The base trees are only added to, never replaced."),
         this);
-    note->setWordWrap(true);
 
     auto* layout = new QVBoxLayout(this);
     layout->addWidget(note);
@@ -129,6 +180,9 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
     connect(browsePs1, &QPushButton::clicked, this, &PcAssetsTab::onBrowsePs1);
     connect(m_ps1, &QGroupBox::toggled, this, &PcAssetsTab::syncEnabled);
     connect(m_ps1Movies, &QCheckBox::toggled, this, &PcAssetsTab::syncEnabled);
+    connect(m_ps1Audio, &QCheckBox::toggled, this, &PcAssetsTab::syncEnabled);
+    connect(m_ps1AudioFormat, &QComboBox::currentIndexChanged, this,
+            &PcAssetsTab::syncEnabled);
     connect(browseTarget, &QPushButton::clicked, this, &PcAssetsTab::onBrowseTarget);
     connect(browseFfmpeg, &QPushButton::clicked, this, &PcAssetsTab::onBrowseFfmpeg);
     connect(detectFfmpeg, &QPushButton::clicked, this, &PcAssetsTab::onDetectFfmpeg);
@@ -150,6 +204,12 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
             opts.ps1FmvSubtitles = m_ps1Subs->isChecked();
             opts.ps1Movies = m_ps1Movies->isChecked();
             opts.ps1ReplaceMovies = m_ps1Replace->isChecked();
+            opts.ps1Audio = m_ps1Audio->isChecked();
+            opts.ps1AudioSfx = m_ps1AudioSfx->isChecked();
+            opts.ps1AudioVoices = m_ps1AudioVoices->isChecked();
+            opts.ps1AudioBgm = m_ps1AudioBgm->isChecked();
+            opts.ps1AudioOgg = m_ps1AudioFormat->currentData().toBool();
+            opts.ps1AudioOggQuality = m_ps1AudioQuality->value();
         }
         return new Worker(
             [opts](const re1::Progress& p, QString& error) {
@@ -165,9 +225,17 @@ PcAssetsTab::PcAssetsTab(QWidget* parent) : QWidget(parent) {
 
 void PcAssetsTab::syncEnabled() {
     const bool ps1Movies = m_ps1->isChecked() && m_ps1Movies->isChecked();
+    const bool audio = m_ps1Audio->isChecked();
+    const bool ogg = audio && m_ps1AudioFormat->currentData().toBool();
     m_keepAvi->setEnabled(m_convert->isChecked());
-    m_ffmpeg->setEnabled(m_convert->isChecked() || ps1Movies);
+    m_ffmpeg->setEnabled(m_convert->isChecked() || ps1Movies ||
+                         (m_ps1->isChecked() && ogg));
     m_ps1Replace->setEnabled(m_ps1Movies->isChecked());
+    m_ps1AudioSfx->setEnabled(audio);
+    m_ps1AudioVoices->setEnabled(audio);
+    m_ps1AudioBgm->setEnabled(audio);
+    m_ps1AudioFormat->setEnabled(audio);
+    m_ps1AudioQuality->setEnabled(ogg);
 }
 
 void PcAssetsTab::onSourceKindChanged() {

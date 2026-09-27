@@ -31,6 +31,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(RE1_SOURCES
     src/Globals.cpp
     src/system/AssetPath.cpp
+    src/system/AudioFile.cpp
     src/system/PngImage.cpp
     src/system/ConfigFile.cpp
 

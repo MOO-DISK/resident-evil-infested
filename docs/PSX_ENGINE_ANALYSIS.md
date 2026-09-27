@@ -559,11 +559,23 @@ group header holds four 4-byte channel parameters at offsets 0/4/8/12, and the
 **filter is the high nibble** (≤ 4 for 100% of them across the whole file — the
 valid XA filter range) with the shift in the low nibble. The decoder uses that.
 
-However, **no tested mode reproduces a shipped `Voice/*.wav`** (4-bit/8-bit,
-mono/stereo, all rates; best waveform NCC < 0.25), so either the `.XAS` are not
-the source of the PC voice WAVs or a mode/offset detail is still wrong. That is
-the one open item for a voice converter; it needs a CD-XA reference or a dump
-of what the PS1 SPU emits.
+**Resolved (2026-09-26): the `.XAS` ARE the source of the PC voices.** The
+earlier attempt read a 2048-byte extract as one stream, which cannot work: the
+raw sectors' subheaders show `VOICE<n>.XAS` is **16 CD-XA channels interleaved
+sector by sector** (file 1, channels 0..15 in turn, coding 0x00 = mono,
+37.8 kHz, 4-bit). `VoicePlayClip` (0x800152a4) (SLUS_005.51; the voice start from
+`cmd_voice_play`) walks the stage's offset table: clip *i* spans entries
+`p`..`p+1`, in units of one 16-sector interleave cycle, and every bit-15 entry
+closes a group - the walk skips its end word and the count of such entries is
+**added to the sector**, i.e. it is the XA channel. So clip *i* of stage *s* is
+channel `ch`, sectors `ch + 16*c` for `c` in `[start, end)` of `VOICE<s+1>.XAS`,
+named `g_StageVoiceNamesTable[s][i]`. Decoded that way, 502 of 517 named clips
+match the PC WAV at envelope correlation >= 0.9 (short clips at waveform NCC
+0.999; long ones drift, because the PC resampled 37.8 kHz to 22.05 kHz). Two
+table quirks: a name can sit at several ids with different audio (`V007_0d` is
+ids 99 and 116; 116 is the PC's), and 15 PC files match no clip of their stage
+at all. `tools/gen_ps1_audio_manifest.py` bakes the mapping into the asset
+migrator, which converts them.
 
 ### 7.6 Video
 
