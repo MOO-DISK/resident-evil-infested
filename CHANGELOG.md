@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.3.0](https://github.com/ecruells/resident-evil-pc-decomp/compare/residentevil-v1.2.0...residentevil-v1.3.0) (2026-09-27)
+
+
+### Features
+
+* added ogg audio support and ps1 audio migration ([47c653c](https://github.com/ecruells/resident-evil-pc-decomp/commit/47c653cae14e52088f97d0c471e7fa8857085949))
+* added ps1 far object culling ([758cb3b](https://github.com/ecruells/resident-evil-pc-decomp/commit/758cb3b7a1e96005024b83fbdf060062c22aba98))
+* added skip unskippable fmvs game flag ([8e78091](https://github.com/ecruells/resident-evil-pc-decomp/commit/8e780918dd3f31e096f083a64d23d597808fef92))
+* asset migration tool added ([17ecd2c](https://github.com/ecruells/resident-evil-pc-decomp/commit/17ecd2cb73625d6402d31589eda548896294a34a))
+* implemented directors cut mode support ([b189829](https://github.com/ecruells/resident-evil-pc-decomp/commit/b189829015eb5433d447382224a84974ca7c2549))
+* implemented mp4 video playback ([298dd14](https://github.com/ecruells/resident-evil-pc-decomp/commit/298dd14f5c03300ef0345284dc9361224fe11954))
+* port PS1 credit roll overlay system ([0abfc5a](https://github.com/ecruells/resident-evil-pc-decomp/commit/0abfc5a78e96cf72a37d7c0e32c3fdff8cc7cc90))
+* port Ps1 Japanese prologue fmv subtitle subsystem ([f52286b](https://github.com/ecruells/resident-evil-pc-decomp/commit/f52286bae4b5b6aa8fa06525f3454e77db302a56))
+* update dc migration to only import exclusive assets not present in PC ([a7c5835](https://github.com/ecruells/resident-evil-pc-decomp/commit/a7c5835784e78176c23c70f975ecfe3eaea079bb))
+
+
+### Bug Fixes
+
+* 2f mansion map bug regression ([72cf8f6](https://github.com/ecruells/resident-evil-pc-decomp/commit/72cf8f6eb611afd951c1cac3508e283b154a2288))
+* asset migrator build error ([4d5a29d](https://github.com/ecruells/resident-evil-pc-decomp/commit/4d5a29d88a1f35c7037b55290211ac72f50b0b51))
+* asset migrator build error ([8ec9df0](https://github.com/ecruells/resident-evil-pc-decomp/commit/8ec9df00404706be079cf1505851ae5b01342f6c))
+* items test using ascii codes instead of items id constants ([9f286d6](https://github.com/ecruells/resident-evil-pc-decomp/commit/9f286d6a3efa903e75ec7cf082d6d28ca352f69c))
+* JPN version using wrong title sound bank ([cdb5046](https://github.com/ecruells/resident-evil-pc-decomp/commit/cdb5046e4fb5f3db1d5e269f2c57ccebbbb61c42))
+* masking issues in outfit change transition for arrange outfit change ([9131ed2](https://github.com/ecruells/resident-evil-pc-decomp/commit/9131ed2a8dbbe3ee73dcb6e8370ed0004c5451ee))
+* no beretta custom in saved new game after ending an advanced run ([5a8809f](https://github.com/ecruells/resident-evil-pc-decomp/commit/5a8809f745322bd3d24ece684263b3663ae8da15))
+* offset and bad glyphs in ending result screen values for JPN version ([c251ddd](https://github.com/ecruells/resident-evil-pc-decomp/commit/c251dddbcee96889d31b62242a75e1c9c6612dcd))
+* str to mp4 timing issues ([ace7967](https://github.com/ecruells/resident-evil-pc-decomp/commit/ace79670757a86fbe7d1e0e7061d0ec1e595ca8f))
+* videos playback and DC mode path error on linux ([fb9cfcc](https://github.com/ecruells/resident-evil-pc-decomp/commit/fb9cfcc8505f6cd336bd4ababb59665e03d4ce52))
+* wrong ingram and minimi names and descriptions in DC mode ([7fa097c](https://github.com/ecruells/resident-evil-pc-decomp/commit/7fa097cb7c1b45ec9cedf216f95a2df2633d6949))
+
 ## [1.2.0](https://github.com/ecruells/resident-evil-pc-decomp/compare/residentevil-v1.1.1...residentevil-v1.2.0) (2026-09-10)
 
 
