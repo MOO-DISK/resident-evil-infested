@@ -167,9 +167,14 @@ jobs:
           # of the build directory, which Ninja also fills with the build
           # system's own files: CMakeFiles, the autogen moc output, build.ninja.
           # The Visual Studio generator avoided that by writing into Release/.
-          windeployqt --release --no-translations --no-system-d3d-compiler
-            --no-opengl-sw --dir $out
-            "tools/asset_migrator/build/re1_asset_migrator.exe"
+          # PowerShell has no implicit line continuation: the arguments go in
+          # an array and are splatted, one command on one line.
+          $deployArgs = @(
+            '--release', '--no-translations', '--no-system-d3d-compiler',
+            '--no-opengl-sw', '--dir', $out,
+            'tools/asset_migrator/build/re1_asset_migrator.exe'
+          )
+          windeployqt @deployArgs
           if ($LASTEXITCODE -ne 0) { throw "windeployqt failed" }
           # --dir deploys the libraries and plugins but not the binaries.
           Copy-Item "tools/asset_migrator/build/re1_asset_migrator.exe" $out
