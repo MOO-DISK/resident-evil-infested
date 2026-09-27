@@ -1304,31 +1304,6 @@ static void FUN_00483270(unsigned char* objPtr, int depthShift)
         if (depthField < 0) return;
         depth = depthField >> (depthShift & 0x1F);
 
-        // PS1 far plane. The original console build sorts room objects with
-        // GsSortObject5 into one of two ordering tables, sized in
-        // init_and_start_game (SLUS_005.51 0x80031d30):
-        //   shift 4  -> g_primBuf0, length 10 -> 1024 entries
-        //   shift 10 -> g_primBuf1, length  4 ->   16 entries
-        // 1024 << 4 == 16 << 10 == 16384, so both cover exactly view z
-        // 0..16383 - the same far plane at two resolutions, which is what makes
-        // it a deliberate limit rather than a side effect of one table's size.
-        //
-        // libgs does not clamp to it. The preset functions index the table as
-        // ((otz - ot->offset) >> shift) & 0xFFFF with no bound check
-        // (GsPrstTNF3, 0x8006e82c), so a primitive past 16384 links itself into
-        // memory beyond the table and DrawOTag, which only walks entries
-        // 0..length-1, never reaches it. Dropped, not clamped - hence the
-        // return here rather than a clamp on `depth`.
-        //
-        // This port has a depth buffer and no such table, so without this every
-        // distant object the switch-zone test lets through is drawn. That is
-        // what the PC release worked around by hand: ROOM302x parks its battery
-        // omodel with the visible bit cleared and ROOM715x adds a
-        // model_flag_set, where the PS1 scripts (and so the DC overlay) leave
-        // both visible; and it is what most of the per-room skips in
-        // RoomObjectRender above are for.
-        const int otEntries = ((depthShift & 0x1F) == 10) ? 16 : 1024;
-        if (depth >= otEntries) return;
     }
 
     // 0x004832cc-0x00483358: per-light colour override records copied into
