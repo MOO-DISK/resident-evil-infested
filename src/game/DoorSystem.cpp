@@ -208,6 +208,7 @@ static_assert(sizeof(DoorOrderEntry) == 0x80, "DoorOrderEntry size mismatch");
 static DoorOrderEntry   g_doorOrders[12];       // 0x00be05c0
 static short            g_doorPhase;            // 0x00be0bc4 - phase counter, +1 per loop pass
 static int              g_doorFrameCount;       // 0x007e0df8 - frame counter
+static bool             g_doorApproachSkipped;  // port-added: debug trace only
 static MATRIX           g_doorCameraMatrix;     // 0x00be0bd0 - camera from/to positions
 static short            g_doorMatrixDelta[6];   // 0x00be0bf0 - camera delta buffer
 static DoorCommandEntry g_doorCommands[8];      // 0x00be0c10
@@ -655,6 +656,8 @@ static bool DoorSkipApproach(unsigned char* p)
             camera[i] += (int)g_doorMatrixDelta[i];
         }
     }
+    g_doorApproachSkipped = true;
+    dbg_printf("[door] approach skipped at frame %d phase %d", g_doorFrameCount, g_doorPhase);
     return true;
 }
 
@@ -1121,11 +1124,25 @@ static void DoorComposeChain(ScaMatrixData* node, MATRIX* out)
 // ============================================================================
 // DoorAnimLoop (0x00444540) - the animation main loop
 // ============================================================================
+// Port-added mod: script ticks per displayed frame once loading is done.
+// Doors play at 5x; the stair files (kai01..kai04, table 0x16..0x19) have no
+// approach to skip and look rushed at that speed, so they play at 2x. The
+// stair cut is stretched by the same ratio, so the same part of the climb
+// is shown.
+#define DOOR_MOD_TICKS          5
+#define DOOR_MOD_STAIR_TICKS    2
+static bool DoorIsStairs(void)
+{
+    return DOOR_BYTEVAR2 >= 0x16 && DOOR_BYTEVAR2 <= 0x19;
+}
+
 static void DoorAnimLoop(void)
 {
     g_doorPhase = 0;
     g_doorFrameCount = 0;
+    g_doorApproachSkipped = false;
     int holdCounter = 0;
+    int gateFrame = -1;
 
     while ((g_doorState & 1) != 0) {
 
@@ -1145,9 +1162,11 @@ static void DoorAnimLoop(void)
 
         // Keep the loading phases at normal speed so asynchronous texture/model
         // creation can finish. The mod skips the approach in DoorSkipApproach
-        // and plays the remaining handle/opening scripts at 5x speed.
+        // and plays the remaining handle/opening scripts at 5x speed (stairs
+        // 2x, DoorIsStairs).
         // The cutoff still counts displayed frames.
-        int scriptTicks = zombie_mode_door_frames() >= 0 && g_doorPhase > 2 ? 5 : 1;
+        int modTicks = DoorIsStairs() ? DOOR_MOD_STAIR_TICKS : DOOR_MOD_TICKS;
+        int scriptTicks = zombie_mode_door_frames() >= 0 && g_doorPhase > 2 ? modTicks : 1;
         for (int tick = 0; tick < scriptTicks && (g_doorState & 1) != 0; tick++) {
             DoorPhaseCheck();
 
@@ -1170,6 +1189,7 @@ static void DoorAnimLoop(void)
                 }
             } else if ((g_main_state_flags2 & MSF2_SND_BUSY) == 0) {
                 g_doorState |= 2;
+                gateFrame = g_doorFrameCount;
             }
             if (tick + 1 < scriptTicks && (g_doorState & 1) != 0) {
                 g_doorPhase++;
@@ -1218,8 +1238,17 @@ static void DoorAnimLoop(void)
         // Holding any d-pad/circle button skips the animation (after frame 10).
         // Port-added mod: the mode ends every door at the same short length
         // instead, and the buttons do nothing (zombie_mode_door_frames).
+        // The cut counts from the script gate opening, not from the start: the
+        // gate waits on the sound load, which takes longer on some machines and
+        // would otherwise eat into the opening that is shown. The second limit
+        // keeps a gate that never opens from holding the door.
         int doorCut = zombie_mode_door_frames();
-        if (doorCut >= 0 ? g_doorFrameCount >= doorCut
+        if (doorCut >= 0 && DoorIsStairs()) {
+            doorCut = doorCut * DOOR_MOD_TICKS / DOOR_MOD_STAIR_TICKS;
+        }
+        bool doorCutDone = gateFrame >= 0 ? g_doorFrameCount - gateFrame >= doorCut
+                                          : g_doorFrameCount >= doorCut * 3;
+        if (doorCut >= 0 ? doorCutDone
                          : ((g_PlayerPadHeld & 0xC0) != 0) && (g_doorFrameCount > 10)) {
             g_SpriteAsyncFlag = 1;
             g_doorState = 0;
@@ -1236,6 +1265,9 @@ static void DoorAnimLoop(void)
         g_doorPhase++;
         g_doorFrameCount++;
     }
+    dbg_printf("[door] end: frames %d cut %d gate frame %d approach %s",
+               g_doorFrameCount, zombie_mode_door_frames(), gateFrame,
+               g_doorApproachSkipped ? "skipped" : "PLAYED");
 }
 
 // ============================================================================

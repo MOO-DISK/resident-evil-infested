@@ -731,12 +731,6 @@ void zombie_mode_new_game(int isNewGame)
 static void zm_shared_room_reset(void);   // with the shared-room state below
 static void zm_slot_map_reset(void);
 
-// Survivors may not return to the room they just left for ZM_ROOM_STAY_MS
-// after arrival. Other exits remain usable, while bouncing between two rooms
-// cannot keep resetting the monsters' attacks.
-#define ZM_ROOM_STAY_MS 5000
-static unsigned int s_roomEnteredMs = 0;
-
 void zombie_mode_room_reset(void)
 {
     memset(s_damageHeader, 0, sizeof(s_damageHeader));
@@ -745,7 +739,6 @@ void zombie_mode_room_reset(void)
         g_playerEntity.emdScratchPtr1 = 0;
         g_playerEntity.emdScratchPtr2 = 0;
     }
-    s_roomEnteredMs = zm_game_time_ms();
     s_survivorEntranceDoor = 0xFF;
     zm_world_room_reset();
     // A grab cannot outlive the room on either side.
@@ -2722,23 +2715,6 @@ bool zombie_mode_door_begin(const unsigned char* record)
     if (s_gameRole == ZM_NET_SURVIVOR && zm_is_last_door(record)) {
         zm_request_escape();
         return true;
-    }
-    // Only the return to the previous room is delayed. Compare the decoded
-    // stage as well as the room, since room numbers repeat across stages.
-    // Camera-only records (+0x0B bit 0x80) are always allowed.
-    if (s_gameRole == ZM_NET_SURVIVOR && (record[0x0B] & 0x80) == 0) {
-        unsigned char stage, room;
-        zm_decode_dest(record[0x0D], g_stageId, &stage, &room);
-        bool returning = stage == s_survivorPreviousStage && room == s_survivorPreviousRoom;
-        unsigned int stayed = zm_game_time_ms() - s_roomEnteredMs;
-        if (returning && stayed < ZM_ROOM_STAY_MS) {
-            char line[48];
-            snprintf(line, sizeof(line), "WAIT %u MORE SECOND%s",
-                     (ZM_ROOM_STAY_MS - stayed + 999) / 1000,
-                     (ZM_ROOM_STAY_MS - stayed + 999) / 1000 == 1 ? "" : "S");
-            zm_note(line);
-            return true;
-        }
     }
     // The director's own door into the main hall, while it is closed.
     if (s_zombieOpeningDoor && (record[0x0B] & 0x80) == 0 && zm_hall_closed(NULL)) {

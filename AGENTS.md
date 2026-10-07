@@ -626,12 +626,13 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   CPU test `tests/test_zombie_piano.py`. Untested by the user.
 - **Doors:** every door animation in the mode ends after `ZM_DOOR_FRAMES`
   (20 frames, about 0.7 s, `zombie_mode_door_frames` in DoorSystem.cpp's
-  DoorAnimLoop); the held-button skip is off, so every player's transition
+  DoorAnimLoop), counted from the script gate opening (the sound load), not
+  from the start, so a slower load does not shorten the shown opening; 60
+  frames if the gate never opens. Door scripts play at 5x after the approach
+  is skipped; stairs (kai01-04) at 2x with the cut stretched to 50 frames.
+  The held-button skip is off, so every player's transition
   takes the same time. The AI survivor's off-screen door cost uses the same
   constant. Untested by the user.
-- **Room-return cooldown:** survivors wait 5 s before returning to the room
-  they just left (`ZM_ROOM_STAY_MS`). Other exits remain usable; camera-only
-  doors are exempt.
 - **Door stun:** a survivor coming into a room stuns the monsters within
   about 6 feet (`ZM_STUN_RADIUS` 2200) of where it stands, for 5 s
   (`ZM_STUN_MS`). The survivor's copy sends STUN `{x, z, stage|room}` on its
