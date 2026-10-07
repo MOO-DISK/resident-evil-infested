@@ -101,6 +101,30 @@ set(RE1_SOURCES
     src/game/dc/EntityModels.cpp
     src/game/dc/ArrangeStages.cpp
     src/game/dc/ArrangeSoundRows.cpp
+    src/game/mods/ZombieMode.cpp
+    src/game/mods/ZombieSurvivor.cpp
+    src/game/mods/ZombieNav.cpp
+    src/game/mods/ZombieNet.cpp
+    src/game/mods/ZombieLobby.cpp
+    src/game/mods/ZombieWorld.cpp
+    src/game/mods/ZombieMap.cpp
+    src/game/mods/ZombiePerks.cpp
+    src/game/mods/ZombiePortraits.cpp
+    src/game/mods/ZombiePortraitImage.cpp
+    src/game/mods/ZombieRandom.cpp
+    src/game/mods/ZombieEconomy.cpp
+    src/game/mods/ZombieSpawnSpots.cpp
+    src/game/mods/ZombieTraps.cpp
+    src/game/mods/ZombieReinforcements.cpp
+    src/game/mods/ZombiePickups.cpp
+    src/game/mods/ZombieBox.cpp
+    src/game/mods/ZombieReconnect.cpp
+    src/game/mods/ZombieSpectate.cpp
+    src/game/mods/ZombieShotgun.cpp
+    src/game/mods/ZombiePiano.cpp
+    src/game/mods/ZombieGreenhouse.cpp
+    src/game/mods/ZombieStats.cpp
+    src/game/mods/ZombieDrops.cpp
 
     src/game/entities/Adder.cpp
     src/game/entities/BlackTiger.cpp
@@ -140,6 +164,15 @@ list(APPEND RE1_SOURCES
 )
 
 add_executable(residentevil ${RE1_SOURCES})
+
+# Keep mod audio beside the executable, independently of the game asset root.
+add_custom_target(infested_audio ALL
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:residentevil>/infested"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_CURRENT_SOURCE_DIR}/infested/audio/infested.wav"
+        "$<TARGET_FILE_DIR:residentevil>/infested/infested.wav"
+    VERBATIM)
+add_dependencies(residentevil infested_audio)
 
 target_include_directories(residentevil PRIVATE src)
 

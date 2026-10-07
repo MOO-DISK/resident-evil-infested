@@ -449,7 +449,8 @@ BOOL plat_video_init(void)
     return TRUE;   // ffmpeg is linked in; nothing to probe
 }
 
-BOOL plat_video_open_and_play(const char* path, int playToMs)
+// Shared video-only setup for playback and silent portrait extraction.
+static BOOL OpenPicture(const char* path)
 {
     FreeAll();
 
@@ -494,6 +495,40 @@ BOOL plat_video_open_and_play(const char* path, int playToMs)
         if (s_fps <= 0.0) s_fps = 10.0;
     }
 
+    s_pkt = av_packet_alloc();
+    s_frame = av_frame_alloc();
+    if (s_pkt == NULL || s_frame == NULL) { FreeAll(); return FALSE; }
+    return TRUE;
+}
+
+BOOL plat_video_read_frame(const char* path, int timeMs, unsigned char** rgba,
+                          int* width, int* height)
+{
+    if (!rgba || !width || !height) return FALSE;
+    *rgba = NULL; *width = *height = 0;
+    if (!path || timeMs < 0 || s_fmt != NULL || s_active || s_endEvent) return FALSE;
+    if (!OpenPicture(path)) return FALSE;
+    int target = (int)((double)timeMs * s_fps / 1000.0 + .5);
+    SeekTo(target); // no audio decoder was opened
+    BOOL ok = FALSE;
+    if (s_frameIndex >= target && s_rgba && s_width > 0 && s_height > 0 &&
+        s_width <= 4096 && s_height <= 4096) {
+        size_t bytes = (size_t)s_width * s_height * 4;
+        *rgba = (unsigned char*)malloc(bytes);
+        if (*rgba) {
+            memcpy(*rgba, s_rgba, bytes);
+            *width = s_width; *height = s_height;
+            ok = TRUE;
+        }
+    }
+    FreeAll();
+    return ok;
+}
+
+BOOL plat_video_open_and_play(const char* path, int playToMs)
+{
+    if (!OpenPicture(path)) return FALSE;
+
     // Audio decoder (optional)
     if (s_astream >= 0) {
         AVStream* st = s_fmt->streams[s_astream];
@@ -510,10 +545,6 @@ BOOL plat_video_open_and_play(const char* path, int playToMs)
             s_astream = -1;
         }
     }
-
-    s_pkt   = av_packet_alloc();
-    s_frame = av_frame_alloc();
-    if (s_pkt == NULL || s_frame == NULL) { FreeAll(); return FALSE; }
 
     if (s_astream >= 0) {
         DecodeAllAudio();

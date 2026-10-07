@@ -13,6 +13,7 @@
 #include "SFXIds.h"
 #include "PrintText.h"
 #include "dc/Items.h"    // lockpick item id (is_lockpick_item)
+#include "mods/ZombieMode.h"
 #include <cstdio>
 #include <cstring>
 #include "../system/AssetPath.h"
@@ -660,7 +661,7 @@ void rearrange_item_slots(void)
     unsigned char readIdx = 0;
     unsigned char writeIdx = 0;
     // Chris (0) has 6 slots, Jill (1) has 8 slots
-    int maxSlots = (4 - (((g_playerEntity.id & 3) != 1) ? 1 : 0)) * 2;
+    int maxSlots = zombie_mode_inventory_slots((4 - (((g_playerEntity.id & 3) != 1) ? 1 : 0)) * 2);
     int remaining = maxSlots;
 
     do {

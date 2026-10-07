@@ -2,6 +2,7 @@
 // All functions decompiled from Ghidra with original addresses.
 // Enemy IDs: 0 (standard zombie), 1 (naked zombie)
 #include "Zombie.h"
+#include "../mods/ZombieMode.h"
 #include "../../DebugPrint.h"
 #include <cstdlib>
 
@@ -1510,6 +1511,7 @@ static void zombie_attack_withdraw(void)
         // zombie non-colliding after every attack.
         ENTITY->status_flags &= 0xF5;
         ENTITY->hit_state = 1;
+        zombie_mode_grab_push_off();
     }
 }
 
@@ -1757,6 +1759,7 @@ void zombie_attack(void)
                 &g_playerPosScratch, 0);
             ((void(*)(void*))player_death_animations_tbl[ENTITY->attacking_direction])(
                 g_playerEntityPointer.jointsStructs);
+            if (zombie_mode_armed()) zombie_mode_begin_feeding(ENTITY);
         }
         break;
 
@@ -1778,7 +1781,7 @@ void zombie_attack(void)
             zombie_attack_withdraw();       // goto case 5
             break;
         }
-        if ((g_playerEntity.id & 1) == 0 || ENTITY->attacking_direction != 2) {
+        if (zombie_mode_player_body() == 0 || ENTITY->attacking_direction != 2) {
             ENTITY->action_state = 6;
             zombie_attack_head_bite();      // goto case 6
             break;
@@ -2191,6 +2194,7 @@ void zombie_random_chase(void)
 // ============================================================================
 void zombie_eating(void)
 {
+    if (zombie_mode_feeding_update(ENTITY)) return;
     switch (ENTITY->action_state) {
     case 0:
         ENTITY->action_state = 1;

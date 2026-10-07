@@ -21,6 +21,7 @@
 #endif
 #include <windows.h>
 #include <mmsystem.h>
+#include <vfw.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfreadwrite.h>
@@ -32,6 +33,7 @@
 #include "../../marni/MarniSystem.h"
 
 #pragma comment(lib, "winmm.lib")
+#pragma comment(lib, "vfw32.lib")
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfreadwrite.lib")
 #pragma comment(lib, "mfuuid.lib")
@@ -628,6 +630,30 @@ BOOL Init(void)
     return TRUE;
 }
 
+BOOL ReadFrame(const char* path, int timeMs, unsigned char** rgba, int* width, int* height)
+{
+    if (s_reader || s_active || s_endEvent || !Init()) return FALSE;
+    if (!OpenVideo(path, &s_width, &s_height, &s_fps)) { ReleaseReader(); return FALSE; }
+    // Establish the timestamp origin before seeking (MP4 edit-list offsets).
+    int target = (int)((double)timeMs * s_fps / 1000.0 + .5);
+    BOOL ok = FALSE;
+    if (DecodeNext()) {
+        SeekTo(target); // no audio reader/device is opened
+        if (s_frameIndex >= target && s_rgba && s_width > 0 && s_height > 0 &&
+            s_width <= 4096 && s_height <= 4096) {
+            size_t bytes = (size_t)s_width * s_height * 4;
+            *rgba = (unsigned char*)malloc(bytes);
+            if (*rgba) {
+                memcpy(*rgba, s_rgba, bytes);
+                *width = s_width; *height = s_height;
+                ok = TRUE;
+            }
+        }
+    }
+    ReleaseReader();
+    return ok;
+}
+
 BOOL Open(const char* path, int playToMs)
 {
     if (!Init()) return FALSE;
@@ -743,6 +769,67 @@ static BOOL IsLegacyAvi(const char* path)
 {
     const char* dot = strrchr(path, '.');
     return dot != NULL && _stricmp(dot, ".avi") == 0;
+}
+
+BOOL plat_video_read_frame(const char* path, int timeMs, unsigned char** rgba,
+                          int* width, int* height)
+{
+    if (!rgba || !width || !height) return FALSE;
+    *rgba = NULL; *width = *height = 0;
+    if (!path || timeMs < 0 || mf::HasMedia() || g_mciVideoDeviceID != 0) return FALSE;
+    if (!IsLegacyAvi(path)) return mf::ReadFrame(path, timeMs, rgba, width, height);
+
+    // MCI doesn't expose its pixels. VFW uses the same installed AVI/Cinepak
+    // codecs to decode one DIB without creating a window or playing audio.
+    AVIFileInit();
+    PAVISTREAM stream = NULL;
+    PGETFRAME frame = NULL;
+    BOOL ok = FALSE;
+    if (AVIStreamOpenFromFileA(&stream, path, streamtypeVIDEO, 0, OF_READ, NULL) == 0) {
+        AVISTREAMINFOA info = {};
+        if (AVIStreamInfoA(stream, &info, sizeof(info)) == 0) {
+            BITMAPINFOHEADER requested = {};
+            requested.biSize = sizeof(requested);
+            requested.biWidth = info.rcFrame.right - info.rcFrame.left;
+            requested.biHeight = info.rcFrame.bottom - info.rcFrame.top;
+            requested.biPlanes = 1;
+            requested.biBitCount = 24;
+            requested.biCompression = BI_RGB;
+            if (requested.biWidth > 0 && requested.biHeight > 0 &&
+                requested.biWidth <= 4096 && requested.biHeight <= 4096)
+                frame = AVIStreamGetFrameOpen(stream, &requested);
+            LONG sample = AVIStreamTimeToSample(stream, timeMs);
+            LONG start = AVIStreamStart(stream), length = AVIStreamLength(stream);
+            if (frame && sample >= start && sample - start < length) {
+                const BITMAPINFOHEADER* dib = (const BITMAPINFOHEADER*)AVIStreamGetFrame(frame, sample);
+                if (dib && dib->biCompression == BI_RGB && dib->biWidth > 0 &&
+                    dib->biWidth <= 4096 && dib->biHeight != 0 &&
+                    dib->biHeight >= -4096 && dib->biHeight <= 4096 &&
+                    (dib->biBitCount == 24 || dib->biBitCount == 32)) {
+                    int w = dib->biWidth, h = abs(dib->biHeight), bpp = dib->biBitCount / 8;
+                    int pitch = ((w * bpp + 3) / 4) * 4;
+                    const unsigned char* pixels = (const unsigned char*)dib + dib->biSize + dib->biClrUsed * 4;
+                    *rgba = (unsigned char*)malloc((size_t)w * h * 4);
+                    if (*rgba) {
+                        for (int y = 0; y < h; y++) {
+                            const unsigned char* src = pixels + (dib->biHeight > 0 ? h - 1 - y : y) * pitch;
+                            for (int x = 0; x < w; x++) {
+                                unsigned char* dst = *rgba + (y * w + x) * 4;
+                                dst[0] = src[x * bpp + 2]; dst[1] = src[x * bpp + 1];
+                                dst[2] = src[x * bpp]; dst[3] = 255;
+                            }
+                        }
+                        *width = w; *height = h;
+                        ok = TRUE;
+                    }
+                }
+            }
+        }
+    }
+    if (frame) AVIStreamGetFrameClose(frame);
+    if (stream) AVIStreamRelease(stream);
+    AVIFileExit();
+    return ok;
 }
 
 void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback)

@@ -187,6 +187,30 @@
     <ClCompile Include="src\game\dc\EntityModels.cpp" />
     <ClCompile Include="src\game\dc\ArrangeStages.cpp" />
     <ClCompile Include="src\game\dc\ArrangeSoundRows.cpp" />
+    <ClCompile Include="src\game\mods\ZombieMode.cpp" />
+    <ClCompile Include="src\game\mods\ZombieSurvivor.cpp" />
+    <ClCompile Include="src\game\mods\ZombieNav.cpp" />
+    <ClCompile Include="src\game\mods\ZombieNet.cpp" />
+    <ClCompile Include="src\game\mods\ZombieLobby.cpp" />
+    <ClCompile Include="src\game\mods\ZombieWorld.cpp" />
+    <ClCompile Include="src\game\mods\ZombieMap.cpp" />
+    <ClCompile Include="src\game\mods\ZombiePerks.cpp" />
+    <ClCompile Include="src\game\mods\ZombiePortraits.cpp" />
+    <ClCompile Include="src\game\mods\ZombiePortraitImage.cpp" />
+    <ClCompile Include="src\game\mods\ZombieRandom.cpp" />
+    <ClCompile Include="src\game\mods\ZombieEconomy.cpp" />
+    <ClCompile Include="src\game\mods\ZombieSpawnSpots.cpp" />
+    <ClCompile Include="src\game\mods\ZombieTraps.cpp" />
+    <ClCompile Include="src\game\mods\ZombieReinforcements.cpp" />
+    <ClCompile Include="src\game\mods\ZombiePickups.cpp" />
+    <ClCompile Include="src\game\mods\ZombieBox.cpp" />
+    <ClCompile Include="src\game\mods\ZombieReconnect.cpp" />
+    <ClCompile Include="src\game\mods\ZombieSpectate.cpp" />
+    <ClCompile Include="src\game\mods\ZombieShotgun.cpp" />
+    <ClCompile Include="src\game\mods\ZombiePiano.cpp" />
+    <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
+    <ClCompile Include="src\game\mods\ZombieStats.cpp" />
+    <ClCompile Include="src\game\mods\ZombieDrops.cpp" />
     <ClCompile Include="src\game\Rendering.cpp" />
     <ClCompile Include="src\game\JpnTextTables.cpp" />
     <ClCompile Include="src\game\PrintText.cpp" />
@@ -211,6 +235,7 @@
     <ClInclude Include="src\marni\MarniDX.h" />
     <ClInclude Include="src\marni\MarniBits.h" />
     <ClInclude Include="src\marni\Marni3DObject.h" />
+    <ClInclude Include="src\marni\TexturePages.h" />
     <ClInclude Include="src\marni\MarniInput.h" />
     <ClInclude Include="src\marni\MarniXInput.h" />
     <ClInclude Include="src\marni\MarniSound.h" />
@@ -221,9 +246,18 @@
     <ClInclude Include="src\game\TmdRenderer.h" />
     <ClInclude Include="src\game\entities\EntityCommon.h" />
     <ClInclude Include="src\game\entities\Zombie.h" />
+    <ClInclude Include="src\game\mods\ZombieMode.h" />
+    <ClInclude Include="src\game\mods\ZombieModeInternal.h" />
+    <ClInclude Include="src\game\mods\ZombieNet.h" />
     <ClInclude Include="src\system\PngImage.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <Target Name="CopyInfestedAudio" AfterTargets="Build">
+    <MakeDir Directories="$(TargetDir)infested" />
+    <Copy SourceFiles="$(ProjectDir)infested\audio\infested.wav"
+          DestinationFiles="$(TargetDir)infested\infested.wav"
+          SkipUnchangedFiles="true" />
+  </Target>
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>

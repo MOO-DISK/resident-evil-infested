@@ -21,6 +21,7 @@
 #include <cstdarg>
 #include "../DebugPrint.h"
 #include "../system/AssetPath.h"
+#include "mods/ZombieMode.h"
 
 // Forward declarations for functions only used within game_loop
 extern void FUN_00473f10(int* baseAddr, unsigned int bitIndex);
@@ -80,6 +81,10 @@ int game_loop(void)
         }
 
         fade_update();
+        if (zombie_mode_live_menu() && (g_main_state_flags & MSF_GAMEPLAY_ACTIVE) == 0) {
+            g_fading_state = -1;
+            g_main_state_flags &= ~MSF_FADE_ACTIVE;
+        }
 
         g_SpecialRoomLightState = (short)g_int_008f8898;
         Task_sleep(1);
@@ -100,6 +105,7 @@ int game_loop(void)
         // ====================================================================
 LAB_00480c33:
         do {
+            zombie_mode_reconnect_wait();
             // 0x00480c33-0x00480c4a: Per-frame random seed and reset
             g_RandSeed = (short)rand();
             // Per-frame item-use flag bank: room logic re-arms it this frame
@@ -263,10 +269,12 @@ LAB_00480d7c:
                 } else {
                     g_debugMenuOpen = 0;
                 }
+                zombie_mode_survivor_input();      // port-added mod: Richard's radio
                 if (((g_playerEntity.isBeingAttackedFlag == 0) &&
                      ((g_message_flags & 0x100) != 0) &&
                      ((g_message_flags & 0x40) != 0) &&
-                     ((g_main_state_flags & MSF_MENU_ACTIVE) == 0)))
+                     ((g_main_state_flags & MSF_MENU_ACTIVE) == 0)) &&
+                    !zombie_mode_blocks_menu())    // port-added mod: START possesses
                 {
                     // Check START+bit8 combo (Option Mode)
                     if ((((g_button_pressed_id >> 8) & 0xFF) & 9) == 9 &&
@@ -292,7 +300,11 @@ LAB_00480e89:
                 // Debug menu open: pause entity/enemy updates while it is up.
                 // g_debugMenuOpen stays 0 while debug features are disabled.
                 if (g_debugMenuOpen == 0) {
+                    zombie_mode_enemies_begin();   // port-added mod (mods/ZombieMode.h)
+                    zombie_mode_fx_capture(true);
                     update_entities();
+                    zombie_mode_fx_capture(false);
+                    zombie_mode_enemies_end();
                 }
 
                 if (((g_playerEntity.zoneFlags & 0x20) != 0) ||
@@ -303,9 +315,23 @@ LAB_00480e89:
                 }
 
                 // 0x00480ebd-0x00480ecf: Player animation and position update
-                update_player_anim();
-                g_main_state_flags2 &= ~MSF2_EFFECT_ZONE;
-                update_player_position(&g_playerEntity, 1);
+                // Port-added mod: while a zombie is possessed the player entity
+                // is the AI survivor, or parked while the survivor is in another
+                // room (mods/ZombieMode.h).
+                zombie_mode_fx_capture(true);
+                if (g_zombieModeEntity == NULL) {
+                    // A spectator's hidden player is reset by room loading.
+                    // Do not replay its death, shadow or blood in the new room.
+                    if (!zombie_mode_spectator_player_frozen()) {
+                        update_player_anim();
+                        g_main_state_flags2 &= ~MSF2_EFFECT_ZONE;
+                        update_player_position(&g_playerEntity, 1);
+                    }
+                } else {
+                    zombie_mode_player_update();
+                }
+                zombie_mode_fx_capture(false);
+                zombie_mode_net_frame();
 
                 // 0x00480ecf-0x00480f70: Screen effects, room objects, entity
                 // and player rendering, 2D effects and room sprites.
@@ -334,7 +360,7 @@ LAB_00480e89:
                             entCount = entCount - 1;
                             EntityComputeJointWorldMatrices(*(unsigned short*)&ENTITY->pad_ca);
                             EntityApplyLookAtRotation();
-                            if (g_dwEntityRenderEnabled != 0) {
+                            if (g_dwEntityRenderEnabled != 0 && !zombie_mode_hide_entity(ENTITY)) {
                                 render_entity(ENTITY);
                             }
                         }
@@ -345,13 +371,16 @@ LAB_00480e89:
                     ENTITY = (Entity*)&g_playerEntity;
                     EntityComputeJointWorldMatrices(g_playerEntity.unk_ca);
                     EntityApplyLookAtRotation();
-                    if (g_dwEntityRenderEnabled != 0) {
+                    if (g_dwEntityRenderEnabled != 0 && zombie_mode_draw_player()) {
                         render_entity((Entity*)&g_playerEntity);
                     }
 
                     // 0x00480f6e-0x00480f70: 2D effects and room sprites
                     update_2d_effects();
                     DrawRoomSpr();
+
+                    // Port-added mod: the survivor tracker (mods/ZombieMode.h).
+                    zombie_mode_draw_overlay();
                 }
 
                 // 0x00480f70-0x00480f90: Debug save menu
@@ -366,8 +395,10 @@ LAB_00480e89:
                 }
 
                 // 0x00480f90-0x00480fae: Check player death
+                // Port-added mod: the zombie mode keeps a dead survivor in the
+                // match and ends the game itself (mods/ZombieMode.h).
                 if (((g_main_state_flags2 & MSF2_ATTRACT_DEMO) == 0) &&
-                    (g_playerEntity.health < 0))
+                    (g_playerEntity.health < 0) && !zombie_mode_hold_death())
                 {
                     g_main_state_flags |= MSF_PLAYER_DEAD;
                 }
@@ -500,7 +531,7 @@ switchD_00480ff4_caseD_2:
         // 0x00481176-0x004811a5: Save light state and start menu fade
         if ((g_main_state_flags & MSF_GAMEPLAY_ACTIVE) == 0) {
             g_int_008f8898 = (int)(short)g_SpecialRoomLightState;
-            set_fading(2, 0xC00);
+            if (!zombie_mode_live_menu()) set_fading(2, 0xC00);
         } else {
             set_fading(2, 0x600);
             g_int_008f8898 = -1;

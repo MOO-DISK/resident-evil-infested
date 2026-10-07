@@ -140,6 +140,13 @@ DWORD ReadPadBoth(void)
 {
 	DWORD tmp;
 
+	// Port-added: running in the background, an unfocused copy takes no
+	// input - on Windows the keyboard is read globally, so otherwise both
+	// copies side by side would act on every key.
+	if ((g_bRunInBackground || g_bPlayAsZombie) && !g_bWindowFocused) {
+		return 0;
+	}
+
 	if (g_pMasterInputState.frameFlag != 0) {
 		g_PadBtnWord = JoyToPSX(g_pMasterInputState.keyboardPrev, 0);
 	}

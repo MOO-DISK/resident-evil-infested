@@ -113,7 +113,7 @@ const char** g_SoundBanksTable[SFX_SUBTABLE_SIZE] = {
 // ============================================================================
 // Wrappers using g_pDirectSound
 // ============================================================================
-int loadSndBankFromWav(const char* path)
+int loadSndBankFromWav(const char* path, bool muffled)
 {
     // Callers build the path with GAME_DATA_ROOT, so it is already correct for the
     // build configuration - nothing to rewrite here.
@@ -122,7 +122,7 @@ int loadSndBankFromWav(const char* path)
         // stub (FUN_00420290). The async wrapper would overwrite the single
         // callback slot on each call, so batch loading via LoadSoundBank
         // would lose all but the last callback.
-        g_sndload_bank_index = g_pDirectSound->CreateSound(path);
+        g_sndload_bank_index = g_pDirectSound->CreateSound(path, muffled);
     } else {
         OutputDebugStringA("[DEBUG] loadSndBankFromWav: g_pDirectSound NOT READY\n");
         g_sndload_bank_index = 0;

@@ -27,6 +27,7 @@
 #include "../Globals.h"
 #include "../system/AssetPath.h"
 #include "FileLoader.h"
+#include "mods/ZombieMode.h"
 #include <math.h>
 
 // Locally-declared helpers (declared here because Globals.h does not cover
@@ -445,7 +446,8 @@ void die_state(void)
     g_main_state_flags      = (g_main_state_flags & ~(MSF_SCREEN_MODE_MASK | MSF_INTENSITY_RAMP)) | MSF_SCREEN_STANDALONE;
 
     // Skip the death screen entirely in attract/demo mode (0x90000000).
-    if ((g_main_state_flags2 & (MSF2_DEATH_VARIANT | MSF2_ATTRACT_DEMO)) == 0) {
+    // Port-added mod: a zombie-mode match ends on its own screen (mods/ZombieMode.h).
+    if ((g_main_state_flags2 & (MSF2_DEATH_VARIANT | MSF2_ATTRACT_DEMO)) == 0 && !zombie_mode_match_over()) {
         display_die_screen();
     }
 

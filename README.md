@@ -53,6 +53,18 @@ build_debug.bat
 ```
 This produces `bin\Debug\residentevil.exe`.
 
+In VS Code, press **Ctrl+Shift+B** for Release / Win32, or choose
+**Tasks: Run Build Task** for Debug / Win32. The tasks use the .NET CLI:
+```
+dotnet build Build.proj -c Release
+dotnet build Build.proj -c Debug
+```
+`Build.proj` delegates to the same build scripts and builds `Game.sln` with
+Visual Studio's MSBuild. Install the .NET SDK in addition to the C++ build
+tools for this entry point. Direct `dotnet build Game.sln` does not work:
+the SDK's MSBuild cannot run this project's native Visual C++ build tasks.
+The `RE1_TOOLSET` and `RE1_SDK` overrides below also apply to these commands.
+
 Both scripts find MSBuild with `vswhere.exe`, so any Visual Studio edition and
 version (2017 or newer) works without editing a path. The solution itself pins
 `PlatformToolset=v145` / SDK `10.0.26100.0`; on an older installation override

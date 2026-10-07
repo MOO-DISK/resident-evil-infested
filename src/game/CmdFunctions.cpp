@@ -2,6 +2,7 @@
 // All functions in this file are entries in the script_command_funcs_table[81].
 // Each function takes no parameters and returns int (0 = stop, 1 = continue).
 #include "../Globals.h"
+#include "mods/ZombieMode.h"
 #include <cstdio>
 #include <cstring>
 #include "../DebugPrint.h"
@@ -402,6 +403,7 @@ int cmd_room_action_set(void)
     *(unsigned short*)(entry + 4) = *(unsigned short*)(g_ScdOpcodes + 14);
     *(unsigned short*)(entry + 6) = *(unsigned short*)(g_ScdOpcodes + 16);
     *(unsigned int*)(entry + 8) = (unsigned int)(g_ScdOpcodes + 2);
+    zombie_mode_item_action(itemSlot);
     g_ScdOpcodes += 18;
     return 1;
 }
@@ -477,6 +479,7 @@ int cmd_room_action_reset(void)
     *(unsigned short*)(&g_RoomActionTable[base + 2]) = *(unsigned short*)(g_ScdOpcodes - 6);
     *(unsigned short*)(&g_RoomActionTable[base + 4]) = *(unsigned short*)(g_ScdOpcodes - 4);
     *(unsigned short*)(&g_RoomActionTable[base + 6]) = *(unsigned short*)(g_ScdOpcodes - 2);
+    zombie_mode_item_action((unsigned char)(base / 0xc));
     return 1;
 }
 
@@ -495,6 +498,7 @@ int cmd_room_action_arm(void)
     g_ScdOpcodes += 4;
     g_RoomActionTable[base]     = g_ScdOpcodes[-2];
     g_RoomActionTable[base + 1] = g_ScdOpcodes[-1];
+    zombie_mode_item_action((unsigned char)(base / 0xc));
     return 1;
 }
 
@@ -509,7 +513,10 @@ int cmd_scd_event_create(void)
     // it a byte at a time made scriptIndex constant 0.
     g_ScdOpcodes += 2;
     unsigned short param = scd_read_u16(0);
-    ScdEventEntry_Create(param & 0xFF, param >> 8);
+    // Port-added mod: play-as-zombie has no story, so no story scenes.
+    if (!zombie_mode_skip_scd_event(param >> 8)) {
+        ScdEventEntry_Create(param & 0xFF, param >> 8);
+    }
     g_ScdOpcodes += 2;
     return 1;
 }
@@ -610,6 +617,8 @@ int cmd_sfx_3d_play(void)
 int cmd_item_model_set(void)
 {
     dbg_printf("ITEM MODEL START %s\n", "imodel_set");
+    // Port-added mod: this game's item at the spot (mods/ZombieRandom.cpp).
+    zombie_mode_item_spot(g_ScdOpcodes);
 
     // skip ink ribbon model set if jill's first playthrough
     if ((char)g_ScdOpcodes[10] == ITEM_INK_RIBBONS && (g_playerEntity.id & 3) == 1) {
@@ -663,15 +672,29 @@ int cmd_item_model_set(void)
 
     char* modelPtr = (char*)g_item_model_table[g_ScdOpcodes[0xc]];
     int* itemModelData = (int*)((char*)g_RdtPointer->item_models + (unsigned int)g_ScdOpcodes[0xc] * 8);
+    // Port-added mod: a randomized spot shows its new item - that item's view
+    // model, rescaled and already on its own texture pages (mods/ZombieRandom.cpp).
+    const int* modLook = zombie_mode_item_look(g_ScdOpcodes);
+    // "The room's first item model" was g_ItemModelCount == 0; with a mod look
+    // bound first that count is no longer 0 when the room's own first model
+    // comes, so it is tracked on its own. Identical without the mod.
+    static bool s_roomItemBound = false;
+    if ((char)g_ItemModelCount == 0) s_roomItemBound = false;
 
     // spriteInfo is chosen per branch below (it is NOT always modelPtr+0x20).
     MATRIX* spriteInfo = (MATRIX*)(modelPtr + 0x20);
 
-    if (*itemModelData == 0) {
+    if (modLook == NULL && *itemModelData == 0) {
         modelPtr[0x14] = 0; modelPtr[0x15] = 0;
         modelPtr[0x16] = 0; modelPtr[0x17] = 0;
     } else {
-        if (((char)g_ItemModelCount == 0 || DAT_00bca0d0[1] != itemModelData[1]) && itemModelData[1] != 0) {
+        if (modLook != NULL) {
+            // The room's item texture state (DAT_008e1c78/70, DAT_00bca0d0)
+            // is left as it was, so the room's own items after this one bind
+            // as they would have.
+            FUN_00473ea0(modLook[0], modelPtr + 0xc, (ScaMatrixData*)(modelPtr + 0x1c));
+        } else {
+        if ((!s_roomItemBound || DAT_00bca0d0[1] != itemModelData[1]) && itemModelData[1] != 0) {
             DAT_008e1c78 = g_TextureBankID;
             DAT_008e1c70 = g_TextureCurrentPage;
             ClearTmdProcessingFlag();
@@ -695,12 +718,13 @@ int cmd_item_model_set(void)
             }
             ProcessTmdAsync((unsigned int)itemModelData[1]);
         }
-        if ((char)g_ItemModelCount == 0 || *itemModelData != *DAT_00bca0d0) {
+        if (!s_roomItemBound || *itemModelData != *DAT_00bca0d0) {
             ProcessTmdTextures(2, (unsigned int*)(unsigned int)*itemModelData, DAT_008e1c78, DAT_008e1c70);
         }
         FUN_00473ea0(*itemModelData, modelPtr + 0xc, (ScaMatrixData*)(modelPtr + 0x1c));
         if ((char)g_ScdOpcodes[10] == ITEM_CRANK_HEX) {
             FUN_004870d0(*(int*)(modelPtr + 0x18));
+        }
         }
 
         // SCA parent: what the pos operands below are RELATIVE TO. They land in
@@ -804,7 +828,10 @@ int cmd_item_model_set(void)
 
     *(char*)&g_ItemModelCount = (char)g_ItemModelCount + 1;
     g_ScdOpcodes += 0x1a;
-    DAT_00bca0d0 = itemModelData;
+    if (modLook == NULL) {                                   // port-added mod: see above
+        DAT_00bca0d0 = itemModelData;
+        s_roomItemBound = true;
+    }
     dbg_printf("ITEM MODEL END %s\n", "imodel_set");
     return 1;
 }
@@ -885,6 +912,17 @@ int cmd_enemy_set(void)
         ENTITY->animationId = g_ScdOpcodes[0x13];
         ENTITY->animation_frame_id = g_ScdOpcodes[0x14];
         ENTITY->timing_control = 1;
+    }
+
+    // Port-added mod (mods/ZombieWorld.cpp): the persistent monster roster
+    // can put this monster where it was last left, or keep a dead one away -
+    // the unconditional records (+0x04) included, which the original spawns
+    // fresh on every visit.
+    if (!zombie_mode_enemy_spawn(ENTITY, enemySlot, g_ScdOpcodes[1])) {
+        ENTITY->status_flags = 0;
+        g_ScdOpcodes += 0x16;
+        dbg_printf("ENEMY SET END %s\n", "enemy_set");
+        return 1;
     }
 
     if (ENTITY->status_flags & 1) {
@@ -1505,6 +1543,11 @@ int cmd_enemy_prop_set(void)
 // ============================================================================
 int cmd_fmv_set(void)
 {
+    // Port-added mod: play-as-zombie has no story, so no cutscene movies.
+    if (zombie_mode_armed()) {
+        g_ScdOpcodes += 2;
+        return 1;
+    }
     g_main_state_flags |= MSF_FMV_REQUEST;
     *(unsigned char*)&g_selectedFmvId = (unsigned char)(scd_read_u16(0) >> 8);
     g_fmvDataPointer = g_loadDataDestPointer;

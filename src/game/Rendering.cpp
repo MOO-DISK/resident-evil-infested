@@ -9,6 +9,7 @@
 #include "dc/Items.h"    // lockpick item id (is_lockpick_item)
 #include "SpriteRenderer.h"
 #include "TmdRenderer.h"
+#include "mods/ZombieMode.h"
 #include <cstdlib>
 #include <cstdio>
 #include <time.h>
@@ -27,7 +28,8 @@ extern void rearrange_item_slots(void);
 // per-glyph text sprites (~390 sprites with hints) - at the original 300 the queue
 // overflowed, silently dropping the bottom rows AND the background quad that
 // OT_InsertPrimitive adds at present time, which blacked the whole screen.
-#define MAX_PENDING_SPRITES 512
+// Diagonal PvP map fills use clipped scanline runs, in addition to UI sprites.
+#define MAX_PENDING_SPRITES 32768
 
 // Pending sprites at or above this depth are scene elements drawn BEFORE the
 // 3D TMD pass (room backgrounds, window fills); below it they are overlays that
@@ -56,6 +58,12 @@ MarniHandle g_displayImageSRV = MARNI_NULL_HANDLE;
 // FrameRateGovernor before FlushSpriteCommands.
 // ============================================================================
 int AddTintSprite(TextureDesc* texture, unsigned short brightness)
+{
+    return AddTintSpriteScaled(texture, brightness, 1.0f);
+}
+
+// Scale the destination quad only; keep the complete bitmap glyph UVs.
+int AddTintSpriteScaled(TextureDesc* texture, unsigned short brightness, float textScale)
 {
     if (g_pendingSpriteCount >= MAX_PENDING_SPRITES) return 0;
 
@@ -93,8 +101,8 @@ int AddTintSprite(TextureDesc* texture, unsigned short brightness)
 
     float screenX = gameX * scaleX;
     float screenY = gameY * scaleY;
-    float charW = (float)texture->width * scaleX;
-    float charH = (float)texture->height * scaleY;
+    float charW = (float)texture->width * scaleX * textScale;
+    float charH = (float)texture->height * scaleY * textScale;
 
     // Font page select. The original's AddTintSprite looks `texturePage` up in
     // the texture-page table (JPN 0x00441120 / USA 0x0046e0a0 search slots
@@ -1184,6 +1192,8 @@ static const unsigned char** dc_usa_item_names(void)
 
 unsigned char* message_item_name_lookup(unsigned char itemId)
 {
+    unsigned char* modName = zombie_mode_pickaxe_name(itemId);
+    if (modName) return modName;
     // The Japanese release has its own pair of tables (0x004cd388/0x004cd548,
     // read by its message_item_name_lookup at 0x00491440) holding the names in
     // FONT.TIM's encoding. The USA strings would still draw - the two fonts

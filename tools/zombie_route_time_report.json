@@ -1,0 +1,105 @@
+{
+  "model": "straight-line room walks at run speed, fixed door/pickup/crest costs; no combat",
+  "parameters": {
+    "run_units_per_second": 6300,
+    "detour": 1.35,
+    "door_seconds": 0.75,
+    "pickup_seconds": 2.0,
+    "crest_seconds": 16.0,
+    "team": 3
+  },
+  "seeds": 1000,
+  "solved": 1000,
+  "failures": [],
+  "solo_minutes": {
+    "0": 2.04,
+    "10": 2.58,
+    "50": 3.12,
+    "90": 3.66,
+    "95": 3.78,
+    "99": 4.04,
+    "100": 4.59
+  },
+  "team_minutes": {
+    "0": 1.71,
+    "10": 2.28,
+    "50": 2.83,
+    "90": 3.42,
+    "95": 3.56,
+    "99": 3.86,
+    "100": 4.19
+  },
+  "slowest_solo": [
+    {
+      "seed": 56709709,
+      "status": "solved",
+      "solo_seconds": 275.3,
+      "team_seconds": 219.4,
+      "team_rounds": [
+        63.3,
+        35.3,
+        36.6,
+        39.7,
+        44.4
+      ],
+      "crossings": 63
+    },
+    {
+      "seed": 3141722291,
+      "status": "solved",
+      "solo_seconds": 266.3,
+      "team_seconds": 251.3,
+      "team_rounds": [
+        55.5,
+        44.7,
+        36.0,
+        40.5,
+        30.1,
+        44.4
+      ],
+      "crossings": 65
+    },
+    {
+      "seed": 1779861934,
+      "status": "solved",
+      "solo_seconds": 264.3,
+      "team_seconds": 239.6,
+      "team_rounds": [
+        84.3,
+        38.0,
+        36.6,
+        36.3,
+        44.4
+      ],
+      "crossings": 60
+    },
+    {
+      "seed": 151096047,
+      "status": "solved",
+      "solo_seconds": 253.8,
+      "team_seconds": 180.5,
+      "team_rounds": [
+        63.3,
+        33.1,
+        39.7,
+        44.4
+      ],
+      "crossings": 59
+    },
+    {
+      "seed": 1399918424,
+      "status": "solved",
+      "solo_seconds": 248.3,
+      "team_seconds": 245.3,
+      "team_rounds": [
+        59.3,
+        34.6,
+        36.5,
+        37.2,
+        33.2,
+        44.4
+      ],
+      "crossings": 58
+    }
+  ]
+}
