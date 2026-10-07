@@ -464,6 +464,13 @@ LAB_00463966:
             menu_exit_cleanup();
         }
 
+        if (liveMenu && g_MainMenuState != 7 && zm_access_menu_finished()) {
+            // An accepted USE of the battery: it goes in once the menu is
+            // closed (ZombieKeypad.cpp).
+            g_menu_choice_id = 0;
+            menu_exit_cleanup();
+        }
+
         if (liveMenu && g_MainMenuState != 7 && zm_shotgun_menu_finished()) {
             // A host-confirmed placement/rescue returns to the room through
             // normal cleanup. Do not treat it as damage: preserve the usual
@@ -1094,9 +1101,11 @@ static void display_item_qty(unsigned char itemId, unsigned char qty, int depth)
 
     // Normal numeric quantity display
     // (flag 0x7E grants infinite quantity for certain items like the rocket launcher)
-    if (!(hasInfPython != 0 && itemId == ITEM_COLT_PYTHON_MAG)
+    // Port-added mod: the mode's Ingram shows its rounds, not the infinity.
+    if (zombie_mode_ingram_finite(itemId) ||
+        (!(hasInfPython != 0 && itemId == ITEM_COLT_PYTHON_MAG)
         && ((hasInfRLauncher == 0 && itemId <= ITEM_NON_INFINITE_MAX) ||
-            (itemId != ITEM_ROCKET_LAUNCHER && itemId <= ITEM_NON_INFINITE_MAX)))
+            (itemId != ITEM_ROCKET_LAUNCHER && itemId <= ITEM_NON_INFINITE_MAX))))
     {
         // Clip quantity display for certain weapon types
         if (itemId != ITEM_FLAMETHROWER && itemId < ITEM_CLIP)
@@ -1630,6 +1639,13 @@ static int menu_item_use_item(void)
     if (zombie_mode_armed() && g_bItemMenuSelectedItemId == ITEM_MUSIC_NOTES) {
         if (zm_piano_use()) DAT_00ae9f13 |= 2;
         else DAT_00ae9f22 = 1; // the piano supplies the refusal text
+        return 0;
+    }
+    // Port-added mod: the battery powers the small elevator, at either of its
+    // doors (ZombieKeypad.cpp).
+    if (zombie_mode_armed() && g_bItemMenuSelectedItemId == ITEM_BATTERY) {
+        if (zm_access_use_battery()) DAT_00ae9f13 |= 2;
+        else DAT_00ae9f22 = 1; // the elevator supplies the refusal text
         return 0;
     }
     if (zombie_mode_armed() && g_bItemMenuSelectedItemId == ITEM_BROKEN_SHOTGUN) {
@@ -6590,10 +6606,11 @@ static void (*const g_viewerActions[4])(void) = {
 // Returns non-zero when the viewer finishes and the menu should continue.
 int FUN_0044e1b0(void)
 {
-    // Zombie-mode pickups use four original animation steps per frame.
-    // Keep the timer in original units so the light and sprite fades follow.
-    const int pickupAnimStep = zombie_mode_armed() &&
-        (DAT_00ae9f10 == 3 || DAT_00ae9f10 == 4) ? 4 : 1;
+    // Zombie-mode viewers - pickups and the inventory's CHECK alike - use
+    // four original animation steps per frame. Keep the timer in original
+    // units so the light and sprite fades follow (0x40 is a multiple of 4,
+    // so the spin still lands on the resting pose).
+    const int pickupAnimStep = zombie_mode_armed() ? 4 : 1;
     int iVar1;
     unsigned int uVar7;
     unsigned char bVar4;

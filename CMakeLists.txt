@@ -122,6 +122,7 @@ set(RE1_SOURCES
     src/game/mods/ZombieSpectate.cpp
     src/game/mods/ZombieShotgun.cpp
     src/game/mods/ZombiePiano.cpp
+    src/game/mods/ZombieKeypad.cpp
     src/game/mods/ZombieGreenhouse.cpp
     src/game/mods/ZombieStats.cpp
     src/game/mods/ZombieDrops.cpp

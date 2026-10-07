@@ -87,6 +87,7 @@ static void generate(unsigned int seed) {
                 int li = rnd_lock_index(d.lock & 0x3F);
                 requirement = rnd_item_bit(li >= 0 ? s_lockKey[li] : d.need);
             }
+            requirement |= (int)d.access;     // the battery's elevator, the note's keypad door
             printf("%s[%d,%d,%d,%d,%d,%d]", n++ ? "," : "", d.fromStage, d.fromRoom, d.toStage, d.toRoom,
                    requirement, d.slot);
         }

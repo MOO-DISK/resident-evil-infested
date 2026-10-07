@@ -208,6 +208,7 @@
     <ClCompile Include="src\game\mods\ZombieSpectate.cpp" />
     <ClCompile Include="src\game\mods\ZombieShotgun.cpp" />
     <ClCompile Include="src\game\mods\ZombiePiano.cpp" />
+    <ClCompile Include="src\game\mods\ZombieKeypad.cpp" />
     <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
     <ClCompile Include="src\game\mods\ZombieStats.cpp" />
     <ClCompile Include="src\game\mods\ZombieDrops.cpp" />

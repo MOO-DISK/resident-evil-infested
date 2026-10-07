@@ -35,18 +35,19 @@ def main():
     names = ["STAGE_MANSION_RETURN_1F", "STAGE_MANSION_RETURN_2F",
              "ROOM_MAIN_HALL", "ROOM_STOREROOM", "ROOM_TRAP_ROOM", "ROOM_LIVING_ROOM",
              "ROOM_LESSON_ROOM", "ROOM_MANSION_B1_PASSAGE_1", "ROOM_MANSION_KITCHEN",
-             "ITEM_MUSIC_NOTES", "ITEM_CHEMICAL", "ITEM_RED_JEWEL"]
+             "ITEM_MUSIC_NOTES", "ITEM_CHEMICAL", "ITEM_RED_JEWEL", "ITEM_BATTERY"]
     names += re.findall(r"\bITEM_[A-Z_]+", source[source.index("static const unsigned char kKeys"):
                                                source.index("struct RndDoor")])
     defines = []
     for name in names:
         defines.append(re.search(r"^#define\s+" + name + r"\s+[^\n]+", types, re.M).group())
+    defines.append("#define ITEM_ZM_PASS_NOTE 0xF0")      # ZombieModeInternal.h
     declarations = source[source.index("#define RND_STAGE_1F"):source.index("static unsigned char s_rdt[")]
     functions = "\n".join(function(source, name) for name in (
         "rnd_next", "rnd_below", "rnd_is_key", "rnd_lock_index",
-        "rnd_door_key_lock", "rnd_room_index", "rnd_door_open", "rnd_reach", "rnd_item_bit",
-        "rnd_route_cost", "rnd_puzzle_room", "rnd_key_item_room", "rnd_key_spot_ok", "rnd_pick_key_spot",
-        "rnd_generate_once"))
+        "rnd_door_key_lock", "rnd_room_index", "rnd_item_bit", "rnd_door_open", "rnd_reach",
+        "rnd_route_state", "rnd_route_owned", "rnd_route_cost", "rnd_puzzle_room", "rnd_key_item_room",
+        "rnd_key_spot_ok", "rnd_pick_key_spot", "rnd_pick_back_spot", "rnd_generate_once"))
     harness = r'''
 static void fixture(int gated, int rooms) {
     s_spotCount = s_doorCount = 0;

@@ -26,6 +26,11 @@ ITEM_IDS = (0x33, 0x34, 0x35, 0x36, 0x29, 0x2C, 0x2D, 0x2E)
 ITEM_NAMES = ("sword key", "armor key", "shield key", "helmet key",
               "wind crest", "moon crest", "star crest", "sun crest")
 BITS = {item: 1 << i for i, item in enumerate(ITEM_IDS)}
+# The back area's ways in (ZombieRandom.cpp RND_BIT_*): the battery runs the
+# small elevator, the note's pass number opens the keypad door.
+ACCESS_IDS = (0x27, 0xF0)
+ACCESS_NAMES = {0x1000: "battery", 0x2000: "pass number note"}
+BITS.update({0x27: 0x1000, 0xF0: 0x2000})
 
 
 def between(source, start, end):
@@ -104,7 +109,8 @@ def build_adapter(directory, compiler=None):
 
 
 def names(mask):
-    return [name for i, name in enumerate(ITEM_NAMES) if mask & (1 << i)]
+    return ([name for i, name in enumerate(ITEM_NAMES) if mask & (1 << i)] +
+            [name for bit, name in ACCESS_NAMES.items() if mask & bit])
 
 
 def room_label(room):

@@ -100,6 +100,11 @@ unsigned int set_message_display(unsigned short msg_id, unsigned short pause_gam
         }
     }
 
+    // Port-added mod: the zombie mode's own text (mods/ZombieMessages.cpp).
+    if (const unsigned char* custom = zombie_mode_message_custom()) {
+        g_MessagePtr = (unsigned char*)custom;
+    }
+
     // Port-added mod: the zombie mode keeps the room running under a message -
     // nothing paused when it asks nothing, only the survivor's control when it
     // asks Yes/No (mods/ZombieMessages.cpp).

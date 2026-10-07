@@ -667,6 +667,13 @@ int cmd_item_model_set(void)
         visFlag &= 0xd;
     }
     entry[0] = visFlag;
+    // Port-added mod: the special weapons never lie in a room in the
+    // original, and their high ids pick the document handler (0xD); the
+    // mode's Ingram (the candle room's prize, a survivor's drop) is picked up
+    // like any item.
+    if (zombie_mode_armed() && visFlag != 0 && (itemType == ITEM_INGRAM || itemType == ITEM_MINIMI)) {
+        entry[0] = 4;
+    }
 
     // The original READS the word at +0x18, then WRITES BACK `word & 1` into the
     // opcode stream, and stores that masked value in entry+2. Everything after

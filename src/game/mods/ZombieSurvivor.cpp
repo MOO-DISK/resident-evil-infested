@@ -232,6 +232,8 @@ bool zm_door_usable(const ZmDoor* d, unsigned char stage, unsigned char room)
     if ((d->lock & 0x80) != 0 && Flg_ck((int)g_LocksFlags, d->lock & 0x3F) == 0) return false;
     // The director's LOCK DOORS trap on either side (ZombieTraps.cpp).
     if (zm_trap_door_locked(stage, room, d->dest, d->flags0B, NULL)) return false;
+    // The unpowered elevator, the keypad door before its pass number (ZombieKeypad.cpp).
+    if (zm_access_door_closed(stage, room, d->dest)) return false;
     unsigned char ds, dr;
     zm_decode_dest(d->dest, stage, &ds, &dr);
     return !(ds == stage && dr == room);

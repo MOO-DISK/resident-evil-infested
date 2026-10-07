@@ -234,7 +234,8 @@ void zm_map_set_route(int level, bool monsters, bool players, const char* status
 static bool map_is_key_item(unsigned char id)
 {
     return (id >= ITEM_SWORD_KEY && id <= ITEM_HELMET_KEY) || id == ITEM_WIND_CREST ||
-           id == ITEM_MOON_CREST || id == ITEM_STAR_CREST || id == ITEM_SUN_CREST;
+           id == ITEM_MOON_CREST || id == ITEM_STAR_CREST || id == ITEM_SUN_CREST ||
+           id == ITEM_BATTERY || id == ITEM_ZM_PASS_NOTE;     // the back area's ways in
 }
 
 static const char* map_item_name(unsigned char id)
@@ -248,6 +249,8 @@ static const char* map_item_name(unsigned char id)
     case ITEM_MOON_CREST:      return "MOON CREST";
     case ITEM_STAR_CREST:      return "STAR CREST";
     case ITEM_SUN_CREST:       return "SUN CREST";
+    case ITEM_BATTERY:         return "BATTERY";
+    case ITEM_ZM_PASS_NOTE:    return "PASS NUMBER NOTE";
     case ITEM_BERETTA:         return "HANDGUN";
     case ITEM_SHOTGUN:         return "SHOTGUN";
     case ITEM_COLT_PYTHON_MAG: return "MAGNUM";
@@ -256,6 +259,7 @@ static const char* map_item_name(unsigned char id)
     case ITEM_BAZOOKA_ACID:
     case ITEM_BAZOOKA_FLAME:   return "GRENADE LAUNCHER";
     case ITEM_ROCKET_LAUNCHER: return "ROCKET LAUNCHER";
+    case ITEM_INGRAM:          return "INGRAM";
     case ITEM_CLIP:            return "CLIP";
     case ITEM_SHELLS:          return "SHELLS";
     case ITEM_MAGNUM_ROUNDS:   return "MAGNUM ROUNDS";
@@ -837,6 +841,9 @@ void zm_map_draw(void)
         }
         map_text(8, 200, 0x7F, s_routeStatus);
         map_text(8, 226, 0x7F, s_routeHelp);
+        // The survivor's files: the keypad's pass number, once its note is read.
+        const char* files = s_routePlayers ? zm_access_files_line() : NULL;
+        if (files != NULL) map_text(312 - (int)strlen(files) * 6, 226, 0x8F, files);
         return;
     }
 

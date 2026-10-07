@@ -247,7 +247,17 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Looks: a spot whose item changed shows the new item - its inventory view
     model (`item_m2/iNNv.ivm`), rescaled to a size for its kind, stood on the
     floor (turned flat when it is tallest along y), its texture on the mod's
-    page counter (`zombie_mode_item_look` in `cmd_item_model_set`).
+    page counter (`zombie_mode_item_look` in `cmd_item_model_set`). A record
+    of the room's own turns the new look a quarter when its long side runs
+    across the room model's (x against z), so it lies along the shelf or
+    table the original did (`rnd_match_orientation`); it also moves onto
+    the room model's centre and bottom, and a raised spot (record y above
+    -100) keeps its footprint inside the smallest solid collision box
+    under it, moved in only as far as needed (`rnd_keep_on_furniture`,
+    `[random] look kept on the furniture` in the debug log). Untested by
+    the user.
+  - The item viewer (pickups and the inventory's CHECK) runs at four steps
+    a frame in the mode (`FUN_0044e1b0`'s `pickupAnimStep`).
   - Route proof (`rnd_reach`): doors whose trigger a script can switch off
     follow the reviewed `kDoorGates` table (unlisted ones count as closed);
     a room counts only if the main hall is reachable back from it; keys,
@@ -267,6 +277,35 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     crossings, `rnd_route_cost`), the sheet music and the chemical, each in
     a leaf room of its own (`rnd_place_key_items`). The bar's own sheet
     music record becomes a supply.
+  - Chris's-room gates (`rnd_chris_gate`): an `if` whose only condition is
+    "Chris's version of the room" (MSF_CHAR_VARIANT clear) always runs in
+    the mode, so its item records count as top level and its else (Jill's)
+    is left out - for the item spots only; doors keep the plain nesting.
+    The small key opens nothing in the mode (`check_desk` lets everyone
+    in), so its spots take items too: the terrace passage's (ROOM7110,
+    flag 0x95) and the storeroom's (ROOM61B0, flag 0x22, no key items
+    there). The 1F 0x18 room's Chris clip joined the pool the same way.
+    ROOM6130's small key stays (gated on a story flag as well).
+    Untested by the user.
+  - The 2F small dining room's (ROOM70F0) shells, armed only once Chris's
+    lighter lights the candles, are the Ingram with 150 rounds
+    (`rnd_candle_spot`, `RND_INGRAM_ROUNDS`) - a prize only Chris reaches
+    (the lit candles are a story flag, so anyone can take it after). In the
+    mode it runs dry: a round a shot in the hold-fire, no top-up in
+    `weapon_autoaim_check`, its count shown instead of the infinity
+    (`zombie_mode_ingram_finite`). Handgun damage per bullet (9 a zombie,
+    14 a Hunter, 20 Cerberus/Chimera/Tyrant), a bullet every 2 frames while
+    fire is held. Its floor look is `ING.ivm`, 625 long (the Minimi 1500), laid on its side
+    (`rnd_rescale`'s quarter turn about z for the special weapons). Its in-hand mesh
+    (players/w18.emw, every block's) is cut for Jill's texture sheet: on any
+    other body - the player's own and the stand-ins - it reads Jill's sheet
+    (char11.emd's TIM, loaded on demand into two mod banks a room,
+    `zm_jill_sheet`). Droppable (`zm_random_has_look`), picked up with the
+    item handler (cmd_item_model_set gives ids 0x6F/0x70 handler 4 in the
+    mode). Untested by the user. That room's two pickups have no model of the
+    room's own (the background shows them) and a zero position, so a
+    changed item is drawn on the floor in front of its furniture
+    (`kLooseSpots` in `zombie_mode_item_spot`). Untested by the user.
   - Heavy weapons come from five puzzles only (`kPuzzles`: piano bar
     alcove, greenhouse past the plants, tiger statue's red gem, large
     gallery portraits, armor room), each in its own reward slot.
@@ -288,6 +327,25 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     many ammo pickups on them as the scenario already placed (`[random] ammo:`
     in the debug log) and leaves the rest empty. Pickups themselves are not
     doubled.
+  - The back area (`ZombieKeypad.cpp`): the 2F back passage (7:13) and the
+    rooms off it (rough passage, libraries, shed) are reached only by the small
+    elevator from the kitchen or by the 2F left stairs' keypad door into the
+    rough passage. The elevator's two doors say it has no power until a
+    survivor USEs the battery near either; the keypad (ROOM7010 slot 5, the
+    original's key panel event) takes this game's 4-digit pass number
+    (`zm_random_pass_code`, from the seed). A note (`ITEM_ZM_PASS_NOTE` 0xF0,
+    a new spot drawn as the red book, read where it lies, never taken) shows
+    it and puts it on that survivor's route map. Both stay open for everyone
+    (ScenarioFlags2 0xF8 power / 0xF9 keypad: STORY sync and the reconnect
+    snapshot). The rough passage has no door back natively; an open keypad
+    builds one over its locked-door zone. The route (`kAccessDoors`,
+    `RND_BIT_BATTERY` / `RND_BIT_NOTE`): the back area is computed from the
+    graph (`rnd_find_back`); the battery (out of leaf rooms when it can) and
+    the note (leaf room) lie outside it, one crest always lies in it (its
+    room picked evenly, placed first in the fill), no key does - so either
+    way in alone is enough. Each back room without a pool spot gets a new one.
+    The director's monsters ignore both; the AI survivor treats them as shut.
+    Untested by the user.
   - Shotgun puzzle (`ZombieShotgun.cpp`): first-visit trap/living RDTs restored
     under return-stage IDs. No keys/crests in either room. One broken shotgun
     and one Pick Axe lie in distinct keyless rooms 3–8 door crossings from the
@@ -377,7 +435,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
     PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 58) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 59) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
@@ -701,6 +759,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieRandom.cpp` | the randomized scenario: keys onto locks, keys/crests/weapons onto item spots, puzzle locks opened |
 | `ZombieDrops.cpp` | the survivors' dropped items: the list, the in-room pickups, the inventory's DROP |
 | `ZombiePiano.cpp` | the bar's piano: who can play, the 15 s playing and its interruptions, the director's alert, the wall opening |
+| `ZombieKeypad.cpp` | the back area's ways in: the battery powering the small elevator, the keypad door and its pass number's note, the rough passage's door back |
 | `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |

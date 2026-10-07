@@ -307,6 +307,7 @@ void zombie_mode_survivor_input(void)
         return;
     }
     if (zm_revive_input()) return;
+    if (zm_access_input()) return;  // the keypad (ZombieKeypad.cpp)
     unsigned int raw = g_button_pressed_id;
     unsigned int edge = raw & ~s_radioRawWas;
     s_radioRawWas = raw;

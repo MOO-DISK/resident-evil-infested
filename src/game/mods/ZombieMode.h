@@ -73,6 +73,9 @@ bool zm_shotgun_use_pickaxe(void);
 // The item menu's USE of the sheet music at the bar's piano (ZombiePiano.cpp).
 bool zm_piano_use(void);
 bool zm_piano_menu_finished(void);
+// The item menu's USE of the battery at the small elevator (ZombieKeypad.cpp).
+bool zm_access_use_battery(void);
+bool zm_access_menu_finished(void);
 unsigned char* zombie_mode_pickaxe_name(unsigned char item);
 unsigned char* zombie_mode_pickaxe_description(unsigned short description);
 void zombie_mode_pickaxe_icon_init(const void* statusTim, unsigned int bytes);
@@ -143,6 +146,11 @@ void zombie_mode_on_snd_em(unsigned char id);
 bool zombie_mode_skip_intro(void);
 // A play-as-zombie game is running (a new game started with the key on).
 bool zombie_mode_armed(void);
+// The small dining room's Ingram (ZombieRandom.cpp, behind Chris's lighter):
+// true for an item that counts its rounds down - in the mode the Ingram is
+// not the PC unlock's endless one (PlayerAnimations.cpp weapon_autoaim_check
+// / the hold-fire, MainMenu.cpp's count).
+bool zombie_mode_ingram_finite(unsigned char itemId);
 // cmd_scd_event_create: true = this event script is a story scene (a voice
 // line or a movie in it) or a monster's entrance (takes the control and drives
 // an enemy); do not start it - its flag writes are made instead.
@@ -171,6 +179,8 @@ bool zombie_mode_message_is_passive(void);
 bool zombie_mode_message_page_done(bool pressed);
 bool zombie_mode_message_end(void);
 void zombie_mode_message_drop(void);
+// set_message_display: the mod's own text for the message being set up (zm_message_show), NULL none.
+const unsigned char* zombie_mode_message_custom(void);
 // Examine events (an action press's close-up and message, ZombieMessages.cpp).
 // RoomEvents.cpp: _event_init as an event slot (re)starts a script, _event_cmd
 // around the SCD commands an event runs (slot, then -1). CmdFunctions.cpp:

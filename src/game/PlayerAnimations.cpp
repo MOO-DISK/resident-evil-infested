@@ -4042,6 +4042,9 @@ unsigned char weapon_autoaim_check(void)
 
     if (itemId == ITEM_KNIFE) return 0; // knife has no ammo
     if (itemId == ITEM_FLAMETHROWER) return qty; // flamethrower can have 255 ammo
+    // Port-added mod: the mode's Ingram has its rounds (up to 150, all 8
+    // bits) and runs dry - no top-up below.
+    if (zombie_mode_ingram_finite(itemId)) return qty;
     if ((qty & 0x7f) != 0) return qty & 0x7f; // limit ammo to 127
 
     if (Flg_ck((int)g_ScenarioFlags, SCENARIO_FLAG_INF_R_LAUNCHER) != 0 && itemId == 10) {
@@ -4898,6 +4901,10 @@ static void player_behavior_14_autoaim_holdfire(void)
         // tables have 14 entries.
         int idx = (int)g_playerEntity.equippedWeaponId - 99;
         if (frame % g_weaponFireIntervals[0] == 0) {
+            // Port-added mod: a round a shot for the mode's Ingram (the
+            // original never counts the special weapons down).
+            unsigned char* slot = (unsigned char*)g_ItemSlotsPointer + (g_EquippedItemId - 1) * 2;
+            if (zombie_mode_ingram_finite(slot[0]) && slot[1] != 0) slot[1]--;
             auto_aim_pitch_update();
             g_playerPosScratch.x = g_weaponFireBillboard[idx].x;
             g_playerPosScratch.y = g_weaponFireBillboard[idx].y;

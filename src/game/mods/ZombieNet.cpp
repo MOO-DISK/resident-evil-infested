@@ -29,8 +29,9 @@ unsigned short g_zmNetPort = 27960;
 // seed builds a different scenario. Version 55: puzzles hand out the heavy
 // weapons and key items prefer leaf rooms. Version 56: the piano (ZM_EV_PIANO).
 // Version 57: the bar's spawn spots leave the alcove out. Version 58: PIANO 5
-// (finished: the tune plays on).
-#define ZM_NET_VERSION    58
+// (finished: the tune plays on). Version 59: the back area's ways in (the
+// battery, the keypad's note, a crest behind them) change every seed's scenario.
+#define ZM_NET_VERSION    59
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not

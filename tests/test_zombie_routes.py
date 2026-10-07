@@ -373,12 +373,20 @@ int main() {
         for key, state in table.items():
             self.assertEqual(gated[key], state == "RND_GATE_OPEN", key)
         closed = {key for key, usable in gated.items() if not usable}
-        self.assertEqual(closed, {(5, 0x12, 1), (6, 0x01, 1), (6, 0x0E, 3), (6, 0x16, 2)})
+        self.assertEqual(closed, {(5, 0x12, 1), (6, 0x0E, 3), (6, 0x16, 2)})
         edges = {(a, b, c, d) for a, b, c, d, *_ in data["doors"]}
-        for a, b, c, d in ((5, 0x12, 5, 0x1C), (6, 1, 6, 0x14), (6, 0x0E, 5, 0), (6, 0x16, 6, 0x18)):
+        for a, b, c, d in ((5, 0x12, 5, 0x1C), (6, 0x0E, 5, 0), (6, 0x16, 6, 0x18)):
             self.assertNotIn((a, b, c, d), edges)
         for a, b, c, d in ((6, 0, 6, 0x1C), (6, 0x1C, 5, 0x10), (6, 0x0C, 6, 0x1A), (5, 5, 5, 6)):
             self.assertIn((a, b, c, d), edges)
+        # The back area's ways in (ZombieKeypad.cpp): the elevator's two doors
+        # need the battery, the keypad door - and the rough passage's door
+        # back, which the keypad builds - the note.
+        requirements = {(a, b, c, d): r for a, b, c, d, r, *_ in data["doors"]}
+        self.assertEqual(requirements[6, 0x1C, 6, 0], 0x1000)
+        self.assertEqual(requirements[6, 0x13, 6, 0], 0x1000)
+        self.assertEqual(requirements[6, 0x01, 6, 0x14], 0x2000)
+        self.assertEqual(requirements[6, 0x14, 6, 0x01], 0x2000)
 
     def test_progression_avoids_unverified_rooms(self):
         if ASSETS is None:
@@ -488,15 +496,30 @@ int main() {
             self.assertTrue(data["generated"])
             self.assertIsNotNone(routes.shortest_escape(data),
                                  f"Final pickup graph cannot escape for seed {data['seed']}")
-            self.assertEqual(len(data["items"]), 8)
-            self.assertEqual(len({tuple(i[:2]) for i in data["items"]}), 8)
-            self.assertEqual({i[2] for i in data["items"]}, set(routes.ITEM_IDS))
+            self.assertEqual(len(data["items"]), 10)
+            self.assertEqual(len({tuple(i[:2]) for i in data["items"]}), 10)
+            self.assertEqual({i[2] for i in data["items"]}, set(routes.ITEM_IDS + routes.ACCESS_IDS))
             self.assertEqual(sorted(i[2] for i in data["tools"]), [0x1C, 0x23, 0x26, 0x4C])
-            # Every key item in a leaf room of its own.
+            # Every key item in a room of its own, in a leaf room - but the
+            # battery, which keeps out of them, and the back area's crests.
+            back = {(6, 0x13), (6, 0x14), (6, 0x16), (6, 0x17), (6, 0x18), (6, 0x19)}
             leaves = {tuple(l) for l in data["leaves"]}
             rooms = [tuple(i[:2]) for i in data["items"] + data["tools"]]
             self.assertEqual(len(rooms), len(set(rooms)))
-            self.assertTrue(set(rooms) <= leaves, data["seed"])
+            leafy = {tuple(i[:2]) for i in data["items"] + data["tools"]
+                     if i[2] != 0x27 and tuple(i[:2]) not in back}
+            self.assertTrue(leafy <= leaves, data["seed"])
+            # A crest always lies in the back area, no key or way in does,
+            # and either way in alone reaches the exit.
+            self.assertTrue(any(tuple(i[:2]) in back for i in data["items"] if i[2] in routes.ITEM_IDS[4:]))
+            for stage, room, item, *_ in data["items"]:
+                if item in routes.ITEM_IDS[:4] + routes.ACCESS_IDS:
+                    self.assertNotIn((stage, room), back, data["seed"])
+            for gone in routes.ACCESS_IDS:
+                alone = {**data, "items": [i for i in data["items"] if i[2] != gone]}
+                self.assertIsNotNone(routes.shortest_escape(alone), (data["seed"], gone))
+            alone = {**data, "items": [i for i in data["items"] if i[2] not in routes.ACCESS_IDS]}
+            self.assertIsNone(routes.shortest_escape(alone), data["seed"])
             for stage, room, item, flag, *_ in data["tools"]:
                 self.assertNotIn((stage, room), ((5, 21), (5, 22)))
             # The puzzles' weapons: two light, two Pythons, one rocket
@@ -512,7 +535,7 @@ int main() {
                     if costs[p] < costs[q] and 0 not in (p, q):
                         self.assertLessEqual(tier[weapons[p]], tier[weapons[q]], data["seed"])
             for a, b, c, d, requirement, *_ in data["doors"]:
-                self.assertIn(requirement, (0, 1, 2, 4, 8, 240))
+                self.assertIn(requirement, (0, 1, 2, 4, 8, 240, 0x1000, 0x2000))
 
 
 if __name__ == "__main__":

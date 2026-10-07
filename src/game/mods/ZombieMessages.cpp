@@ -274,6 +274,26 @@ bool zombie_mode_message_end(void)
     return true;
 }
 
+// The mod's own text. A pause is asked for in the room, so it is passive
+// there like any room message - with none it would be the original's
+// no-pause message, which waits for a button and is not given up to the
+// inventory or a door (a frozen survivor). Under a menu or a door it is
+// asked with none, as before.
+static const unsigned char* s_customText = NULL;
+
+const unsigned char* zombie_mode_message_custom(void)
+{
+    return s_customText;
+}
+
+void zm_message_show(const unsigned char* text)
+{
+    bool room = (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) == 0 && g_openMenuFlag == 0;
+    s_customText = text;
+    set_message_display(0xFB, room ? 0xFF : 0);
+    s_customText = NULL;
+}
+
 void zombie_mode_message_drop(void)
 {
     if (!s_passive || (g_menu_choice_id & 0x80) == 0) return;

@@ -98,7 +98,7 @@ checks that the audit, the production scanner and the table agree.
 | 6:12 wardrobe → wardrobe closet (slot 1) | **closed** | The costume closet: built only while ScenarioFlags 0x7B (second playthrough) is set, a message otherwise. |
 | 6:16 living room → trap room (slot 0) | open | `ZombieShotgun.cpp` governs it at run time; neither room takes progression. |
 | 7:00 elevator car (slots 0, 1) | open | 1×1 zones its events run by slot: arriving from 7:13 rides to the kitchen, otherwise back up. |
-| 7:01 2F left stairs → rough passage (slot 1) | **closed** | Init disarms it unconditionally. The rough passage is still reached from 7:13. |
+| 7:01 2F left stairs → rough passage (slot 1) | open (keypad) | Init disarms it unconditionally; `ZombieKeypad.cpp` re-arms it once the pass number is keyed in. The route requires the note (`kAccessDoors`), as it requires the battery for the elevator doors 7:1C slot 0 and 7:13 slot 1. The rough passage's way back (slot 1) is built by the keypad and added to the route by `rnd_read_room`. |
 | 7:08 deer room → 2F bedroom (slot 0) | open | Disarmed only while the stage-variant bit is clear (the first visit). |
 | 7:0C ↔ 7:1A Yawn's hole | open | Unarmed records run by the down/up prompts; `zombie_mode_room_prepare` sets the open-hole state. |
 | 7:0E front of attic → save room (slot 3) | **closed** | A 1×1 zone at the origin that no script runs. |

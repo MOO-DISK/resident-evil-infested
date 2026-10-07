@@ -70,6 +70,10 @@ def room_geometry(assets):
                             items.setdefault(c[0x16], (x + w // 2, z + d // 2))
                     p += size
             geometry[stage, room] = {"doors": doors, "items": items}
+    # The rough passage's door back to the 2F left stairs, which the keypad
+    # builds over its locked-door zone (ZombieKeypad.cpp kp_build_rough_door).
+    if (6, 0x14) in geometry:
+        geometry[6, 0x14]["doors"].setdefault(1, ((10100, 25300, 1700, 2400), (15450, 25000)))
     return geometry
 
 
@@ -139,7 +143,8 @@ class Model:
         return None, None
 
     def solo(self):
-        return self.search(routes.START, START_POS, 0, 0xFF, lambda r, m, e: e)
+        # Keys, crests and the back area's battery and note (routes.BITS).
+        return self.search(routes.START, START_POS, 0, 0x30FF, lambda r, m, e: e)
 
     def reachable_items(self, mask):
         seen, queue = {routes.START}, deque([routes.START])

@@ -290,6 +290,10 @@ bool zm_shotgun_room_blocked(unsigned char stage, unsigned char room);
 bool zm_shotgun_hide_room(void);
 void zm_shotgun_director_crush(void);
 void zm_note(const char* text);
+// The mod's own message text (encoded, 0x01-terminated) on the message line,
+// as a room's message: passive in the room (ZombieMessages.cpp), as it was
+// under a menu.
+void zm_message_show(const unsigned char* text);
 void zm_net_send_event8(int kind, short a0, short a1, short a2, short a3,    // to all
                         short a4, short a5, short a6, short a7);
 bool zm_net_take_event(int* kind, short args[8], int* src);
@@ -333,6 +337,39 @@ bool zm_random_room_key_left(unsigned char stage, unsigned char room);
 const int* zm_random_look(unsigned char id);
 bool zm_random_has_look(unsigned char id);
 int  zm_random_free_flags(unsigned char* out, int max);
+// The pass number's note: a pickup of the scenario's own that is no item -
+// reading it tells the keypad's pass number (ZombieKeypad.cpp). Lies as the
+// red book's model.
+#define ITEM_ZM_PASS_NOTE 0xF0
+// This game's pass number for the 2F left stairs' keypad, 0-9999 (from the seed).
+unsigned int zm_random_pass_code(void);
+// Is the loaded room's action slot `slot` the pass number's note?
+bool zm_random_note_slot(unsigned char slot);
+
+// ---- The back area's ways in (ZombieKeypad.cpp) ----
+// The small elevator (kitchen <-> 2F back passage) runs once a survivor has
+// put the battery in; the 2F left stairs' keypad door to the rough passage
+// opens on the note's pass number. Story flags (ScenarioFlags2), so the
+// STORY sync and the reconnect snapshot carry them.
+#define ZM_FLAG2_ELEVATOR_POWER 0xF8
+#define ZM_FLAG2_KEYPAD_OPEN    0xF9
+bool zm_access_powered(void);
+bool zm_access_keypad_open(void);
+void zm_access_new_game(void);
+void zm_access_room(void);
+void zm_access_frame(void);
+void zm_access_draw(void);
+// zombie_mode_survivor_input: true while the keypad has the pad.
+bool zm_access_input(void);
+bool zm_access_keypad_up(void);
+// create_room_event (zombie_mode_skip_room_event): the keypad or the note. True: handled.
+bool zm_access_room_event(const unsigned char* entry);
+// door_try_enter, a survivor's: the unpowered elevator. True: refused (message shown).
+bool zm_access_door_refused(const unsigned char* record);
+// The AI survivor's door graph: is the door of (stage, room) to `dest` shut?
+bool zm_access_door_closed(unsigned char stage, unsigned char room, unsigned char dest);
+// The survivors' route map: the files line ("PASS NUMBER 1234"), NULL until the note is read.
+const char* zm_access_files_line(void);
 
 // ---- The survivors' dropped items (ZombieDrops.cpp) ----
 // Room action slots ZM_DROP_SLOT_FIRST.. are the drops' (the randomizer's new

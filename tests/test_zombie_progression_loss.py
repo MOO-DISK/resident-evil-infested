@@ -10,6 +10,9 @@ import evaluate_zombie_routes as routes
 
 STUBS = r'''
 bool zm_shotgun_route_open(unsigned char,unsigned char,unsigned char,unsigned char,unsigned int,bool) {return true;}
+static bool powered, keypadOpen;
+static bool zm_access_powered() { return powered; }
+static bool zm_access_keypad_open() { return keypadOpen; }
 #include <cassert>
 enum { ZM_NET_MAX_PLAYERS=4, ZM_CHAR_JILL=1 };
 struct ZmNetPeerState { bool valid=false, dead=false, spectating=false; unsigned char stage=5,room=6; };
@@ -106,6 +109,18 @@ int main() {
     g_itemboxSlots[0]={ITEM_LOCK_PICK,1};assert(zm_random_remaining_solvable()==1);
     g_itemboxSlots[0]={};dropRoom=6;dropItem=ITEM_LOCK_PICK;
     assert(zm_random_remaining_solvable()==1);
+    // The back area (ZombieKeypad.cpp): the elevator's door takes the battery
+    // or its power, the keypad door the note (read where it lies) or the
+    // keypad already open.
+    reset();chars[1]=0;door(6,1);s_doors[0].access=RND_BIT_BATTERY;door(1,0x1B);
+    assert(zm_random_remaining_solvable()==0);
+    inventory[1][0]=ITEM_BATTERY;inventory[1][1]=1;assert(zm_random_remaining_solvable()==1);
+    inventory[1][0]=inventory[1][1]=0;assert(zm_random_remaining_solvable()==0);
+    powered=true;assert(zm_random_remaining_solvable()==1);powered=false;
+    s_doors[0].access=RND_BIT_NOTE;assert(zm_random_remaining_solvable()==0);
+    spot(6,ITEM_ZM_PASS_NOTE,31);assert(zm_random_remaining_solvable()==1);
+    flag(g_roomItemsFlags,31,false);assert(zm_random_remaining_solvable()==0);
+    keypadOpen=true;assert(zm_random_remaining_solvable()==1);keypadOpen=false;
     puts("Remaining progression proof OK");
 }
 '''

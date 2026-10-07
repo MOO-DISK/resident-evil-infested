@@ -1309,6 +1309,7 @@ void zombie_mode_room_spawn(void)
     zm_random_room_loaded();
     zm_shotgun_room();
     zm_piano_room();
+    zm_access_room();
     zm_greenhouse_room();
     zm_drops_room_loaded();
 
@@ -1723,8 +1724,52 @@ void zombie_mode_player_model_loaded(void)
 static int s_chrisSheetBank = -1;
 static int s_chrisSheetPage = -1;
 
+// Jill's texture sheet in the loaded room, for the Ingram: its in-hand mesh
+// (players/w18.emw, every character block's) is cut for her sheet, so on
+// anyone else's body it read their own sheet and came out in toy colours.
+// Loaded the first time someone else holds it in the room (char11.emd's
+// TIM, kept for the session like Chris's); -1: not loaded, or no room.
+static unsigned char s_jillEmd[120 * 1024];
+static int  s_jillSheetBank = -1;
+static int  s_jillSheetPage = -1;
+static bool s_jillSheetTried = false;
+
+static bool zm_jill_sheet(int* bank, int* page)
+{
+    if (!s_jillSheetTried) {
+        s_jillSheetTried = true;
+        char path[96];
+        snprintf(path, sizeof(path), "%senemy/char11.emd", GAME_DATA_ROOT);
+        size_t size = LoadFile(path, s_jillEmd, 0x20);
+        if (size == (size_t)-1 || size < 0x40 || size > sizeof(s_jillEmd)) {
+            dbg_printf("[zombie] could not read %s: the Ingram keeps the holder's sheet\n", path);
+        } else if (!zm_ext_begin(2)) {
+            dbg_printf("[zombie] no texture bank for Jill's sheet here: the Ingram keeps the holder's sheet\n");
+        } else {
+            s_jillSheetBank = g_TextureBankID;
+            s_jillSheetPage = g_TextureCurrentPage;
+            unsigned int tim = *(const unsigned int*)(s_jillEmd + (size & 0xFFFFFFFC) - 4) & 0xFFFFFFFC;
+            ProcessTmdAsync((unsigned int)(s_jillEmd + tim));
+            zm_ext_end();
+        }
+    }
+    if (s_jillSheetBank < 0) return false;
+    *bank = s_jillSheetBank;
+    *page = s_jillSheetPage;
+    return true;
+}
+
+// The Ingram on a body other than Jill's takes her sheet.
+static bool zm_ingram_borrows_sheet(int ch, unsigned char weapon)
+{
+    return s_zombieModeArmed && weapon == ITEM_INGRAM && ch != ZM_CHAR_JILL;
+}
+
 bool zombie_mode_weapon_texture(int* bank, int* page)
 {
+    if (zm_ingram_borrows_sheet(zombie_mode_player_skin(g_playerEntity.id & 3), g_playerEntity.equippedWeaponId)) {
+        return zm_jill_sheet(bank, page);
+    }
     if (!zm_char_borrowed(zombie_mode_player_skin(g_playerEntity.id & 3)) || s_chrisSheetBank < 0) return false;
     *bank = s_chrisSheetBank;
     *page = s_chrisSheetPage;
@@ -1739,14 +1784,33 @@ void zombie_mode_room_models_loaded(void)
 {
     s_chrisSheetBank = -1;
     s_chrisSheetPage = -1;
-    if (!s_zombieModeArmed || s_gameRole == ZM_NET_OFF) return;
+    s_jillSheetBank = -1;
+    s_jillSheetPage = -1;
+    s_jillSheetTried = false;
+    if (!s_zombieModeArmed) return;
+    // The room's banks are new: this copy's Ingram reads Jill's sheet again.
+    bool ingram = zm_ingram_borrows_sheet(zombie_mode_player_skin(g_playerEntity.id & 3),
+                                          g_playerEntity.equippedWeaponId);
+    if (s_gameRole == ZM_NET_OFF) {
+        if (ingram) {
+            LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
+                                        (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
+        }
+        return;
+    }
     bool own = s_gameRole == ZM_NET_SURVIVOR && zm_char_borrowed(zombie_mode_player_skin(g_playerEntity.id & 3));
     bool needed = own;
     for (int slot = ZM_FIRST_SURVIVOR_SLOT; slot < 30 && !needed; slot++) {
         const Entity* e = &g_EnemiesList[slot];
         needed = (e->status_flags & ENTITY_STATUS_ACTIVE) != 0 && zm_char_borrowed(zm_char_of_npc_id(e->id));
     }
-    if (!needed) return;
+    if (!needed) {
+        if (ingram) {
+            LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
+                                        (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
+        }
+        return;
+    }
     if (!zm_load_chris_emd() || !zm_ext_begin(2)) {
         dbg_printf("[zombie] no texture bank for Chris's sheet here: borrowed weapons stay empty\n");
     } else {
@@ -1756,7 +1820,7 @@ void zombie_mode_room_models_loaded(void)
         ProcessTmdAsync((unsigned int)(s_chrisEmd + tim));
         zm_ext_end();
     }
-    if (own) {
+    if (own || ingram) {
         LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
                                     (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
     }
@@ -1765,6 +1829,11 @@ void zombie_mode_room_models_loaded(void)
 bool zombie_mode_armed(void)
 {
     return s_zombieModeArmed;
+}
+
+bool zombie_mode_ingram_finite(unsigned char itemId)
+{
+    return s_zombieModeArmed && itemId == ITEM_INGRAM;
 }
 
 bool zombie_mode_skip_intro(void)
@@ -2060,6 +2129,8 @@ bool zombie_mode_skip_scd_event(int scriptIndex)
 // are. Action-press events (stairs, puzzles) still run.
 bool zombie_mode_skip_room_event(const unsigned char* entry)
 {
+    // The keypad's key panel and the pass number's note (ZombieKeypad.cpp).
+    if (s_zombieModeArmed && zm_access_room_event(entry)) return true;
     if (!s_zombieModeArmed || (entry[1] & 0x80) != 0) return false;
     return zombie_mode_skip_scd_event(entry[4]);
 }
@@ -2067,6 +2138,7 @@ bool zombie_mode_skip_room_event(const unsigned char* entry)
 bool zombie_mode_blocks_menu(void)
 {
     if (s_zombieModeArmed && zm_shotgun_pending()) return true;
+    if (s_zombieModeArmed && zm_access_keypad_up()) return true;   // the keypad has the pad
     // Whoever plays a zombie has no inventory: START is the possession key.
     // Richard's OPTIONS is his radio.
     // A dead survivor waits for the match to end; nobody opens one on the end screen.
@@ -2561,6 +2633,7 @@ void zombie_mode_draw_overlay(void)
         zm_draw_centered(line, 208, 0x7F);
     }
     zm_piano_draw();
+    zm_access_draw();
     if (s_gameRole == ZM_NET_SURVIVOR) zm_room_name_draw();
     zm_clock_draw();
     if (s_switchNoteFrames > 0) {
@@ -2753,6 +2826,8 @@ bool zombie_mode_door_trapped(const unsigned char* record)
     if (!s_zombieModeArmed) return false;
     if (zm_shotgun_door(record)) return true;
     if (s_gameRole != ZM_NET_SURVIVOR) return false;
+    // The small elevator before the battery is in (ZombieKeypad.cpp).
+    if (zm_access_door_refused(record)) return true;
     unsigned int left = 0;
     if (!zm_trap_door_locked(g_stageId, g_roomId, record[0x0D], record[0x0B], &left)) return false;
     char line[48];
@@ -6178,7 +6253,9 @@ static void zm_standin_set_weapon(Entity* e, int who, unsigned char weapon)
     st.weapon = weapon;
     int ch = zm_char_of_npc_id(e->id);
     bool borrowed = zm_char_borrowed(ch);
-    if (weapon != 0 && borrowed && s_chrisSheetBank < 0) {
+    int jillBank = -1, jillPage = -1;
+    bool jillSheet = zm_ingram_borrows_sheet(ch, weapon) && zm_jill_sheet(&jillBank, &jillPage);
+    if (weapon != 0 && borrowed && s_chrisSheetBank < 0 && !jillSheet) {
         weapon = 0;                     // no room for Chris's sheet here: empty-handed
     }
     if (weapon != 0) {
@@ -6192,7 +6269,9 @@ static void zm_standin_set_weapon(Entity* e, int who, unsigned char weapon)
             // file's tail table, rebased; textures onto this model's page.
             unsigned int* tail = (unsigned int*)(st.emw + (size & 0xFFFFFFFC) - 8);
             unsigned int mesh = (tail[1] & 0xFFFFFFFC) + (unsigned int)st.emw;
-            if (borrowed) {
+            if (jillSheet) {
+                ProcessTmdTextures(2, (unsigned int*)mesh, jillBank, jillPage);
+            } else if (borrowed) {
                 ProcessTmdTextures(2, (unsigned int*)mesh, s_chrisSheetBank, s_chrisSheetPage);
             } else {
                 ProcessTmdTextures(2, (unsigned int*)mesh, e->texBank, e->attacking_direction);
@@ -7014,6 +7093,7 @@ void zombie_mode_net_frame(void)
     zm_clock_frame();
     zm_shotgun_frame();
     zm_piano_frame();
+    zm_access_frame();
     zm_greenhouse_frame();
     zm_end_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
