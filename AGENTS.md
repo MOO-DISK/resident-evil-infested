@@ -433,9 +433,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   reliable events carry a source and a destination, and the host relays them.
   - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START.
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
-    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32. FX, SOUND, PSND, BURST, HEAL and STUN carry
+    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 59) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 60) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
@@ -702,6 +702,20 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   host -> all. The
   wall stays closed until then (`rnd_open_piano_room` waits for the flag).
   CPU test `tests/test_zombie_piano.py`. Untested by the user.
+- **Shared room puzzles** (`ZombieRoomSync.cpp`, survivors' copies only):
+  pushed objects (2F dining statue, armor room, 2F study, libraries) and the
+  large gallery's portrait order (system flags 0x12-0x1F in ROOM6170) travel
+  as ROOMSYNC `{1 object, stage|room<<8, slot, x, z, orig x, orig z}` /
+  `{2 flags, stage|room<<8, byte, set, cleared}` / `{3 reset, stage|room<<8}`.
+  A survivor's pushes are sent (every 150 ms while pushing, and where it
+  stopped); each copy's own object-probe zones then reach the puzzle's result
+  itself, so the fall / reveal plays for everyone in the room. Entering a room
+  another living survivor has loaded takes its state over; entering an empty
+  one resets it, as the original's init does, and tells the others. The
+  gallery solved elsewhere: the panel moves aside and event 22 frees the
+  reward here (the reveal, which places the player, stays the solver's). The
+  director's copy keeps its own (these scenes would turn its camera). CPU test
+  `tests/test_zombie_roomsync.py`. Untested by the user.
 - **Doors:** every door animation in the mode ends after `ZM_DOOR_FRAMES`
   (20 frames, about 0.7 s, `zombie_mode_door_frames` in DoorSystem.cpp's
   DoorAnimLoop), counted from the script gate opening (the sound load), not
@@ -761,6 +775,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombiePiano.cpp` | the bar's piano: who can play, the 15 s playing and its interruptions, the director's alert, the wall opening |
 | `ZombieKeypad.cpp` | the back area's ways in: the battery powering the small elevator, the keypad door and its pass number's note, the rough passage's door back |
 | `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |
+| `ZombieRoomSync.cpp` | a room's pushed objects and puzzle flags, shared by the survivors in it |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |
 | `ZombieStats.cpp` | the end of a match: each player's stats, their exchange (STATS) and the white end screen |

@@ -31,7 +31,8 @@ unsigned short g_zmNetPort = 27960;
 // Version 57: the bar's spawn spots leave the alcove out. Version 58: PIANO 5
 // (finished: the tune plays on). Version 59: the back area's ways in (the
 // battery, the keypad's note, a crest behind them) change every seed's scenario.
-#define ZM_NET_VERSION    59
+// Version 60: a room's pushed objects and puzzle flags (ZM_EV_ROOMSYNC).
+#define ZM_NET_VERSION    60
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not

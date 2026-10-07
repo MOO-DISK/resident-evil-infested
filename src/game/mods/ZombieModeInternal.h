@@ -229,6 +229,9 @@ enum {
     ZM_EV_SHOTGUN = 31, // host-authorized replacement / door rescue / ceiling state
     ZM_EV_PIANO = 32,   // survivor -> all: {1 start / 2 stop / 5 finished, player, stage, room, 0, 0,
                         //   seed low, seed high}; survivor -> host {3 done, ...}; host -> all {4 open, ...}
+    ZM_EV_ROOMSYNC = 33, // survivor -> all: {1 object, stage|room<<8, slot, x, z, orig x, orig z} /
+                         //   {2 flags, stage|room<<8, byte, set, cleared} / {3 reset, stage|room<<8} -
+                         //   a room's pushed objects and puzzle flags (ZombieRoomSync.cpp)
     ZM_EV_TYRANT_TRAIL = 24, // room owner -> all: { stage|room<<8, attacker uid, trail frames }
     ZM_EV_STATS = 20,    // anyone -> all, once the match is over: a survivor's { 0, death s
                          //   (-1 alive), hits, kills, damage taken }, the director's { 1, points
@@ -262,6 +265,11 @@ void zm_match_progression_lost(void);
 void zm_shotgun_reset(void);
 // The bar's piano (ZombiePiano.cpp).
 void zm_piano_reset(void);
+// A room's puzzle state among the survivors in it (ZombieRoomSync.cpp).
+void zm_roomsync_reset(void);
+void zm_roomsync_room(void);
+void zm_roomsync_frame(void);
+void zm_roomsync_take(const short* args, int src);
 void zm_greenhouse_room(void);
 void zm_greenhouse_frame(void);
 void zm_piano_room(void);

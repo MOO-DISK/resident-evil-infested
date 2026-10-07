@@ -663,6 +663,7 @@ void zombie_mode_new_game(int isNewGame)
     zm_spec_new_game();
     zm_shotgun_reset();
     zm_piano_reset();
+    zm_roomsync_reset();
     zm_world_story_reset();
     if (g_bPlayAsZombie && zm_net_active() && zm_net_role() == ZM_NET_SURVIVOR) {
         // A survivor's roster was started when it joined (zm_net_join): it
@@ -1311,6 +1312,7 @@ void zombie_mode_room_spawn(void)
     zm_piano_room();
     zm_access_room();
     zm_greenhouse_room();
+    zm_roomsync_room();
     zm_drops_room_loaded();
 
     // The roster's extra monsters first, in the free slots above every slot
@@ -6898,6 +6900,9 @@ static void zm_route_events(void)
         case ZM_EV_STORY:
             zm_world_story_apply(a);
             break;
+        case ZM_EV_ROOMSYNC:
+            zm_roomsync_take(a, src);
+            break;
         case ZM_EV_CREDIT:
             zm_econ_monster_hit();
             break;
@@ -7095,6 +7100,7 @@ void zombie_mode_net_frame(void)
     zm_piano_frame();
     zm_access_frame();
     zm_greenhouse_frame();
+    zm_roomsync_frame();
     zm_end_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;
