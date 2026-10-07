@@ -327,6 +327,8 @@ LAB_00480e89:
                         g_main_state_flags2 &= ~MSF2_EFFECT_ZONE;
                         update_player_position(&g_playerEntity, 1);
                     }
+                    // Port-added mod: walking off an examine close-up.
+                    zombie_mode_message_frame();
                 } else {
                     zombie_mode_player_update();
                 }
@@ -522,6 +524,9 @@ switchD_00480ff4_caseD_2:
             }
 
             // g_openMenuFlag == 1: menu requested, check message state
+            // Port-added mod: a zombie-mode message that does not stop the game
+            // does not hold the door or the menu either (mods/ZombieMessages.cpp).
+            zombie_mode_message_drop();
         } while ((g_menu_choice_id & 0x80) != 0);
 
         // ====================================================================

@@ -21,6 +21,8 @@ static void ScdEventEntry_Init(ScdEventEntry* entry, int scriptIndex)
     entry->scriptPtr = ((unsigned char**)g_RoomEventScripts)[scriptIndex];
     entry->stackDepth = 0xFF;
     entry->entity = ENTITY;
+    // Port-added mod: is it an examine event (mods/ZombieMessages.cpp)?
+    zombie_mode_event_init((int)(entry - g_ScdEventTable), scriptIndex);
 }
 
 // ============================================================================
@@ -754,10 +756,15 @@ event_dispatch:
                         scd_event_cmd_create();
                         break;
                     case 0x06: // Run SCD inline
+                        // Port-added mod: which event runs the commands.
+                        zombie_mode_event_cmd((int)(g_pScdEventCurrent - g_ScdEventTable));
                         scd_event_cmd_run_scd();
+                        zombie_mode_event_cmd(-1);
                         break;
                     case 0x07: // Execute SCD command
+                        zombie_mode_event_cmd((int)(g_pScdEventCurrent - g_ScdEventTable));
                         scd_event_cmd_exec();
+                        zombie_mode_event_cmd(-1);
                         break;
                     case 0x08: // Reinitialize event
                         scd_event_cmd_init();

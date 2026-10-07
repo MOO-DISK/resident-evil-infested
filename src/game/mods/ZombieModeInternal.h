@@ -625,6 +625,9 @@ const VECTOR* zm_spec_camera_target(void);
 bool zm_spec_draw(void);                  // its HUD; false before the watching has begun
 // ZombieMode.cpp helpers it uses.
 void zm_fix_camera_at(const int* t, int slot);
+// An action-press "examine" event: control, close-up, message, cut back - no
+// entity, event, door or item command (ZombieMode.cpp, for ZombieMessages.cpp).
+bool zm_evt_is_examine(int script);
 void zm_draw_centered(const char* text, short y, unsigned char color);
 void zm_clock_draw(void);
 

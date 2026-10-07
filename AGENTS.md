@@ -210,6 +210,26 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   (`zm_evt_release_player`). Walk-in zones (`create_room_event`, probe flags
   without 0x80) are filtered the same way (`zombie_mode_skip_room_event`);
   action-press events (stairs, puzzles) still run.
+- **Messages without the pause** (`ZombieMessages.cpp`): a message that asks
+  no Yes/No (locked doors, desks, examined objects, no ink ribbon...) leaves
+  `g_message_flags` alone - the survivor keeps control and the room runs. It
+  types out on the bottom line, turns pages and closes by itself after
+  1.5 s + 60 ms a character (2-7 s); the buttons do not touch it. A different
+  message replaces it, a door or the menu closes it (`zombie_mode_message_drop`
+  in game_loop), and the same one is not restarted for 1 s after. A Yes/No
+  prompt (take an item, use a key, save) clears only 0x0140 instead of 0xff:
+  game_loop cuts the pad to the menu bits (the script "took the control"
+  path), so the survivor settles idle while monsters, effects, events and its
+  STATE keep running; a grab or death answers No; closing raises back only
+  those two bits. Menu and door-script messages still pause.
+  Examine events (`zm_evt_is_examine`: an action press's script that only
+  takes the control, cuts to a close-up, shows a message and cuts back - no
+  entity, event, door or item command; e.g. ROOM61A0/6050/6170/7010/7050)
+  get the same passive message even with pause 0, and the control back as it
+  starts. The close-up stays until the survivor moves or turns, then the
+  camera returns to the one before it (`zm_fix_camera_at` after), and that
+  event's later cut commands are dropped (`zombie_mode_cut_skip`). Desks
+  (`check_desk`) still pan and open the take screen. Untested by the user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.
@@ -681,6 +701,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieRandom.cpp` | the randomized scenario: keys onto locks, keys/crests/weapons onto item spots, puzzle locks opened |
 | `ZombieDrops.cpp` | the survivors' dropped items: the list, the in-room pickups, the inventory's DROP |
 | `ZombiePiano.cpp` | the bar's piano: who can play, the 15 s playing and its interruptions, the director's alert, the wall opening |
+| `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |
 | `ZombieStats.cpp` | the end of a match: each player's stats, their exchange (STATS) and the white end screen |

@@ -1634,7 +1634,9 @@ msg_skip_char:
 
     // === State 2: Waiting with blinking cursor ===
     case 2:
-        if ((g_PlayerDpadPressed & 0xC000) != 0) {
+        // Port-added mod: a zombie-mode message that does not stop the game
+        // turns its page after a reading time, not on a press.
+        if (zombie_mode_message_page_done((g_PlayerDpadPressed & 0xC000) != 0)) {
             // Button pressed: restart text reveal
             g_MessageStateCounter = 1;
             g_MessagePtr = g_MessageCurrentPtr;
@@ -1691,7 +1693,9 @@ msg_skip_char:
         const short ynCursorX = (GetAssetVersion() != 0) ? 0xa0 : 208;
         const short ynTextX = ynCursorX + ynGlyphW;
 
-        if ((g_PlayerDpadPressed & 0x4000) == 0) {
+        // Port-added mod: in the zombie mode the room runs under the prompt, so
+        // a grab or death answers No (mods/ZombieMessages.cpp).
+        if ((g_PlayerDpadPressed & 0x4000) == 0 && !zombie_mode_message_prompt_cancel()) {
             if ((g_PlayerPadHeld & (0x2000 | 0x8000)) != 0) {
                 g_menu_choice_id = g_menu_choice_id ^ 1;
                 g_MessageCharTimer = 0;
@@ -1735,15 +1739,23 @@ msg_skip_char:
 
         // Confirm pressed: dismiss message
         g_menu_choice_id = g_menu_choice_id & 0x7f;
-        g_message_flags = g_messageFlagsBackup;
+        // Port-added mod: raise back only what the mode's prompt cleared.
+        if (!zombie_mode_message_prompt_end()) {
+            g_message_flags = g_messageFlagsBackup;
+        }
         handle_message_post_action();
         return;
     }
 
     // === State 5: Waiting for player input to dismiss ===
     case 5:
-        if ((g_PlayerDpadPressed & 0xC000) != 0) {
+        // Port-added mod: likewise it closes after a reading time, and leaves
+        // g_message_flags alone - it never paused them.
+        if (zombie_mode_message_page_done((g_PlayerDpadPressed & 0xC000) != 0)) {
             g_menu_choice_id = g_menu_choice_id & 0x7f;
+            if (zombie_mode_message_end()) {
+                return;
+            }
             if ((g_message_flags & 1) == 0) {
                 g_PlayerDpadHeld = g_PlayerDpadHeld & 0xf000;
                 g_PlayerDpadHeldPrev = g_PlayerDpadHeldPrev & 0xf000;
@@ -1755,6 +1767,16 @@ msg_skip_char:
 
     // === State 6: Auto-dismiss after timeout ===
     case 6:
+        // Port-added mod: a passive message stays for its reading time rather
+        // than the script's delay, which was timed for a paused game.
+        if (zombie_mode_message_is_passive()) {
+            if (zombie_mode_message_page_done(false)) {
+                g_menu_choice_id = g_menu_choice_id & 0x7f;
+                zombie_mode_message_end();
+                return;
+            }
+            break;
+        }
         g_MessageCharTimer = g_MessageCharTimer - 1;
         if (g_MessageCharTimer == 0) {
             g_menu_choice_id = g_menu_choice_id & 0x7f;

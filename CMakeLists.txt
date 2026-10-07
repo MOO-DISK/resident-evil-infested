@@ -125,6 +125,7 @@ set(RE1_SOURCES
     src/game/mods/ZombieGreenhouse.cpp
     src/game/mods/ZombieStats.cpp
     src/game/mods/ZombieDrops.cpp
+    src/game/mods/ZombieMessages.cpp
 
     src/game/entities/Adder.cpp
     src/game/entities/BlackTiger.cpp

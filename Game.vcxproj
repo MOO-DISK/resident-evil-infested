@@ -211,6 +211,7 @@
     <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
     <ClCompile Include="src\game\mods\ZombieStats.cpp" />
     <ClCompile Include="src\game\mods\ZombieDrops.cpp" />
+    <ClCompile Include="src\game\mods\ZombieMessages.cpp" />
     <ClCompile Include="src\game\Rendering.cpp" />
     <ClCompile Include="src\game\JpnTextTables.cpp" />
     <ClCompile Include="src\game\PrintText.cpp" />

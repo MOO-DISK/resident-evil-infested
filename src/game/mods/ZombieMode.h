@@ -149,6 +149,41 @@ bool zombie_mode_armed(void);
 bool zombie_mode_skip_scd_event(int scriptIndex);
 // create_room_event: the same for a walk-in zone's event (not action presses).
 bool zombie_mode_skip_room_event(const unsigned char* entry);
+// Messages that do not stop the game (ZombieMessages.cpp). set_message_display:
+// _repeat - the same message just ended, do not start it again yet; _replace -
+// a passive message is up and gives way to this different one (true = it was
+// closed); _pause - after the text is chosen: the g_message_flags mask to
+// clear instead of `pause` (0 for a message that asks nothing, only the
+// control for a Yes/No prompt). UpdateMessageDisplay: _page_done stands for
+// "Action/Cancel pressed" (a passive message's reading time instead),
+// _is_passive picks it for the script-timed close too, _end - true = it was
+// passive, do not restore the flags; _prompt_cancel - true = answer No now
+// (grabbed or dead), _prompt_end - true = the bits it cleared are raised back,
+// do not restore the whole backup. game_loop: _drop closes a passive message
+// when a door or the menu is requested.
+bool zombie_mode_message_repeat(unsigned short msgId, unsigned short pause);
+bool zombie_mode_message_replace(unsigned short msgId);
+unsigned short zombie_mode_message_pause(unsigned short msgId, unsigned short pause,
+                                         const unsigned char* text);
+bool zombie_mode_message_prompt_cancel(void);
+bool zombie_mode_message_prompt_end(void);
+bool zombie_mode_message_is_passive(void);
+bool zombie_mode_message_page_done(bool pressed);
+bool zombie_mode_message_end(void);
+void zombie_mode_message_drop(void);
+// Examine events (an action press's close-up and message, ZombieMessages.cpp).
+// RoomEvents.cpp: _event_init as an event slot (re)starts a script, _event_cmd
+// around the SCD commands an event runs (slot, then -1). CmdFunctions.cpp:
+// _cut_skip - true = drop this camera command (the close-up was already left),
+// _cut_closeup after a cut_lock_set (the camera before it), _cut_restored after
+// the event's own cut back. game_loop: _message_frame once a frame - a
+// survivor moving or turning leaves the close-up.
+void zombie_mode_event_init(int slot, int script);
+void zombie_mode_event_cmd(int slot);
+bool zombie_mode_cut_skip(void);
+void zombie_mode_cut_closeup(unsigned char prevCam);
+void zombie_mode_cut_restored(void);
+void zombie_mode_message_frame(void);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,
 // 2 Barry), else `base`. EntityModelLoader.cpp.

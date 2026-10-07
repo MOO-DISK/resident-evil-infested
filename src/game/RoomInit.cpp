@@ -62,7 +62,13 @@ unsigned int set_message_display(unsigned short msg_id, unsigned short pause_gam
 {
     short screenY;
 
-    if ((g_menu_choice_id & 0x80) != 0) {
+    // Port-added mod: in the zombie mode a message that does not stop the game
+    // gives way to a different one, and is not restarted by a walk-in zone
+    // the moment it ends (mods/ZombieMessages.cpp).
+    if (zombie_mode_message_repeat(msg_id, pause_game)) {
+        return 1;
+    }
+    if ((g_menu_choice_id & 0x80) != 0 && !zombie_mode_message_replace(msg_id)) {
         return 1;
     }
 
@@ -92,6 +98,15 @@ unsigned int set_message_display(unsigned short msg_id, unsigned short pause_gam
         } else {
             g_MessagePtr = global_messages[msg_id & 0x3F];
         }
+    }
+
+    // Port-added mod: the zombie mode keeps the room running under a message -
+    // nothing paused when it asks nothing, only the survivor's control when it
+    // asks Yes/No (mods/ZombieMessages.cpp).
+    unsigned short modPause = zombie_mode_message_pause(msg_id, pause_game, g_MessagePtr);
+    if (modPause != pause_game) {
+        g_PauseGameInMsgFlag = modPause;
+        g_message_flags = g_messageFlagsBackup & ~modPause;
     }
 
     g_MessageStateCounter = 0;

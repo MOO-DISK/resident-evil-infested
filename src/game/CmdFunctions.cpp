@@ -302,6 +302,12 @@ int cmd_state_byte_set(void)
 // ============================================================================
 int cmd_cut_lock_set(void)
 {
+    // Port-added mod: an examine event whose close-up the survivor walked out
+    // of keeps its hands off the camera (mods/ZombieMessages.cpp).
+    if (zombie_mode_cut_skip()) {
+        g_ScdOpcodes += 2;
+        return 1;
+    }
     g_ScdOpcodes++;
     g_cutId = g_roomCameraId;
     g_roomCameraId = *g_ScdOpcodes;
@@ -318,6 +324,7 @@ int cmd_cut_lock_set(void)
     cut_set();
     g_ScdOpcodes++;
     g_main_state_flags |= MSF_CAMERA_LOCK;
+    zombie_mode_cut_closeup(g_cutId);   // port-added mod
     return 1;
 }
 
@@ -327,6 +334,12 @@ int cmd_cut_lock_set(void)
 // ============================================================================
 int cmd_current_cut_set(void)
 {
+    // Port-added mod: see cmd_cut_lock_set.
+    if (zombie_mode_cut_skip()) {
+        g_ScdOpcodes += 2;
+        return 1;
+    }
+    zombie_mode_cut_restored();
     g_roomCameraId = g_cutId;
     unsigned short camId = *(unsigned short*)((char*)g_RdtPointer->cam_switch_zones + 2);
     unsigned int zonePtr = (unsigned int)g_RdtPointer->cam_switch_zones;
@@ -1384,7 +1397,10 @@ int cmd_item_count_test(void)
 int cmd_cut_lock_write(void)
 {
     if ((char)g_ScdOpcodes[1] == 0) {
+        zombie_mode_cut_restored();   // port-added mod
         g_main_state_flags &= ~MSF_CAMERA_LOCK;
+    } else if (zombie_mode_cut_skip()) {
+        // Port-added mod: see cmd_cut_lock_set.
     } else {
         g_main_state_flags |= MSF_CAMERA_LOCK;
     }

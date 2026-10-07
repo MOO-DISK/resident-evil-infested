@@ -1930,6 +1930,77 @@ static void zm_evt_scan(int script, int depth, ZmEvtScan* s, bool main)
     }
 }
 
+// An "examine" event (ZombieMessages.cpp): what an action press on a painting,
+// a statue or a shelf starts - take the control, cut to a close-up, a message,
+// cut back, give the control back. Only those commands, the tests around them,
+// flag writes and a sound: no entity driven, no event started or re-inited, no
+// door, item or enemy set. Such an event's message does not pause, and its
+// close-up gives way to the room's camera once the survivor walks off.
+static bool zm_evt_scd_examine_op(unsigned char op)
+{
+    switch (op) {
+    case 0x00: case 0x01: case 0x02: case 0x03:    // block end, if / else / end_if
+    case 0x04: case 0x05: case 0x06: case 0x07:    // bit test / op, state tests
+    case 0x08:                                     // state_byte_set
+    case 0x09: case 0x0A: case 0x0B:               // cut_lock_set, current_cut_set, message_set
+    case 0x10: case 0x11: case 0x13:               // item tests, room_action_arm
+    case 0x17: case 0x1D: case 0x22: case 0x23:    // sfx, item tests, cut_lock_write
+    case 0x38: case 0x3C: case 0x3F:               // pad / player distance / direction tests
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool zm_evt_is_examine(int script)
+{
+    if (script < 0 || script >= ZM_EVT_MAX_SCRIPTS || g_RoomEventScripts == NULL) return false;
+    const unsigned char* p = ((const unsigned char* const*)g_RoomEventScripts)[script];
+    if (p == NULL) return false;
+    bool message = false;
+    for (int steps = 0; steps < 2000; steps++) {
+        unsigned char op = p[0];
+        int w;
+        const unsigned char* cmd = NULL;    // an SCD command to check
+        if (op >= 0xF6) {
+            switch (op) {
+            case 0xFF: return message;
+            case 0xF8: case 0xFA: w = 4; break;
+            case 0xF9: w = 3; break;
+            case 0xFC: w = p[1]; if (w > 2) cmd = p + 2; break;   // call: its command inline
+            default: w = 1; break;
+            }
+        } else {
+            switch (op) {
+            case 0x00: w = 1; break;
+            case 0x06: {                                // run_scd
+                w = p[1];
+                const unsigned char* q = p + 2;
+                int block = *(const unsigned short*)q;
+                if (block > w - 2) block = w - 2;
+                for (int off = 2; off < block;) {
+                    unsigned char cop = q[off];
+                    if (!zm_evt_scd_examine_op(cop)) return false;
+                    if (cop == 0x0B) message = true;
+                    if (cop == 0x00) { off++; continue; }
+                    off += 1 + kScdCmdWidth[cop];
+                }
+                break;
+            }
+            case 0x07: w = p[1]; if (w > 2) cmd = p + 2; break;   // exec_scd
+            default: return false;    // entity, state, event create / init / kill
+            }
+        }
+        if (cmd != NULL) {
+            if (!zm_evt_scd_examine_op(cmd[0])) return false;
+            if (cmd[0] == 0x0B) message = true;
+        }
+        if (w <= 0) return false;
+        p += w;
+    }
+    return false;
+}
+
 // The scene skipped was to pose the player and stand it back at its end (the
 // event VM's 0x86, state 1): a player the room script left in the scripted
 // state 8 for it (attack_anim_set) is stood back now - unless an event that is
