@@ -166,13 +166,12 @@ list(APPEND RE1_SOURCES
 add_executable(residentevil ${RE1_SOURCES})
 
 # Keep mod audio beside the executable, independently of the game asset root.
-add_custom_target(infested_audio ALL
+add_custom_command(TARGET residentevil POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:residentevil>/infested"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/infested/audio/infested.wav"
         "$<TARGET_FILE_DIR:residentevil>/infested/infested.wav"
     VERBATIM)
-add_dependencies(residentevil infested_audio)
 
 target_include_directories(residentevil PRIVATE src)
 

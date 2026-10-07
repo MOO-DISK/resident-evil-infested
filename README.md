@@ -2,8 +2,8 @@
 
 ## Infested
 
-**Infested** is an asymmetric multiplayer mode built on this port: one
-**director** against up to three **survivors** in a randomized return-to-the-mansion
+**Infested** is an asymmetric multiplayer mode built on the pc decomp: one
+**director** against up to three **survivors** in a randomized mansion
 scenario. The director spends points to place, possess and command the
 mansion's monsters and set traps. The survivors each pick a character with
 their own perks, scavenge randomized keys, weapons and ammo, and try to escape
@@ -16,11 +16,7 @@ off, the game plays exactly as the original.
 
 This project is a fork of Eduardo Cruells'
 [**Resident Evil 1 for PC Decompilation**](https://github.com/ecruells/resident-evil-pc-decomp).
-Infested would not exist without it. Reconstructing the whole 1997 game,
-function by function, into a clean, playable, cross-platform codebase is a
-huge piece of work, and every room, monster and system this mode builds on
-comes from that effort. A huge thank you to Eduardo and everyone who
-contributed to the original project. Please go star it and support it.
+and would not exist without it. Please go star it and support it.
 
 ## Introduction
 

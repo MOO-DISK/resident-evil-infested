@@ -2427,6 +2427,21 @@ void zm_clock_draw(void)
     PrintText8x14((short)(320 - 8 - (int)strlen(line) * 8), 222, 0x8F, 0);
 }
 
+// A survivor's room view: the room it is in, bottom left in green (the
+// font's tint 1), on the clock's line.
+static void zm_room_name_draw(void)
+{
+    const char* name = DebugRoom_Name(g_stageId, g_roomId);
+    if (name != NULL) {
+        snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "%s", name);
+    } else {
+        snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "ROOM %X%02X",
+                 (unsigned int)(g_stageId + 1) & 0xF, (unsigned int)g_roomId);
+    }
+    zm_text_encode(PRINT_TEXT_BUFFER);
+    PrintText8x14(8, 222, 1, 0);
+}
+
 void zombie_mode_draw_overlay(void)
 {
     if (zombie_mode_armed() && zm_shotgun_draw()) return;
@@ -2482,6 +2497,7 @@ void zombie_mode_draw_overlay(void)
         zm_draw_centered(line, 208, 0x7F);
     }
     zm_piano_draw();
+    if (s_gameRole == ZM_NET_SURVIVOR) zm_room_name_draw();
     zm_clock_draw();
     if (s_switchNoteFrames > 0) {
         s_switchNoteFrames--;
