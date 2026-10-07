@@ -5,7 +5,7 @@
 // unlock wait or main-hall lockout, and
 // loaded guns and all four crests in the main hall. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
