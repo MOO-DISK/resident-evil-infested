@@ -1,5 +1,27 @@
 # Resident Evil 1 for PC Decompilation
 
+## Infested
+
+**Infested** is an asymmetric multiplayer mode built on this port: one
+**director** against up to three **survivors** in a randomized return-to-the-mansion
+scenario. The director spends points to place, possess and command the
+mansion's monsters and set traps. The survivors each pick a character with
+their own perks, scavenge randomized keys, weapons and ammo, and try to escape
+through the storeroom before the 20-minute clock runs out. Single player pits
+the director against an AI survivor. It is switched on with `[Mods]
+PlayInfested=1` in `config.ini` (the default in `config.ini.template`); with it
+off, the game plays exactly as the original.
+
+### Thank you
+
+This project is a fork of Eduardo Cruells'
+[**Resident Evil 1 for PC Decompilation**](https://github.com/ecruells/resident-evil-pc-decomp).
+Infested would not exist without it. Reconstructing the whole 1997 game,
+function by function, into a clean, playable, cross-platform codebase is a
+huge piece of work, and every room, monster and system this mode builds on
+comes from that effort. A huge thank you to Eduardo and everyone who
+contributed to the original project. Please go star it and support it.
+
 ## Introduction
 
 This is a decompilation Resident Evil 1 for PC released in 1997. The original game code, reverse-engineered from the Ghidra decompilation of the 1997 executable, is rebuilt on a modern rendering layer, for **two platforms**:
