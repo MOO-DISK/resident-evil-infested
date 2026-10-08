@@ -1,6 +1,5 @@
-# Resident Evil 1 for PC Decompilation
 
-## Infested
+# Resident Evil Infested
 
 **Infested** is an asymmetric multiplayer mode built on the pc decomp: one
 **director** against up to three **survivors** in a randomized mansion
@@ -8,15 +7,31 @@ scenario. The director spends points to place, possess and command the
 mansion's monsters and set traps. The survivors each pick a character with
 their own perks, scavenge randomized keys, weapons and ammo, and try to escape
 through the storeroom before the 20-minute clock runs out. Single player pits
-the director against an AI survivor. It is switched on with `[Mods]
-PlayInfested=1` in `config.ini` (the default in `config.ini.template`); with it
-off, the game plays exactly as the original.
+the director against an AI survivor and is mostly meant for familiarizitng yourself with the controls. 
+It is switched on with `[Mods] PlayInfested=1` in `config.ini` (the default in `config.ini.template`); with it
+off, the game plays exactly as the original. 
+
+**Survivors** may find some key differences from the old mansion
+- Most weapons are locked behind the progression puzzles, the piano, gallery, armor room, plant room, etc.
+- Keys are randomly spread out across the mansion and their locations are indicated in the special Infested map
+viewable with the options button.
+- The set of locked doors is mostly the same, but which key unlocks them is randomized.
+- The shotgun is in its original place but requires either a pickaxe to break down the door 
+as the trap event is happening or the broken shotgun must be used to swap out for the shotgun, 
+both the Pickaxe and Broken shotgun are random drops.
+- To reach the back part of the mansion either a key code for the keypad door or a 
+battery for the elevator 212626, both are random drops, one crest will always spawn in that area of the mansion.
+
+If you want to really mess around you can rebuild this project with the QUICK_DEBUG define line uncommented
+and the game will start with most of the relevant items in the main hall or near their respective puzzles.
 
 ### Thank you
 
 This project is a fork of Eduardo Cruells'
 [**Resident Evil 1 for PC Decompilation**](https://github.com/ecruells/resident-evil-pc-decomp).
 and would not exist without it. Please go star it and support it.
+
+# Resident Evil 1 for PC Decompilation
 
 ## Introduction
 
