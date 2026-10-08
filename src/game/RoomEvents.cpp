@@ -345,6 +345,14 @@ static int scd_event_state1_anim(void)
     unsigned short* opcodes = (unsigned short*)g_pScdEventCurrent->scriptPtr;
     Entity* ent = g_pScdEventCurrent->entity;
 
+    // Port-added mod: a reveal in the zombie mode does not pose the player
+    // (mods/ZombieMessages.cpp).
+    if (int skip = zombie_mode_event_pose_skip((int)(g_pScdEventCurrent - g_ScdEventTable), ent,
+                                               g_pScdEventCurrent->scriptPtr)) {
+        g_pScdEventCurrent->scriptPtr += skip;
+        return 1;
+    }
+
     switch ((unsigned char)*opcodes) {
     case 0x00: // Advance script pointer
         g_pScdEventCurrent->scriptPtr++;
@@ -753,7 +761,10 @@ event_dispatch:
                         scd_event_cmd_set_entity();
                         break;
                     case 0x05: // Create event
+                        // Port-added mod: which event starts it (mods/ZombieMessages.cpp).
+                        zombie_mode_event_cmd((int)(g_pScdEventCurrent - g_ScdEventTable));
                         scd_event_cmd_create();
+                        zombie_mode_event_cmd(-1);
                         break;
                     case 0x06: // Run SCD inline
                         // Port-added mod: which event runs the commands.
@@ -767,7 +778,9 @@ event_dispatch:
                         zombie_mode_event_cmd(-1);
                         break;
                     case 0x08: // Reinitialize event
+                        zombie_mode_event_cmd((int)(g_pScdEventCurrent - g_ScdEventTable));   // port-added mod
                         scd_event_cmd_init();
+                        zombie_mode_event_cmd(-1);
                         goto event_next_entry;
                     case 0x09: // Deactivate another event
                         g_ScdEventTable[scriptByte[1]].active = 0;

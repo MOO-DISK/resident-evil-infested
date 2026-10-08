@@ -214,7 +214,10 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   no Yes/No (locked doors, desks, examined objects, no ink ribbon...) leaves
   `g_message_flags` alone - the survivor keeps control and the room runs. It
   types out on the bottom line, turns pages and closes by itself after
-  1.5 s + 60 ms a character (2-7 s); the buttons do not touch it. A different
+  0.7 s + 25 ms a character (1.2-4 s); the buttons do not touch it, except
+  one an event holding the control waits on (Action turns it on). Text types
+  4 characters per tick in the mode (`zombie_mode_message_chars_per_frame`).
+  A grab, hit or death closes a passive message at once. A different
   message replaces it, a door or the menu closes it (`zombie_mode_message_drop`
   in game_loop), and the same one is not restarted for 1 s after. A Yes/No
   prompt (take an item, use a key, save) clears only 0x0140 instead of 0xff:
@@ -230,6 +233,27 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   camera returns to the one before it (`zm_fix_camera_at` after), and that
   event's later cut commands are dropped (`zombie_mode_cut_skip`). Desks
   (`check_desk`) still pan and open the take screen. Untested by the user.
+  Events never stop the world in the mode: an SCD event's bit_op clearing
+  message flags 0x01/0x04/0x08 (player, monsters, effects) is dropped
+  (`zombie_mode_event_flag_clear` in `cmd_bit_op`), only the control (0x100)
+  is taken - the survivor idles and grabs/hits land (their GRAB/PHURT wait on
+  0x04). Every Yes/No prompt, a script-held one too, is answered No by a grab
+  or hit. The skipped scenes' flag replay is outside any event and unchanged.
+  Untested by the user.
+  Reveals (`kReveals` in ZombieMessages.cpp) play as an examine close-up:
+  the 1F dining room (ROOM6050 ev1), the bar's emblem cabinet (60F0 ev10/11),
+  the bathtub (6130 ev1), the large gallery's solve (6170 ev20/21), the 1F
+  study switch (6190 ev0), the crest door (11A0 ev3-6), the armor room
+  (7050 ev1), the 2F study shelf (70A0 ev1), the stove (70B0 ev0), the
+  trophy room switch and eye (7150 ev0/4), the private library (7170 ev1).
+  Events a reveal starts or re-inits are reveals too (one close-up group).
+  The control is not taken, the player is neither posed nor placed
+  (`zombie_mode_event_pose_skip` in the event VM's state 1 raises a pose's
+  end flag itself; `zombie_mode_player_pos_skip` in cmd_player_pos_set), and
+  moving, turning or being hit/grabbed cuts back to the camera before the
+  first close-up; the group's later cuts are dropped while it runs on.
+  Pickup close-ups (6130 ev4, 7100, 7180) and the rope (70C0) are not
+  reveals. Untested by the user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.
@@ -715,7 +739,20 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   gallery solved elsewhere: the panel moves aside and event 22 frees the
   reward here (the reveal, which places the player, stays the solver's). The
   director's copy keeps its own (these scenes would turn its camera). CPU test
-  `tests/test_zombie_roomsync.py`. Untested by the user.
+  `tests/test_zombie_roomsync.py`. Tested by the user.
+  The 2F statue seen from below (`ZombieStatue.cpp`): a copy that loads the
+  1F dining room (ROOM6050) with ScenarioFlags 0x0B still clear preloads the
+  broken statue (omodel 3) and the jewel (item 0x12, sparkle off) hidden,
+  ROOM7020's standing statue (object model 0) as an extra non-solid item
+  record, and `brk_stn.wav`. When the bit is set there (STORY), after 10
+  frames the statue drops straight down from 5650 above, tipping from 45
+  degrees to lying flat along the pieces' footprint (`st_orient`: long side,
+  top towards its far end), then the pieces and jewel appear with the crash
+  and dust puffs (billboard type 9). `[statue]` lines. Untested by the user.
+  The gallery's six portrait questions (events 6-11 on action slots 2-7)
+  change places each game by the seed (`rs_gallery_shuffle`); the answer order
+  is unchanged, the plaque (slot 1) and last portrait (slot 8) stay. Untested
+  by the user.
 - **Doors:** every door animation in the mode ends after `ZM_DOOR_FRAMES`
   (20 frames, about 0.7 s, `zombie_mode_door_frames` in DoorSystem.cpp's
   DoorAnimLoop), counted from the script gate opening (the sound load), not
@@ -776,6 +813,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieKeypad.cpp` | the back area's ways in: the battery powering the small elevator, the keypad door and its pass number's note, the rough passage's door back |
 | `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |
 | `ZombieRoomSync.cpp` | a room's pushed objects and puzzle flags, shared by the survivors in it |
+| `ZombieStatue.cpp` | the 2F dining statue falling into the 1F dining room, seen live from below |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |
 | `ZombieStats.cpp` | the end of a match: each player's stats, their exchange (STATS) and the white end screen |
@@ -832,6 +870,10 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   flamethrower), key items in leaf rooms, Richard's sheet music and 162 HP. Tested: the grenade launcher
   on Chris and the flamethrower on Jill work (their own W06 / W15 files,
   never held in the original game).
+  The flamethrower's in-hand mesh (W05 = W15 = W25 = W35) is cut for
+  Chris's sheet: on Jill, Barry and Rebecca it reads Chris's TIM, loaded on
+  demand like the Ingram's (`zm_flamer_borrows_sheet`, `zm_chris_sheet`) -
+  on their own sheets it came out flesh-coloured. Untested by the user.
 - Untested by the user: spectating after death (the follow through doors,
   the camera, the corpse staying put on the other copies, the monsters
   shown in a room only the watched survivor is in); the auto-aim no longer

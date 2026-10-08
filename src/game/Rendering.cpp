@@ -1471,6 +1471,7 @@ void UpdateMessageDisplay(void)
     unsigned char* pbVar3;
     short screenX;
     unsigned short fade;
+    int charsLeft = 1;      // port-added: characters still to type this frame
 
     g_TextureDesc.colorMulR = 0x80;
     g_TextureDesc.colorMulG = 0x80;
@@ -1513,6 +1514,7 @@ void UpdateMessageDisplay(void)
         }
 
         // Timer expired: process next character
+        charsLeft = zombie_mode_message_chars_per_frame();
         bVar1 = *g_MessageCurrentPtr;
         lineCount = g_MessageLineCounter;
         pbVar3 = g_MessageCurrentPtr;
@@ -1623,6 +1625,13 @@ state1_case2:
 msg_skip_char:
             g_MessageCurrentPtr++;
             g_MessageCharTimer = g_MessageCharDelay;
+            // Port-added mod: more than one character a frame (mods/ZombieMessages.cpp).
+            if (--charsLeft > 0) {
+                bVar1 = *g_MessageCurrentPtr;
+                lineCount = g_MessageLineCounter;
+                pbVar3 = g_MessageCurrentPtr;
+                goto state1_process_char;
+            }
             goto state1_default;
         }
 

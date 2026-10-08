@@ -211,6 +211,7 @@
     <ClCompile Include="src\game\mods\ZombieKeypad.cpp" />
     <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
     <ClCompile Include="src\game\mods\ZombieRoomSync.cpp" />
+    <ClCompile Include="src\game\mods\ZombieStatue.cpp" />
     <ClCompile Include="src\game\mods\ZombieStats.cpp" />
     <ClCompile Include="src\game\mods\ZombieDrops.cpp" />
     <ClCompile Include="src\game\mods\ZombieMessages.cpp" />

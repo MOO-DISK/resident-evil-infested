@@ -5,7 +5,7 @@
 // unlock wait or main-hall lockout, and
 // loaded guns and all four crests in the main hall. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-//#define QUICK_DEBUG
+#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -270,6 +270,10 @@ void zm_roomsync_reset(void);
 void zm_roomsync_room(void);
 void zm_roomsync_frame(void);
 void zm_roomsync_take(const short* args, int src);
+// The 2F statue falling into the 1F dining room (ZombieStatue.cpp).
+void zm_statue_room_reset(void);
+void zm_statue_room(void);
+void zm_statue_frame(void);
 void zm_greenhouse_room(void);
 void zm_greenhouse_frame(void);
 void zm_piano_room(void);

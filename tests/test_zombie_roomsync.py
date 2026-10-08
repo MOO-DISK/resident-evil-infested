@@ -45,6 +45,8 @@ void zm_net_send_event8(int kind,short a0,short a1,short a2,short a3,short a4,sh
 int Flg_ck(int base,unsigned int bit) { return (((unsigned int*)base)[bit/32] & (1u << (31-bit%32))) != 0; }
 void Flg_on(int base,unsigned int bit) { ((unsigned int*)base)[bit/32] |= 1u << (31-bit%32); }
 static void Flg_off(void* base,unsigned int bit) { ((unsigned int*)base)[bit/32] &= ~(1u << (31-bit%32)); }
+static unsigned char g_RoomActionTable[128*12]; static unsigned int seed=0x1234;
+unsigned int zm_random_seed() { return seed; }
 static int armEvents; void ScdEventEntry_Create(unsigned int slot,int script) { assert(slot==9 && script==22); armEvents++; }
 void dbg_printf(const char*,...) {}
 '''
@@ -135,6 +137,22 @@ int main() {
  Flg_on((int)g_SysFlags,0x1F); Flg_on((int)g_ScenarioFlags,0x03); zm_roomsync_frame(); assert(armEvents==0);
  // Already solved when the room loads: its init did it.
  load(STAGE_MANSION_RETURN_1F,ROOM_LARGE_GALLERY,true); zm_roomsync_frame(); assert(armEvents==0);
+ // The portrait questions change places by the seed; the plaque and the last
+ // portrait stay, and every copy (the director's too) agrees.
+ auto unsolved=[]{ memset(g_RoomActionTable,0,sizeof(g_RoomActionTable));
+  for (int s=1;s<=8;s++) { g_RoomActionTable[s*12]=0x09; g_RoomActionTable[s*12+4]=(unsigned char)(s+4); } };
+ auto layout=[&](unsigned int sd,int r){ seed=sd; role=r; unsolved(); load(STAGE_MANSION_RETURN_1F,ROOM_LARGE_GALLERY,false);
+  role=ZM_NET_SURVIVOR; unsigned long long v=0; for (int s=2;s<=7;s++) v=v*16+g_RoomActionTable[s*12+4]; return v; };
+ unsigned long long a=layout(0x1234,ZM_NET_SURVIVOR);
+ assert(g_RoomActionTable[1*12+4]==5 && g_RoomActionTable[8*12+4]==12);
+ bool seen[16]={}; for (int s=2;s<=7;s++) { int e=g_RoomActionTable[s*12+4]; assert(e>=6 && e<=11 && !seen[e]); seen[e]=true; }
+ assert(layout(0x1234,ZM_NET_ZOMBIE)==a);
+ bool differs=false; for (unsigned int sd=1; sd<20; sd++) differs |= layout(sd,ZM_NET_SURVIVOR)!=a;
+ assert(differs && a!=0x6789AB);
+ // The solved room's message portraits are left as they are.
+ seed=0x1234; memset(g_RoomActionTable,0,sizeof(g_RoomActionTable));
+ for (int s=2;s<=7;s++) { g_RoomActionTable[s*12]=0x02; g_RoomActionTable[s*12+4]=(unsigned char)(s+4); }
+ load(STAGE_MANSION_RETURN_1F,ROOM_LARGE_GALLERY,false); for (int s=2;s<=7;s++) assert(g_RoomActionTable[s*12+4]==s+4);
  puts("Room puzzle sync OK");
 }
 '''

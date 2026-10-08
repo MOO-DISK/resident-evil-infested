@@ -1,6 +1,8 @@
 #include "ZombieModeInternal.h"
 #include "../../DebugPrint.h"
 
+extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473ef0 CmdFunctions.cpp
+
 // ============================================================================
 // ZombieMessages.cpp - text that does not stop the game (port-added).
 //
@@ -46,20 +48,62 @@
 // ZM_MSG_REPEAT_MS after: walk-in zones probe every frame.
 // ============================================================================
 
-#define ZM_MSG_BASE_MS    1500   // reading time per page: this
-#define ZM_MSG_CHAR_MS      60   //   plus this per character,
-#define ZM_MSG_MIN_MS     2000   //   within these bounds
-#define ZM_MSG_MAX_MS     7000
+#define ZM_MSG_BASE_MS     700   // reading time per page: this
+#define ZM_MSG_CHAR_MS      25   //   plus this per character,
+#define ZM_MSG_MIN_MS     1200   //   within these bounds
+#define ZM_MSG_MAX_MS     4000
 #define ZM_MSG_REPEAT_MS  1000
 #define ZM_MSG_PROMPT_MASK 0x0140   // what a Yes/No prompt clears
 
 
 static bool           s_passive = false;
 static bool           s_prompt = false;    // a Yes/No prompt holding only the control
+static bool           s_passiveEvent = false; // a passive message an event (holding the control) waits on
 static unsigned short s_id = 0;
 static unsigned int   s_waitStart = 0;     // when the shown page finished typing; 0 = not yet
 static signed char    s_evtSlot = -1;      // event slot whose SCD command is running
-static bool           s_examine[8];        // per event slot: an examine event
+static bool           s_examine[8];        // per event slot: an examine event (or a reveal)
+static bool           s_reveal[8];         // per event slot: a reveal played as a close-up
+
+// Reveals: scenes that take the control, cut the camera and pose or place
+// the player to show what a puzzle changed. In the mode they play like an
+// examine's close-up - the survivor keeps the control and is neither posed
+// nor moved, and moving, turning or being hit cuts back to it; the scene
+// itself runs on (the case still opens). The events a reveal starts are
+// reveals too (one group: a cut back drops all their cuts). Found by
+// scanning the return mansion's events that survive the story filter for
+// camera cuts with the control taken or the player placed; pickup
+// close-ups and room-changing scenes (the rope in ROOM70C0) are left out.
+struct ZmReveal {
+    unsigned char stage, room, script;
+};
+static const ZmReveal kReveals[] = {
+    { STAGE_MANSION_RETURN_1F, ROOM_DINING_ROOM, 1 },          // ROOM6050: the object at the fireplace moves
+    { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BAR, 10 },         // ROOM60F0: the emblems' cabinet
+    { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BAR, 11 },
+    { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BATHROOM, 1 },     // ROOM6130: the bathtub drains
+    { STAGE_MANSION_RETURN_1F, ROOM_LARGE_GALLERY, 20 },       // ROOM6170: the last portrait, solved
+    { STAGE_MANSION_RETURN_1F, ROOM_LARGE_GALLERY, 21 },       //   ...the panel slides away
+    { STAGE_MANSION_RETURN_1F, ROOM_MANSION_1F_STUDY, 0 },     // ROOM6190: the switch
+    { STAGE_MANSION_RETURN_1F, ROOM_ROOFED_PASSAGE, 3 },       // ROOM11A0: a crest set in the door
+    { STAGE_MANSION_RETURN_1F, ROOM_ROOFED_PASSAGE, 4 },
+    { STAGE_MANSION_RETURN_1F, ROOM_ROOFED_PASSAGE, 5 },
+    { STAGE_MANSION_RETURN_1F, ROOM_ROOFED_PASSAGE, 6 },
+    { STAGE_MANSION_RETURN_2F, ROOM_ARMOR_ROOM, 1 },           // ROOM7050: the display case slides open
+    { STAGE_MANSION_RETURN_2F, ROOM_STUDY_2F, 1 },             // ROOM70A0: the shelf's switch
+    { STAGE_MANSION_RETURN_2F, ROOM_FRONT_LESSON_ROOM, 0 },    // ROOM70B0: the stove
+    { STAGE_MANSION_RETURN_2F, ROOM_TROPHY_ROOM, 0 },          // ROOM7150: the light switch
+    { STAGE_MANSION_RETURN_2F, ROOM_TROPHY_ROOM, 4 },          //   ...the deer's eye
+    { STAGE_MANSION_RETURN_2F, ROOM_PRIVATE_LIBRARY, 1 },      // ROOM7170: the statue in place
+};
+
+static bool zm_is_reveal(int script)
+{
+    for (unsigned int i = 0; i < sizeof(kReveals) / sizeof(kReveals[0]); i++) {
+        if (kReveals[i].stage == g_stageId && kReveals[i].room == g_roomId && kReveals[i].script == script) return true;
+    }
+    return false;
+}
 static int            s_closeSlot = -1;    // the event that cut to a close-up
 static unsigned char  s_closeCam, s_prevCam, s_closeStage, s_closeRoom;
 static bool           s_closeReleased = false;
@@ -129,12 +173,33 @@ static bool zm_in_examine(void)
     return zombie_mode_armed() && s_evtSlot >= 0 && s_evtSlot < 8 && s_examine[s_evtSlot];
 }
 
+// One close-up: an examine's own event, or any of the reveals running.
+static bool zm_same_close(int a, int b)
+{
+    if (a < 0 || a >= 8 || b < 0 || b >= 8) return false;
+    return a == b || (s_reveal[a] && s_reveal[b]);
+}
+
+static bool zm_close_running(void)
+{
+    if (g_ScdEventTable[s_closeSlot].active != 0) return true;
+    if (!s_reveal[s_closeSlot]) return false;
+    for (int i = 0; i < 8; i++) {
+        if (s_reveal[i] && g_ScdEventTable[i].active != 0) return true;
+    }
+    return false;
+}
+
 void zombie_mode_event_init(int slot, int script)
 {
     if (slot < 0 || slot >= 8) return;
-    s_examine[slot] = zombie_mode_armed() && zm_evt_is_examine(script);
+    // Started (or re-inited) by a reveal's command: part of it.
+    const bool inherit = zombie_mode_armed() && s_evtSlot >= 0 && s_evtSlot < 8 && s_reveal[s_evtSlot];
+    s_reveal[slot] = inherit || (zombie_mode_armed() && zm_is_reveal(script));
+    s_examine[slot] = s_reveal[slot] || (zombie_mode_armed() && zm_evt_is_examine(script));
     if (slot == s_closeSlot) s_closeSlot = -1;
-    if (s_examine[slot]) dbg_printf("[msg] event %d (slot %d) is an examine event\n", script, slot);
+    if (s_examine[slot]) dbg_printf("[msg] event %d (slot %d) is an %s event\n", script, slot,
+                                    s_reveal[slot] ? "reveal" : "examine");
 }
 
 void zombie_mode_event_cmd(int slot)
@@ -144,14 +209,16 @@ void zombie_mode_event_cmd(int slot)
 
 bool zombie_mode_cut_skip(void)
 {
-    return zm_in_examine() && s_closeSlot == s_evtSlot && s_closeReleased;
+    return zm_in_examine() && s_closeReleased && zm_same_close(s_closeSlot, s_evtSlot);
 }
 
 void zombie_mode_cut_closeup(unsigned char prevCam)
 {
     if (!zm_in_examine()) return;
+    // A scene cutting from one close-up to the next still returns to the
+    // camera before the first.
+    if (!zm_same_close(s_closeSlot, s_evtSlot)) s_prevCam = prevCam;
     s_closeSlot = s_evtSlot;
-    s_prevCam = prevCam;
     s_closeCam = g_roomCameraId;
     s_closeStage = g_stageId;
     s_closeRoom = g_roomId;
@@ -160,7 +227,7 @@ void zombie_mode_cut_closeup(unsigned char prevCam)
 
 void zombie_mode_cut_restored(void)
 {
-    if (zm_in_examine() && s_closeSlot == s_evtSlot && !s_closeReleased) s_closeSlot = -1;
+    if (zm_in_examine() && zm_same_close(s_closeSlot, s_evtSlot) && !s_closeReleased) s_closeSlot = -1;
 }
 
 // The examine close-up back to the room's camera: the one before it, as the
@@ -187,7 +254,7 @@ void zombie_mode_message_frame(void)
 {
     if (s_closeSlot < 0) return;
     if (!zombie_mode_armed() || g_stageId != s_closeStage || g_roomId != s_closeRoom ||
-        g_ScdEventTable[s_closeSlot].active == 0) {
+        !zm_close_running()) {
         s_closeSlot = -1;
         return;
     }
@@ -197,8 +264,12 @@ void zombie_mode_message_frame(void)
         s_closeSlot = -1;
         return;
     }
-    if ((g_message_flags & 0x0101) != 0x0101) return;
-    if ((g_PlayerDpadHeld & (ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B)) == 0) return;
+    // Hit, grabbed or dead: back to the survivor at once.
+    const bool attacked = g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0;
+    if (!attacked) {
+        if ((g_message_flags & 0x0101) != 0x0101) return;
+        if ((g_PlayerDpadHeld & (ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B)) == 0) return;
+    }
     s_closeReleased = true;
     zm_close_release();
 }
@@ -208,6 +279,7 @@ unsigned short zombie_mode_message_pause(unsigned short msgId, unsigned short pa
 {
     s_passive = false;
     s_prompt = false;
+    s_passiveEvent = false;
     s_waitStart = 0;
     const bool examine = zm_in_examine();
     if (!zombie_mode_armed() || (pause == 0 && !examine) || text == NULL) return pause;
@@ -217,13 +289,17 @@ unsigned short zombie_mode_message_pause(unsigned short msgId, unsigned short pa
     // room is up and raises it only to request a room change.)
     if (g_openMenuFlag != 0) return pause;
     if (zm_msg_has_prompt(text)) {
-        if (pause == 0) return 0;    // an examine event's question: its script holds the control
+        // A grab or a hit answers No either way (zombie_mode_message_prompt_cancel).
         s_prompt = true;
+        if (pause == 0) return 0;    // an examine event's question: its script holds the control
         dbg_printf("[msg] 0x%02X Yes/No: only the control held\n", msgId);
         return ZM_MSG_PROMPT_MASK;
     }
     s_passive = true;
     s_id = msgId;
+    // Shown from an event that holds the control (not an examine, which gives
+    // it back): the survivor can do nothing else, so Action may turn it on.
+    s_passiveEvent = s_evtSlot >= 0 && s_evtSlot < 8 && !examine;
     // An examine event took the control for its message: give it back now.
     if (examine && (g_message_flags & 0x0100) == 0) {
         g_message_flags |= 0x0100;
@@ -249,6 +325,67 @@ bool zombie_mode_message_prompt_end(void)
     return true;
 }
 
+// Text is read in a race: in the mode it types out ZM_MSG_FAST_CHARS
+// characters each time the original types one.
+#define ZM_MSG_FAST_CHARS 4
+
+int zombie_mode_message_chars_per_frame(void)
+{
+    return zombie_mode_armed() ? ZM_MSG_FAST_CHARS : 1;
+}
+
+// An event's bit_op clearing message flags. The original's scenes stop the
+// player's state machine (0x01), the monsters (0x04) and the effects (0x08)
+// while they hold the control (0x100). In the mode the room runs on - a
+// monster on another copy grabs and hits regardless, and its GRAB/PHURT wait
+// on 0x04 - so only the control is taken: the survivor stands idle, as under
+// a menu, and a grab or a hit reaches it (and closes the event's text). The
+// skipped scenes' flag replay runs outside any event and keeps the original's.
+#define ZM_MSG_WORLD_FLAGS 0x000D
+
+unsigned int zombie_mode_event_flag_clear(unsigned int mask)
+{
+    if (!zombie_mode_armed() || s_evtSlot < 0 || s_evtSlot >= 8) return mask;
+    // A reveal does not take the control either.
+    if (s_reveal[s_evtSlot]) return mask & ~(unsigned int)(ZM_MSG_WORLD_FLAGS | 0x0100);
+    return mask & ~(unsigned int)ZM_MSG_WORLD_FLAGS;
+}
+
+// The event VM's state 1, a reveal's command on the player: the look-at
+// (0x81 / 0x82), the pose (0x83 / 0x84 / 0x85), the stand-back (0x86), the
+// flags (0x87), the timer (0x88) and the frame (0x89 / 0x8A) are not applied -
+// the survivor keeps its own action. A pose's end flag (the system flag the
+// player's animation raises when it finishes, which the scene waits on) is
+// raised at once. The command's width to step over, 0 to run it.
+int zombie_mode_event_pose_skip(int slot, const void* entity, const unsigned char* op)
+{
+    if (!zombie_mode_armed() || slot < 0 || slot >= 8 || !s_reveal[slot] || entity != (const void*)&g_playerEntity) {
+        return 0;
+    }
+    unsigned char done = 0;
+    int width;
+    switch (op[0]) {
+    case 0x81: width = (op[1] & 0x0F) != 0 ? 10 : 2; break;
+    case 0x82: width = 1; break;
+    case 0x83: done = op[6]; width = 7; break;
+    case 0x84: done = op[2]; width = 4; break;
+    case 0x85: done = op[3]; width = 4; break;
+    case 0x86: width = 1; break;
+    case 0x87: width = 4; break;
+    case 0x88: width = 4; break;
+    case 0x89: case 0x8A: width = 2; break;
+    default: return 0;
+    }
+    if (done != 0) Flg_on((int)g_SysFlags, done);
+    return width;
+}
+
+// player_pos_set from a reveal: the survivor stays where it is.
+bool zombie_mode_player_pos_skip(void)
+{
+    return zombie_mode_armed() && s_evtSlot >= 0 && s_evtSlot < 8 && s_reveal[s_evtSlot];
+}
+
 bool zombie_mode_message_is_passive(void)
 {
     return s_passive;
@@ -257,6 +394,16 @@ bool zombie_mode_message_is_passive(void)
 bool zombie_mode_message_page_done(bool pressed)
 {
     if (!s_passive) return pressed;
+    // A grab, a hit or death: out of the way at once, so the event waiting on
+    // it moves on (its question, if any, is answered No).
+    if (g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0) {
+        s_waitStart = 0;
+        return true;
+    }
+    if (s_passiveEvent && pressed) {
+        s_waitStart = 0;
+        return true;
+    }
     unsigned int now = zm_game_time_ms();
     if (s_waitStart == 0) {
         s_waitStart = now ? now : 1;

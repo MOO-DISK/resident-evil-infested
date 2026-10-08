@@ -516,7 +516,7 @@ void zm_world_merge_flags(const unsigned char* in)
 // that differs goes out as ZM_EV_STORY { bank, byte, bits set, bits cleared }.
 // The other copies apply the change and take it into their own "last seen", so
 // it does not echo back. Example: the 2F dining room's statue - the fall event
-// clears bank 0 bit 0x0B, which is what ROOM7020 (statue gone) and ROOM6050
+// sets bank 0 bit 0x0B, which is what ROOM7020 (statue gone) and ROOM6050
 // (the broken statue and its jewel) test.
 //
 // Bits that describe one player rather than the world stay local.

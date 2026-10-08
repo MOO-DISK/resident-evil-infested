@@ -757,6 +757,7 @@ void zombie_mode_room_reset(void)
     s_zombieDeathReported = false;
     s_lastSkippedEvent = -1;
     zm_random_room_reset();
+    zm_statue_room_reset();
     zm_drops_room_reset();
     zm_econ_room_reset();
 }
@@ -1313,6 +1314,7 @@ void zombie_mode_room_spawn(void)
     zm_access_room();
     zm_greenhouse_room();
     zm_roomsync_room();
+    zm_statue_room();
     zm_drops_room_loaded();
 
     // The roster's extra monsters first, in the free slots above every slot
@@ -1761,18 +1763,65 @@ static bool zm_jill_sheet(int* bank, int* page)
     return true;
 }
 
+// Chris's sheet, loaded on demand (the flamethrower) when room_set did not
+// load it for a borrowed character; tried once a room.
+static bool s_chrisSheetTried = false;
+
+static bool zm_chris_sheet(int* bank, int* page)
+{
+    if (s_chrisSheetBank < 0 && !s_chrisSheetTried) {
+        s_chrisSheetTried = true;
+        if (!zm_load_chris_emd() || !zm_ext_begin(2)) {
+            dbg_printf("[zombie] no texture bank for Chris's sheet here: borrowed weapons keep the holder's sheet\n");
+        } else {
+            s_chrisSheetBank = g_TextureBankID;
+            s_chrisSheetPage = g_TextureCurrentPage;
+            unsigned int tim = *(const unsigned int*)(s_chrisEmd + (s_chrisEmdSize & 0xFFFFFFFC) - 4) & 0xFFFFFFFC;
+            ProcessTmdAsync((unsigned int)(s_chrisEmd + tim));
+            zm_ext_end();
+        }
+    }
+    if (s_chrisSheetBank < 0) return false;
+    *bank = s_chrisSheetBank;
+    *page = s_chrisSheetPage;
+    return true;
+}
+
 // The Ingram on a body other than Jill's takes her sheet.
 static bool zm_ingram_borrows_sheet(int ch, unsigned char weapon)
 {
     return s_zombieModeArmed && weapon == ITEM_INGRAM && ch != ZM_CHAR_JILL;
 }
 
+// The flamethrower's in-hand mesh (players/w05.emw - w15, w25 and w35 are the
+// same file) is cut for Chris's sheet: on Jill's, Barry's or Rebecca's body
+// its barrel and tank read their own sheet's skin and came out flesh-coloured.
+// The borrowed characters already read Chris's sheet for every weapon.
+static bool zm_flamer_borrows_sheet(int ch, unsigned char weapon)
+{
+    return s_zombieModeArmed && weapon == ITEM_FLAMETHROWER && ch != ZM_CHAR_CHRIS && !zm_char_borrowed(ch);
+}
+
+static bool zm_weapon_borrows_sheet(int ch, unsigned char weapon)
+{
+    return zm_ingram_borrows_sheet(ch, weapon) || zm_flamer_borrows_sheet(ch, weapon);
+}
+
+// The sheet a weapon cut for another character reads on this body.
+static bool zm_weapon_sheet(int ch, unsigned char weapon, int* bank, int* page)
+{
+    if (zm_ingram_borrows_sheet(ch, weapon)) return zm_jill_sheet(bank, page);
+    if (zm_flamer_borrows_sheet(ch, weapon)) return zm_chris_sheet(bank, page);
+    return false;
+}
+
 bool zombie_mode_weapon_texture(int* bank, int* page)
 {
-    if (zm_ingram_borrows_sheet(zombie_mode_player_skin(g_playerEntity.id & 3), g_playerEntity.equippedWeaponId)) {
-        return zm_jill_sheet(bank, page);
+    int ch = zombie_mode_player_skin(g_playerEntity.id & 3);
+    if (zm_weapon_borrows_sheet(ch, g_playerEntity.equippedWeaponId)) {
+        return zm_weapon_sheet(ch, g_playerEntity.equippedWeaponId, bank, page);
     }
-    if (!zm_char_borrowed(zombie_mode_player_skin(g_playerEntity.id & 3)) || s_chrisSheetBank < 0) return false;
+    if (!zm_char_borrowed(ch) || s_chrisSheetBank < 0) return false;
     *bank = s_chrisSheetBank;
     *page = s_chrisSheetPage;
     return true;
@@ -1786,15 +1835,17 @@ void zombie_mode_room_models_loaded(void)
 {
     s_chrisSheetBank = -1;
     s_chrisSheetPage = -1;
+    s_chrisSheetTried = false;
     s_jillSheetBank = -1;
     s_jillSheetPage = -1;
     s_jillSheetTried = false;
     if (!s_zombieModeArmed) return;
-    // The room's banks are new: this copy's Ingram reads Jill's sheet again.
-    bool ingram = zm_ingram_borrows_sheet(zombie_mode_player_skin(g_playerEntity.id & 3),
-                                          g_playerEntity.equippedWeaponId);
+    // The room's banks are new: this copy's Ingram or flamethrower reads the
+    // other character's sheet again.
+    bool sheet = zm_weapon_borrows_sheet(zombie_mode_player_skin(g_playerEntity.id & 3),
+                                         g_playerEntity.equippedWeaponId);
     if (s_gameRole == ZM_NET_OFF) {
-        if (ingram) {
+        if (sheet) {
             LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
                                         (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
         }
@@ -1807,22 +1858,15 @@ void zombie_mode_room_models_loaded(void)
         needed = (e->status_flags & ENTITY_STATUS_ACTIVE) != 0 && zm_char_borrowed(zm_char_of_npc_id(e->id));
     }
     if (!needed) {
-        if (ingram) {
+        if (sheet) {
             LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
                                         (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
         }
         return;
     }
-    if (!zm_load_chris_emd() || !zm_ext_begin(2)) {
-        dbg_printf("[zombie] no texture bank for Chris's sheet here: borrowed weapons stay empty\n");
-    } else {
-        s_chrisSheetBank = g_TextureBankID;
-        s_chrisSheetPage = g_TextureCurrentPage;
-        unsigned int tim = *(const unsigned int*)(s_chrisEmd + (s_chrisEmdSize & 0xFFFFFFFC) - 4) & 0xFFFFFFFC;
-        ProcessTmdAsync((unsigned int)(s_chrisEmd + tim));
-        zm_ext_end();
-    }
-    if (own || ingram) {
+    int bank, page;
+    zm_chris_sheet(&bank, &page);
+    if (own || sheet) {
         LoadEquippedWeaponAnimation(g_playerEntity.equippedWeaponId, 0xE,
                                     (unsigned int)g_animationBuffer, (unsigned int)g_animObjectBuffer);
     }
@@ -6255,9 +6299,9 @@ static void zm_standin_set_weapon(Entity* e, int who, unsigned char weapon)
     st.weapon = weapon;
     int ch = zm_char_of_npc_id(e->id);
     bool borrowed = zm_char_borrowed(ch);
-    int jillBank = -1, jillPage = -1;
-    bool jillSheet = zm_ingram_borrows_sheet(ch, weapon) && zm_jill_sheet(&jillBank, &jillPage);
-    if (weapon != 0 && borrowed && s_chrisSheetBank < 0 && !jillSheet) {
+    int sheetBank = -1, sheetPage = -1;
+    bool sheet = zm_weapon_borrows_sheet(ch, weapon) && zm_weapon_sheet(ch, weapon, &sheetBank, &sheetPage);
+    if (weapon != 0 && borrowed && s_chrisSheetBank < 0 && !sheet) {
         weapon = 0;                     // no room for Chris's sheet here: empty-handed
     }
     if (weapon != 0) {
@@ -6271,8 +6315,8 @@ static void zm_standin_set_weapon(Entity* e, int who, unsigned char weapon)
             // file's tail table, rebased; textures onto this model's page.
             unsigned int* tail = (unsigned int*)(st.emw + (size & 0xFFFFFFFC) - 8);
             unsigned int mesh = (tail[1] & 0xFFFFFFFC) + (unsigned int)st.emw;
-            if (jillSheet) {
-                ProcessTmdTextures(2, (unsigned int*)mesh, jillBank, jillPage);
+            if (sheet) {
+                ProcessTmdTextures(2, (unsigned int*)mesh, sheetBank, sheetPage);
             } else if (borrowed) {
                 ProcessTmdTextures(2, (unsigned int*)mesh, s_chrisSheetBank, s_chrisSheetPage);
             } else {
@@ -7101,6 +7145,7 @@ void zombie_mode_net_frame(void)
     zm_access_frame();
     zm_greenhouse_frame();
     zm_roomsync_frame();
+    zm_statue_frame();
     zm_end_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;

@@ -205,6 +205,13 @@ int cmd_bit_op(void)
     unsigned int* target = (unsigned int*)((char*)flagBank + bitOffset);
     unsigned int mask = 0x80000000U >> bitIndex;
 
+    // Port-added mod: an SCD event in the zombie mode takes the control but
+    // does not stop the player, the monsters or the effects
+    // (mods/ZombieMessages.cpp).
+    if (operation == 1 && op1 >> 8 == 6 && bitOffset == 0) {
+        mask = zombie_mode_event_flag_clear(mask);
+    }
+
     if (operation == 0) {
         *target |= mask;
     } else if (operation == 1) {
@@ -1280,6 +1287,12 @@ setupObject:
 // ============================================================================
 int cmd_player_pos_set(void)
 {
+    // Port-added mod: a reveal in the zombie mode leaves the survivor where
+    // it stands (mods/ZombieMessages.cpp).
+    if (zombie_mode_player_pos_skip()) {
+        g_ScdOpcodes += 0xe;
+        return 1;
+    }
     // Original: AND word ptr [player+0xE0],0xfff3 - clears bits 2 AND 3.
     g_playerEntity.unk_e0 &= 0xFFF3;
     g_playerEntity.position.pad = scd_read_s16(2);

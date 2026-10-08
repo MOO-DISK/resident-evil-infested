@@ -38,6 +38,11 @@
 // zone - so the reward can be taken without leaving the room.
 //
 // The director's copy takes no part: these scenes would turn its camera.
+//
+// The gallery's six portrait questions also change places each game
+// (rs_gallery_shuffle): which painting asks which question comes from the
+// scenario seed, so every copy agrees. The answers keep their order - it is
+// the questions' own events (14-19) that test it.
 // ============================================================================
 
 extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473ef0 CmdFunctions.cpp
@@ -156,12 +161,43 @@ void zm_roomsync_reset(void)
     s_loaded = false;
 }
 
+// The unsolved gallery's portraits (room action slots 2-7) each start their
+// question, events 6-11 (create_room_event, the event at entry +4). Which
+// painting starts which is this game's: a permutation from the seed. The
+// plaque (slot 1) and the last portrait under the reward (slot 8, event 12)
+// stay. Once solved, event 22 turns the portraits into plain messages.
+#define RS_GALLERY_FIRST_SLOT  2
+#define RS_GALLERY_FIRST_EVENT 6
+#define RS_GALLERY_PORTRAITS   6
+
+static void rs_gallery_shuffle(void)
+{
+    unsigned char* slot[RS_GALLERY_PORTRAITS];
+    for (int i = 0; i < RS_GALLERY_PORTRAITS; i++) {
+        slot[i] = &g_RoomActionTable[(RS_GALLERY_FIRST_SLOT + i) * 12];
+        // Only the room's own unsolved setup.
+        if (slot[i][0] != 0x09 || slot[i][4] != RS_GALLERY_FIRST_EVENT + i) return;
+    }
+    unsigned char order[RS_GALLERY_PORTRAITS];
+    for (int i = 0; i < RS_GALLERY_PORTRAITS; i++) order[i] = (unsigned char)i;
+    unsigned int h = zm_random_seed() ^ 0x6A11E7u;
+    for (int i = RS_GALLERY_PORTRAITS - 1; i > 0; i--) {
+        h = h * 1103515245u + 12345u;
+        int j = (int)((h >> 16) % (unsigned int)(i + 1));
+        unsigned char t = order[i]; order[i] = order[j]; order[j] = t;
+    }
+    for (int i = 0; i < RS_GALLERY_PORTRAITS; i++) slot[i][4] = (unsigned char)(RS_GALLERY_FIRST_EVENT + order[i]);
+    dbg_printf("[roomsync] gallery questions: %d %d %d %d %d %d\n",
+               order[0], order[1], order[2], order[3], order[4], order[5]);
+}
+
 // After the room's init (zombie_mode_room_spawn).
 void zm_roomsync_room(void)
 {
     s_loaded = false;
     s_flagRoom = NULL;
     s_localSolve = false;
+    if (zombie_mode_armed() && rs_gallery_here()) rs_gallery_shuffle();
     if (!rs_on() || g_RdtPointer == NULL) return;
     RsRoom* r = rs_room(g_stageId, g_roomId);
     bool adopt = r != NULL && rs_someone_here();

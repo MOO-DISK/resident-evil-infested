@@ -177,6 +177,17 @@ bool zombie_mode_message_prompt_cancel(void);
 bool zombie_mode_message_prompt_end(void);
 bool zombie_mode_message_is_passive(void);
 bool zombie_mode_message_page_done(bool pressed);
+// How many characters a message types out a frame (the original's one; more
+// in the mode).
+int  zombie_mode_message_chars_per_frame(void);
+// cmd_bit_op clearing g_message_flags bits `mask`: what it really clears. In
+// the mode an SCD event's write keeps the player, monsters and effects running.
+unsigned int zombie_mode_event_flag_clear(unsigned int mask);
+// The event VM's state 1 about to run `op` on `entity` for event slot `slot`:
+// the width to step over instead (a reveal leaves the player alone), or 0.
+int  zombie_mode_event_pose_skip(int slot, const void* entity, const unsigned char* op);
+// cmd_player_pos_set: true to leave the player where it is (a reveal's).
+bool zombie_mode_player_pos_skip(void);
 bool zombie_mode_message_end(void);
 void zombie_mode_message_drop(void);
 // set_message_display: the mod's own text for the message being set up (zm_message_show), NULL none.
