@@ -52,11 +52,8 @@ SkipUnskippableFmv=0
 RunInBackground=0
 
 [Mods]
-; 1 = a new game puts you in the main hall as a zombie, hunting the character
-; you picked, who explores the mansion on its own and shoots back (the intro is
-; skipped). Forward/back walk, left/right
-; turn, the run button speeds the walk up, action (or fire) attacks or opens a
-; door, and aim lies down / gets up (forward crawls while down).
+; 1 = enables the infested game mode where you can play against others in a race
+; to escape the mansion
 PlayInfested=1
 
 [Net]
