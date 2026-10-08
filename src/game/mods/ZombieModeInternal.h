@@ -232,6 +232,9 @@ enum {
     ZM_EV_ROOMSYNC = 33, // survivor -> all: {1 object, stage|room<<8, slot, x, z, orig x, orig z} /
                          //   {2 flags, stage|room<<8, byte, set, cleared} / {3 reset, stage|room<<8} -
                          //   a room's pushed objects and puzzle flags (ZombieRoomSync.cpp)
+    ZM_EV_TIMEOUT = 34,  // survivor -> host {1 request, player, seed low, seed high}; host -> all
+                         //   {2 start, player, seed low, seed high, duration / 100 ms} / {4 end, ...};
+                         //   host -> requester {3 refused, reason, ...} (ZombieTimeout.cpp)
     ZM_EV_TYRANT_TRAIL = 24, // room owner -> all: { stage|room<<8, attacker uid, trail frames }
     ZM_EV_STATS = 20,    // anyone -> all, once the match is over: a survivor's { 0, death s
                          //   (-1 alive), hits, kills, damage taken }, the director's { 1, points
@@ -265,6 +268,16 @@ void zm_match_progression_lost(void);
 void zm_shotgun_reset(void);
 // The bar's piano (ZombiePiano.cpp).
 void zm_piano_reset(void);
+// The survivors' timeout (ZombieTimeout.cpp).
+void zm_timeout_reset(void);
+void zm_timeout_take(const short* args, int src);
+bool zm_timeout_active(unsigned int now);   // plat_time_ms; the match is held
+void zm_timeout_poll(void);
+bool zm_timeout_pause_frame(void);
+const char* zm_timeout_map_line(void);
+void zm_timeout_map_input(unsigned int edge);
+void zm_timeout_draw(void);
+unsigned int zm_match_elapsed_ms(void);     // ms on the game clock since every survivor came in
 // A room's puzzle state among the survivors in it (ZombieRoomSync.cpp).
 void zm_roomsync_reset(void);
 void zm_roomsync_room(void);

@@ -32,7 +32,8 @@ unsigned short g_zmNetPort = 27960;
 // (finished: the tune plays on). Version 59: the back area's ways in (the
 // battery, the keypad's note, a crest behind them) change every seed's scenario.
 // Version 60: a room's pushed objects and puzzle flags (ZM_EV_ROOMSYNC).
-#define ZM_NET_VERSION    60
+// Version 61: the survivors' timeout (ZM_EV_TIMEOUT, the lobby's option bits).
+#define ZM_NET_VERSION    61
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -127,7 +128,9 @@ struct NetLobbyBody {
     unsigned int   seed;                             // the game's scenario seed (ZombieRandom.cpp)
     unsigned int token[2];
     unsigned int recoveryBytes;
+    unsigned char options;                           // ZM_LOBBY_OPT_* (the host's)
 };
+#define ZM_LOBBY_OPT_NO_TIMEOUT 0x01                 // the director turned the survivors' timeout off
 struct NetHelloBody { unsigned char character, vote; unsigned int revision, seed, token[2]; };
 struct NetPauseBody { unsigned int serial, remainingMs; unsigned char missing, present; };
 struct NetRecoveryChunk { unsigned int offset, total; unsigned short bytes; unsigned char data[900]; };
@@ -195,6 +198,7 @@ static unsigned char  s_phase = ZM_LOBBY_JOIN;
 static unsigned char  s_vetoUsed = 0;
 static unsigned char  s_votes[ZM_NET_MAX_PLAYERS];
 static unsigned char  s_myVote = ZM_VOTE_NONE;
+static unsigned char  s_lobbyOptions = 0;            // ZM_LOBBY_OPT_*
 
 // Inbox: events for this copy, in arrival order, with their source.
 struct NetInboxEntry { NetEvent ev; };
@@ -219,7 +223,7 @@ static bool s_clockPaused;
 static const char* s_failureText = "COULD NOT OPEN THE CONNECTION";
 static const char* s_failureHint = "";
 
-static bool net_has_pause(unsigned int now)
+static bool net_has_link_pause(unsigned int now)
 {
     if (zombie_mode_match_over()) return false;
     if (s_status == ZM_NET_EXPIRED || s_status == ZM_NET_FAILED) return false;
@@ -233,7 +237,15 @@ static bool net_has_pause(unsigned int now)
     }
     return false;
 }
+// A link down, or the survivors' timeout (ZombieTimeout.cpp): either holds
+// the match on every copy.
+static bool net_has_pause(unsigned int now)
+{
+    if (net_has_link_pause(now)) return true;
+    return s_role != ZM_NET_OFF && !zombie_mode_match_over() && zm_timeout_active(now);
+}
 bool zm_net_pause_active(void) { return net_has_pause(plat_time_ms()); }
+bool zm_net_link_pause_active(void) { return net_has_link_pause(plat_time_ms()); }
 unsigned int zm_game_time_ms(void)
 {
     unsigned int now = plat_time_ms();
@@ -419,7 +431,7 @@ static void net_queue(int link, const NetEvent& ev)
     // traffic is awaiting acknowledgement. Never evict an assigned sequence.
     bool critical = ev.kind == ZM_EV_PICKUP || ev.kind == ZM_EV_BOX || ev.kind == ZM_EV_DROP ||
                     ev.kind == ZM_EV_WIN || ev.kind == ZM_EV_REVIVE || ev.kind == ZM_EV_SHOTGUN ||
-                    ev.kind == ZM_EV_PIANO;
+                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT;
     int limit = critical ? ZM_NET_MAX_PENDING : ZM_NET_MAX_PENDING - 24;
     if (L.pendingCount >= limit) {
         dbg_printf("[net] link %d event queue full, dropping kind %d\n", link, (int)ev.kind);
@@ -642,6 +654,7 @@ static void net_send_lobby(int link, unsigned char type)
     b.token[0] = s_links[link].token[0]; b.token[1] = s_links[link].token[1];
     b.recoveryBytes = s_links[link].recovering ? s_links[link].recoveryBytes : 0;
     b.vetoUsed = s_vetoUsed;
+    b.options = s_lobbyOptions;
     for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) b.votes |= (unsigned char)((s_votes[i] & 3) << ((i - 1) * 2));
     net_send_link(link, type, (unsigned char)s_self, &b, sizeof(b));
 }
@@ -752,6 +765,17 @@ static void net_take_event(const NetEvent& e, int link)
         } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR ||
                    e.src != ZM_NET_DIRECTOR || (e.dst != ZM_NET_ALL && e.dst != s_self)) return;
         zm_shotgun_take(e.args, e.src);
+        return;
+    }
+    if (e.kind == ZM_EV_TIMEOUT) {
+        // A survivor asks the host for itself; only the host starts, refuses
+        // or ends one. Taken here, not from the inbox: every copy is in the
+        // pause loop while it holds.
+        if (s_role == ZM_NET_ZOMBIE) {
+            if (e.src != link || e.dst != ZM_NET_DIRECTOR || e.args[0] != 1 || e.args[1] != link) return;
+        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR ||
+                   (e.dst != ZM_NET_ALL && e.dst != s_self) || e.args[0] < 2 || e.args[0] > 4) return;
+        zm_timeout_take(e.args, e.src);
         return;
     }
     if (e.kind == ZM_EV_PIANO) {
@@ -1094,6 +1118,7 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
             }
             s_phase = w->phase;
             s_vetoUsed = w->vetoUsed;
+            s_lobbyOptions = w->options;
             for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) s_votes[i] = (unsigned char)((w->votes >> ((i - 1) * 2)) & 3);
             if (s_status == ZM_NET_JOINING) s_status = ZM_NET_CONNECTED;
             if (h->type == PKT_GO) s_lobbyGo = true;
@@ -1312,6 +1337,7 @@ static void net_reset(void)
     s_lobbyRevision = 0;
     s_phase = ZM_LOBBY_JOIN;
     s_vetoUsed = 0;
+    s_lobbyOptions = 0;
     memset(s_votes, 0, sizeof(s_votes));
     s_myVote = ZM_VOTE_NONE;
 }
@@ -1454,6 +1480,16 @@ void zm_net_reroll(int vetoBit)
     if (s_seed == 0) s_seed = 1;
     memset(s_votes, 0, sizeof(s_votes));
     dbg_printf("[net] map vetoed (%s); new seed %08X\n", vetoBit == 1 ? "director" : "survivors", s_seed);
+    net_broadcast_lobby();
+}
+
+bool zm_net_timeout_enabled(void) { return (s_lobbyOptions & ZM_LOBBY_OPT_NO_TIMEOUT) == 0; }
+void zm_net_set_timeout_enabled(bool on)
+{
+    if (s_role != ZM_NET_ZOMBIE) return;
+    if (on) s_lobbyOptions &= (unsigned char)~ZM_LOBBY_OPT_NO_TIMEOUT;
+    else s_lobbyOptions |= ZM_LOBBY_OPT_NO_TIMEOUT;
+    dbg_printf("[net] survivors' timeout %s\n", on ? "on" : "off");
     net_broadcast_lobby();
 }
 

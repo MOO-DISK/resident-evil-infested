@@ -38,14 +38,6 @@ void zm_box_snapshot_take(unsigned int revision, const void* slots)
     s_revision = revision; s_revisionHave = true;
 }
 static unsigned short box_item(const ItemSlot& s) { return s.Id | (s.qty << 8); }
-// Progression items must be carried to their destination, not passed through
-// the shared box. Empty slots remain valid for withdrawals.
-static bool box_can_deposit(unsigned char id)
-{
-    return !((id >= ITEM_SWORD_KEY && id <= ITEM_HELMET_KEY) ||
-             id == ITEM_WIND_CREST || id == ITEM_MOON_CREST ||
-             id == ITEM_STAR_CREST || id == ITEM_SUN_CREST);
-}
 static bool box_same(const short* a, const short* b) { return !memcmp(a + 1, b + 1, 7 * sizeof(short)); }
 static void box_send(int dst, int op, const short* a)
 {
@@ -105,7 +97,7 @@ void zm_box_take(const short* a, int src)
     ItemSlot& slot = g_itemboxSlots[a[2]];
     bool valid = free >= 0 && !zombie_mode_match_over() && peer && !peer->dead &&
                  !peer->spectating && !peer->transitioning && box_item(slot) == (unsigned short)a[3] &&
-                 (a[3] || a[4]) && box_can_deposit((unsigned char)a[4]);
+                 (a[3] || a[4]);
     if (!valid) {
         box_update(src, a); box_send(src, BOX_DENY, a); return;
     }
@@ -125,10 +117,6 @@ bool zombie_mode_box_claim(unsigned int playerSlot, unsigned int boxSlot,
     if (s_waiting || playerSlot >= (unsigned int)zombie_mode_inventory_slots(6) || boxSlot >= 48 ||
         g_playerEntity.health < 0 || zombie_mode_match_over() || zm_net_status() != ZM_NET_CONNECTED) return false;
     const unsigned char* offered = (unsigned char*)g_ItemSlotsPointer + playerSlot * 2;
-    if (!box_can_deposit(offered[0])) {
-        zm_reinforce_notice("KEYS AND CRESTS MUST BE CARRIED");
-        return false;
-    }
     short request[8] = { BOX_REQUEST, (short)++s_sequence, (short)boxSlot,
         (short)(*item | (*quantity << 8)), (short)(offered[0] | (offered[1] << 8)),
         (short)playerSlot, (short)zm_net_seed(), (short)(zm_net_seed() >> 16) };

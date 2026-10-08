@@ -457,9 +457,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   reliable events carry a source and a destination, and the host relays them.
   - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START.
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
-    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33. FX, SOUND, PSND, BURST, HEAL and STUN carry
+    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 60) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 61) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
@@ -480,6 +480,24 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   director plays at once; the survivors get the character select screen and
   all spawn in the main hall when its two minutes run out (a pick can change
   until then).
+- **Survivors' timeout** (`ZombieTimeout.cpp`, multiplayer): once a match,
+  from 5:00 on the game clock, a living survivor calls it from its map
+  (OPTIONS, then Run twice within 3 s) while every living survivor stands in
+  a safe room (`zm_random_room_safe`, not in a door). The host checks the
+  same from STATE and holds the match for 60 s on every copy: it is a second
+  cause of the disconnect pause (`net_has_pause` = link pause or
+  `zm_timeout_active`), so the game clock, the director's points and every
+  `zm_game_time_ms` timer stop and nothing simulates. Survivors get the route
+  map (arrows pick a room) inside `zombie_mode_reconnect_wait`'s loop; the
+  director sees "SURVIVORS TIMEOUT" and the time left. A link going down
+  meanwhile shows the reconnect screen instead. The map shows the timeout's
+  state right of the room name (`zm_timeout_map_line`); the HUD shows
+  TIMEOUT READY while it can be had. The director turns it on/off on the
+  lobby's join screen (arrows; NetLobbyBody `options` bit 0 =
+  off, default on). TIMEOUT=34 `{1 request, player, seed low, seed high}`
+  survivor -> host; `{2 start, player, seed, seed, duration/100}` and
+  `{4 end}` host -> all; `{3 refused, reason}` host -> requester. Taken
+  straight from the net layer (every copy is paused). Untested by the user.
 - **Survivors' map:** OPTIONS in the game opens the route map for every
   survivor (look-only: key doors, keys and crests, the survivors' rooms);
   Richard's radio adds the monster counts. OPTIONS no longer opens the options
@@ -501,7 +519,8 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   once; outstanding receipts reconcile a crashed client's inventory before
   rejoin or timeout loot recovery. Death drops and spectator jumps wait for the
   transfer. Host STATE includes all 48 box slots plus a revision; stale updates
-  cannot roll back newer contents and missed broadcasts are repaired. Normal
+  cannot roll back newer contents and missed broadcasts are repaired. Any
+  inventory item can go in, keys and crests included. Normal
   single-player box behavior is unchanged. `tests/test_zombie_box.py` covers
   races, swaps, stale requests, retries and reconnects. User testing required.
 - **Exclusive pickups** (`ZombiePickups.cpp`, multiplayer): floor pickups use
@@ -809,6 +828,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombiePerks.cpp` | the survivors' per-character perks and starting kits |
 | `ZombieRandom.cpp` | the randomized scenario: keys onto locks, keys/crests/weapons onto item spots, puzzle locks opened |
 | `ZombieDrops.cpp` | the survivors' dropped items: the list, the in-room pickups, the inventory's DROP |
+| `ZombieTimeout.cpp` | the survivors' one timeout: the request, the host's safe-room check, the paused route map |
 | `ZombiePiano.cpp` | the bar's piano: who can play, the 15 s playing and its interruptions, the director's alert, the wall opening |
 | `ZombieKeypad.cpp` | the back area's ways in: the battery powering the small elevator, the keypad door and its pass number's note, the rough passage's door back |
 | `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |

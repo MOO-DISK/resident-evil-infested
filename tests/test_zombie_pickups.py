@@ -31,7 +31,7 @@ enum { ZM_NET_OFF, ZM_NET_ZOMBIE, ZM_NET_SURVIVOR };
 enum { ZM_NET_IDLE, ZM_NET_HOSTING, ZM_NET_JOINING, ZM_NET_CONNECTED, ZM_NET_LOST };
 enum { ZM_NET_MAX_PLAYERS = 4, ZM_NET_DIRECTOR = 0, ZM_NET_ALL = 255,
        ROOM_ACTION_ENTRIES = 128, ROOM_ITEM_MODELS = 64, ZM_DROPS_PER_ROOM = 40,
-       ZM_EV_PICKUP = 30, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_DROP = 18, ZM_EV_DROP_TAKE = 19,
+       ZM_EV_PICKUP = 30, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34, ZM_EV_DROP = 18, ZM_EV_DROP_TAKE = 19,
        ZM_EV_WIN = 9, ZM_EV_REVIVE = 21, ZM_EV_ROSTER = 4, ZM_END_ESCAPE = 0,
        ZM_NET_MAX_PENDING = 96 };
 static bool armed = true, over;
@@ -64,6 +64,7 @@ static unsigned short zm_shotgun_pickup_identity(const unsigned char* r) {return
 static void zm_shotgun_pickup(const short*) {}
 static void zm_shotgun_take(const short*,int) {}
 static void zm_piano_take(const short*,int) {}
+static void zm_timeout_take(const short*,int) {}
 static bool zombie_mode_box_waiting() { return false; }
 static void zm_box_take(const short*,int) {}
 struct ZmNetPeerState { bool dead; };

@@ -523,8 +523,8 @@ static void title_draw_infestation(unsigned char brightness)
 }
 */
 
-// PvP wordmark assembled from individual circular cells. The generated TIM
-// preserves their scalloped silhouette and per-cell membranes at native size.
+// PvP wordmark: infested/images/infested.png converted to a 4-bit TIM by
+// tools/gen_infested_title.py and baked into InfestedTitleImage.h.
 static void title_build_infested(void)
 {
     LoadTexturePage(kInfestedTitleTim, 11, 0, 15, 0, 0, 0, 0);
@@ -538,21 +538,41 @@ static void title_draw_infested(unsigned char brightness)
     word.flags = brightness == 128 ? 0x10000000 : 0x40000000;
     word.texturePage = 11;
     word.clutY = 0x1E0;
-    // Centered screen coordinates: right of the original logo's center,
-    // raised slightly to accommodate the larger tissue lettering.
-    word.screenX = -24; word.screenY = 31;
-    word.width = 176; word.height = 36;
+    // Centered screen coordinates: centred across the screen, raised a
+    // quarter of its height above y 49, where the code-drawn wordmark sat.
+    word.width = kInfestedTitleWidth; word.height = kInfestedTitleHeight;
+    word.screenX = -kInfestedTitleWidth / 2;
+    word.screenY = 49 - kInfestedTitleHeight / 2 - kInfestedTitleHeight / 4;
     word.colorMulR = word.colorMulG = word.colorMulB = brightness;
+    // The 320x240 screen is scaled to the window per axis, so a wide window
+    // stretches sprites sideways. Narrow the quad (the UVs still cover the
+    // whole texture) so the artwork keeps its own aspect on any window.
+    float scaleX = 1.0f, scaleY = 1.0f;
+    MarniGetRenderScale(&scaleX, &scaleY);
+    int drawnWidth = kInfestedTitleWidth;
+    if (scaleX > 0.0f && scaleY > 0.0f)
+        drawnWidth = (int)(kInfestedTitleWidth * scaleY / scaleX + 0.5f);
+    auto fit = [drawnWidth](int first) {
+        for (int i = first; i < g_SpriteQueueCount; ++i) {
+            TextureDraw& cmd = g_SpriteCommandBuffer[i];
+            int center = cmd.x0 + kInfestedTitleWidth / 2;
+            cmd.x0 = (short)(center - drawnWidth / 2);
+            cmd.x1 = (short)(cmd.x0 + drawnWidth - 1);
+        }
+    };
     // Two translucent black silhouettes feather the edge without a panel.
     for (int layer = 0; layer < 2; ++layer) {
         TextureDesc shadow = word;
         shadow.texturePage = 12 + layer;
         int first = g_SpriteQueueCount;
         display_texture(&shadow, 2, 16 + layer, 1);
+        fit(first);
         for (int i = first; i < g_SpriteQueueCount; ++i)
             g_SpriteCommandBuffer[i].alpha = (layer == 0 ? 0.12f : 0.22f) * brightness / 128.0f;
     }
+    int first = g_SpriteQueueCount;
     display_texture(&word, 2, 15, 1);
+    fit(first);
 }
 
 // ============================================================================

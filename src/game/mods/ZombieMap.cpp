@@ -839,6 +839,9 @@ void zm_map_draw(void)
             snprintf(line, sizeof(line), "ROOM: %s", map_room_name(stage, (unsigned char)s_sel, nameBuf, sizeof(nameBuf)));
             map_text(8, 213, 0x8F, line);
         }
+        // The survivors' timeout (ZombieTimeout.cpp), right of the room name.
+        const char* timeout = s_routePlayers ? zm_timeout_map_line() : NULL;
+        if (timeout != NULL) map_text(312 - (int)strlen(timeout) * 6, 213, 0x8F, timeout);
         map_text(8, 200, 0x7F, s_routeStatus);
         map_text(8, 226, 0x7F, s_routeHelp);
         // The survivor's files: the keypad's pass number, once its note is read.

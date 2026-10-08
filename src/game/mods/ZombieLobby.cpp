@@ -810,6 +810,11 @@ void zombie_lobby_state(void)
                 Task_sleep(1);
                 continue;
             }
+            // The survivors' timeout (ZombieTimeout.cpp): on or off.
+            if (pressed & (PAD_LEFT | PAD_RIGHT)) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+                zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
+            }
             if (pressed & PAD_CANCEL) {
                 play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
                 zm_net_stop();
@@ -904,6 +909,12 @@ void zombie_lobby_state(void)
                 lobby_draw_players(x, y);
             }
             int by = 158;
+            if (hosting || joined) {
+                char option[64];
+                snprintf(option, sizeof(option), "SURVIVOR TIMEOUT: %s%s", zm_net_timeout_enabled() ? "ON" : "OFF",
+                         hosting ? "  ARROWS: CHANGE" : "");
+                lobby_print(x, by - 6, 0x7F, option);
+            }
             if (joined) {
                 lobby_print(x, by + 14, 0x7F, "WAITING FOR THE DIRECTOR'S MAP");
                 lobby_print(x, by + 30, 0x7F, "CHOOSE YOUR CHARACTER AFTER REVIEW");

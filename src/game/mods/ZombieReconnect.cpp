@@ -152,10 +152,18 @@ bool zombie_mode_reconnect_wait(void)
     if (!zombie_mode_armed() || zm_game_role() == ZM_NET_OFF || zombie_mode_match_over()) return false;
     if (s_roomReady && !s_readyReported) { zm_net_rejoin_ready(); s_readyReported = true; }
     zm_net_poll();
+    zm_timeout_poll();
     bool waited = false;
     while (zm_net_pause_active() && zm_net_status() != ZM_NET_EXPIRED && !zombie_mode_match_over()) {
         waited = true;
+        (void)zm_game_time_ms();        // the game clock notes the pause
         g_PlayerPadHeld = g_PlayerPadPressed = g_PlayerDpadHeld = g_PlayerDpadPressed = 0;
+        // The survivors' timeout: their route map, the director's notice.
+        if (zm_timeout_pause_frame()) {
+            Task_sleep(1);
+            zm_net_poll();
+            continue;
+        }
         zm_draw_centered("MATCH PAUSED", 80, 0x7F);
         zm_draw_centered(zm_net_status() == ZM_NET_LOST ? "CONNECTION LOST - RECONNECTING" :
                          "WAITING FOR A SURVIVOR TO RECONNECT", 102, 0x7F);
@@ -164,6 +172,7 @@ bool zombie_mode_reconnect_wait(void)
         Task_sleep(1);
         zm_net_poll();
     }
+    zm_timeout_poll();
     if (zm_net_status() == ZM_NET_EXPIRED) zm_reconnect_failed();
     if (waited) g_PlayerPadHeld = g_PlayerPadPressed = g_PlayerDpadHeld = g_PlayerDpadPressed = 0;
     return waited;

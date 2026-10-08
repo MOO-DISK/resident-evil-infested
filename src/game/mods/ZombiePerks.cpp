@@ -328,6 +328,7 @@ void zombie_mode_survivor_input(void)
             return;
         }
         zm_map_input(edge);
+        zm_timeout_map_input(edge);     // Run: the survivors' timeout (ZombieTimeout.cpp)
         g_PlayerDpadHeld = 0;
         g_PlayerDpadPressed = 0;
     }

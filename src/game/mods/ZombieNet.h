@@ -91,13 +91,17 @@ int  zm_net_vote(int player);                             // a survivor's ZM_VOT
 void zm_net_set_phase(int phase);                         // host
 void zm_net_reroll(int vetoBit);                          // host: a new map, that team's veto spent
 void zm_net_set_vote(int vote);                           // survivor
+// The survivors' timeout (ZombieTimeout.cpp): the director's lobby switch.
+bool zm_net_timeout_enabled(void);
+void zm_net_set_timeout_enabled(bool on);                 // host
 bool zm_net_survivor_ready(int player);                   // host: reported in (in the game)
 void zm_net_stop(void);
 
 // Pump the socket: receive, time out, resend. Call once per frame anywhere a
 // session can be live (the lobby, the game loop).
 void zm_net_poll(void);
-bool zm_net_pause_active(void);
+bool zm_net_pause_active(void);       // a link down or the survivors' timeout
+bool zm_net_link_pause_active(void);  // a link down only
 int  zm_net_pause_seconds(void);
 unsigned int zm_game_time_ms(void);
 bool zm_net_rejoin_saved(int seat);

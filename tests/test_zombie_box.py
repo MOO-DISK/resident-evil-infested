@@ -78,20 +78,14 @@ static bool zombie_mode_menu_frame() {
 }
 int main() {
     short a[8],b[8];
-    // Both the client and host reject progression-item deposits, including
-    // swaps with occupied slots. No inventory, box or revision changes.
+    // Any inventory item may go in the box, keys and crests included,
+    // into an empty slot or swapped with an occupied one.
     const unsigned char progression[]={0x33,0x34,0x35,0x36,0x29,0x2C,0x2D,0x2E};
     for(unsigned char id:progression) for(int occupied=0;occupied<2;occupied++) {
         reset();g_itemboxSlots[0]={(unsigned char)(occupied?12:0),(unsigned char)(occupied?15:0)};
         unsigned short before=box_item(g_itemboxSlots[0]);
         request(a,1,0,before,id|(1<<8));zm_box_take(a,1);
-        assert(sent.back().a[0]==BOX_DENY&&box_item(g_itemboxSlots[0])==before&&s_revision==0);
-        reset();role=ZM_NET_SURVIVOR;self=1;inventory[0]=id;inventory[1]=1;
-        unsigned char item=occupied?12:0,qty=occupied?15:0;
-        g_itemboxSlots[0]={item,qty};
-        assert(!zombie_mode_box_claim(0,0,&item,&qty));
-        assert(sent.empty()&&inventory[0]==id&&inventory[1]==1&&!s_waiting&&s_sequence==0);
-        assert(box_item(g_itemboxSlots[0])==before);
+        assert(sent.back().a[0]==BOX_DONE&&box_item(g_itemboxSlots[0])==(unsigned short)(id|(1<<8))&&s_revision==1);
     }
     // Competing withdrawals: one owner, one denial. Empty weapons (qty 0)
     // are still items; quantities are not used to identify an empty slot.

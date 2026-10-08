@@ -37,9 +37,10 @@ enum { ZM_NET_MAX_PLAYERS = 4, ZM_NET_DIRECTOR = 0, ZM_NET_ALL = 255,
        STAGE_MANSION_1F = 0, STAGE_MANSION_RETURN_1F = 5, ZM_BACK_EXIT_ROOM = 0x1B,
        ZM_TIME_LIMIT_MS = 1200000, ZM_CLOCK_SEND_MS = 5000, ZM_EV_CLOCK = 17 };
 enum { ZM_EV_PICKUP = 30, ZM_EV_DROP = 18, ZM_EV_DROP_TAKE = 19 };
-enum { ZM_EV_BOX=16, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32 };
+enum { ZM_EV_BOX=16, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34 };
 static void zm_shotgun_take(const short*,int) {}
 static void zm_piano_take(const short*,int) {}
+static void zm_timeout_take(const short*,int) {}
 static bool zm_shotgun_crushed(int) { return false; }
 static void zm_box_take(const short*,int) {}
 static void zm_pickups_take(const short*, int) {}

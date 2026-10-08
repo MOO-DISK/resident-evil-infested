@@ -712,6 +712,7 @@ void zombie_mode_new_game(int isNewGame)
     zm_drops_new_game();
     zm_pickups_reset();
     zm_box_reset();
+    zm_timeout_reset();
 
     if (s_gameRole == ZM_NET_SURVIVOR) {
         zm_survivor_start_as_player();
@@ -2680,6 +2681,7 @@ void zombie_mode_draw_overlay(void)
     }
     zm_piano_draw();
     zm_access_draw();
+    zm_timeout_draw();
     if (s_gameRole == ZM_NET_SURVIVOR) zm_room_name_draw();
     zm_clock_draw();
     if (s_switchNoteFrames > 0) {
@@ -2712,7 +2714,7 @@ static bool zm_is_last_door(const unsigned char* record)
 
 // The match clock: ms since every survivor came in (0 until then), on this
 // copy's clock.
-static unsigned int zm_match_elapsed_ms(void)
+unsigned int zm_match_elapsed_ms(void)
 {
     if (s_winShown) return s_finalElapsedMs;
     if (s_gameRole != ZM_NET_SURVIVOR) {
