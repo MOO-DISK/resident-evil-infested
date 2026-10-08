@@ -180,6 +180,12 @@ bool zombie_mode_message_page_done(bool pressed);
 // How many characters a message types out a frame (the original's one; more
 // in the mode).
 int  zombie_mode_message_chars_per_frame(void);
+// The new game's opening narration (0x5B, "They have escaped into the
+// mansion..."): main_loop asks whether a press may skip it (never in the mode,
+// so every copy shows it for the same time); UpdateMessageDisplay its timed
+// pages' delay in frames (shortened in the mode).
+bool zombie_mode_intro_unskippable(void);
+unsigned char zombie_mode_message_page_delay(unsigned char frames);
 // cmd_bit_op clearing g_message_flags bits `mask`: what it really clears. In
 // the mode an SCD event's write keeps the player, monsters and effects running.
 unsigned int zombie_mode_event_flag_clear(unsigned int mask);

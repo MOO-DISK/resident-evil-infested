@@ -210,6 +210,13 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   (`zm_evt_release_player`). Walk-in zones (`create_room_event`, probe flags
   without 0x80) are filtered the same way (`zombie_mode_skip_room_event`);
   action-press events (stairs, puzzles) still run.
+  The new game's opening narration (global message 0x5B, "They have escaped
+  into the mansion...") cannot be skipped in the mode (the original's any-key
+  skip in main_loop is off) and its timed pages run at 70%
+  (`zombie_mode_message_page_delay`); game_loop's wait for it before its first
+  frame pumps the link (`zombie_mode_reconnect_wait`) - it used to go silent
+  long enough for the host to start a survivor's disconnect grace. Untested
+  by the user.
 - **Messages without the pause** (`ZombieMessages.cpp`): a message that asks
   no Yes/No (locked doors, desks, examined objects, no ink ribbon...) leaves
   `g_message_flags` alone - the survivor keeps control and the room runs. It

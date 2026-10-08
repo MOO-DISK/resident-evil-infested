@@ -1538,8 +1538,10 @@ void UpdateMessageDisplay(void)
                 return;
             }
             // Auto-advance after delay
+            // Port-added mod: the opening narration's pages are shorter in the
+            // zombie mode (mods/ZombieMessages.cpp).
             g_MessageStateCounter = 6;
-            g_MessageCharTimer = *g_MessageCurrentPtr << (g_bGameActive == 0);
+            g_MessageCharTimer = zombie_mode_message_page_delay(*g_MessageCurrentPtr) << (g_bGameActive == 0);
             message_render_chars();
             return;
 
@@ -1564,7 +1566,7 @@ void UpdateMessageDisplay(void)
                 return;
             }
             g_MessageStateCounter = 3;
-            g_MessageCharTimer = *g_MessageCurrentPtr << (g_bGameActive == 0);
+            g_MessageCharTimer = zombie_mode_message_page_delay(*g_MessageCurrentPtr) << (g_bGameActive == 0);
             g_MessageCurrentPtr = pbVar3 + 2;
             message_render_chars();
             return;

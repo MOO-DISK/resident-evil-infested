@@ -338,6 +338,31 @@ int zombie_mode_message_chars_per_frame(void)
     return zombie_mode_armed() ? ZM_MSG_FAST_CHARS : 1;
 }
 
+// The opening narration (display_game_loading_message's 0x5B) turns its pages
+// and closes on its own timer (\p / \d, 48 frames a page). In the original any
+// press skips it (main_loop); in the mode it plays out on every copy, a little
+// faster. game_loop waits for it before its first frame, pumping the link
+// meanwhile (zombie_mode_reconnect_wait).
+#define ZM_INTRO_MSG_ID       0x5B
+#define ZM_INTRO_PAGE_PERCENT 70
+
+static bool zm_intro_showing(void)
+{
+    return zombie_mode_armed() && g_lastScanCodeOrMsgID == ZM_INTRO_MSG_ID;
+}
+
+bool zombie_mode_intro_unskippable(void)
+{
+    return zm_intro_showing();
+}
+
+unsigned char zombie_mode_message_page_delay(unsigned char frames)
+{
+    if (!zm_intro_showing() || frames == 0) return frames;
+    unsigned int shorter = (unsigned int)frames * ZM_INTRO_PAGE_PERCENT / 100;
+    return (unsigned char)(shorter ? shorter : 1);
+}
+
 // An event's bit_op clearing message flags. The original's scenes stop the
 // player's state machine (0x01), the monsters (0x04) and the effects (0x08)
 // while they hold the control (0x100). In the mode the room runs on - a
