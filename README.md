@@ -20,7 +20,7 @@ viewable with the options button.
 as the trap event is happening or the broken shotgun must be used to swap out for the shotgun, 
 both the Pickaxe and Broken shotgun are random drops.
 - To reach the back part of the mansion either a key code for the keypad door or a 
-battery for the elevator 212626, both are random drops, one crest will always spawn in that area of the mansion.
+battery for the elevator, both are random drops, one crest will always spawn in that area of the mansion.
 
 If you want to really mess around you can rebuild this project with the QUICK_DEBUG define line uncommented
 and the game will start with most of the relevant items in the main hall or near their respective puzzles.
