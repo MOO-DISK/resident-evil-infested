@@ -349,6 +349,9 @@ bool zm_random_active(void);
 bool zm_random_item(unsigned char stage, unsigned char room, unsigned char flag,
                     unsigned char* id, unsigned char* qty);
 unsigned char zm_random_door_need(unsigned char lockFlag, unsigned char need);
+// A door record's lock (+0x0C) and need (+0x16) with the mode's own key locks.
+void zm_random_door_lock(unsigned char stage, unsigned char room, unsigned char slot, unsigned char dest,
+                         unsigned char* lock, unsigned char* need);
 // The key-locked doors of a room: destination room and the key it needs now.
 int  zm_random_room_locks(unsigned char stage, unsigned char room, unsigned char* toRoom,
                           unsigned char* key, int max);

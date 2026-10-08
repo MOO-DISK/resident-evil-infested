@@ -33,7 +33,11 @@ unsigned short g_zmNetPort = 27960;
 // battery, the keypad's note, a crest behind them) change every seed's scenario.
 // Version 60: a room's pushed objects and puzzle flags (ZM_EV_ROOMSYNC).
 // Version 61: the survivors' timeout (ZM_EV_TIMEOUT, the lobby's option bits).
-#define ZM_NET_VERSION    61
+// Version 62: the bathtub's small key is a supply (every seed's scenario).
+// Version 63: ink ribbons are supplies; the main hall's Beretta and the vacant
+// room's broken shotgun are taken out. Version 64: no ink ribbons among the
+// supplies.
+#define ZM_NET_VERSION    64
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not

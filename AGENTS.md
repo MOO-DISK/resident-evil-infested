@@ -252,15 +252,19 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   end flag itself; `zombie_mode_player_pos_skip` in cmd_player_pos_set), and
   moving, turning or being hit/grabbed cuts back to the camera before the
   first close-up; the group's later cuts are dropped while it runs on.
-  Pickup close-ups (6130 ev4, 7100, 7180) and the rope (70C0) are not
-  reveals. Untested by the user.
+  The pickup close-ups a monster can walk in on - the bathtub (6130 ev4)
+  and the attic (7100 ev1) - are in the list too. The heliport lookout's
+  (7180) and the rope (70C0) are not. Untested by the user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.
 - **Randomized scenario** (`ZombieRandom.cpp`): one seed per game (the host's,
   or the clock's in single player), and every copy builds the same scenario
-  from the RDTs. Which mansion key opens each key-locked door (13 locks, by
-  lock flag), where the keys and the four crests lie (assumed fill over the
+  from the RDTs. Which mansion key opens each key-locked door (14 locks, by
+  lock flag - 13 of the mansion's and the large gallery's door, which the
+  mode locks itself: `kAddedLocks`, lock flag 0x28 on both sides, patched
+  in `cmd_door_set` (`zombie_mode_door_record`), the route scan and the AI
+  survivor's door cache; untested by the user), where the keys and the four crests lie (assumed fill over the
   23 pool spots - top-level, un-armed item_model_set records that held a key,
   crest, weapon or ammo), and the weapons/ammo over the rest. Puzzle and
   one-way locks start open (all but the crest door, lock flag 23). Hooks:
@@ -307,9 +311,23 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     is left out - for the item spots only; doors keep the plain nesting.
     The small key opens nothing in the mode (`check_desk` lets everyone
     in), so its spots take items too: the terrace passage's (ROOM7110,
-    flag 0x95) and the storeroom's (ROOM61B0, flag 0x22, no key items
-    there). The 1F 0x18 room's Chris clip joined the pool the same way.
-    ROOM6130's small key stays (gated on a story flag as well).
+    flag 0x95). The storeroom's (ROOM61B0, flag 0x22) stays a small key:
+    its frame script re-arms that slot, which keeps it out of the pool.
+    The 1F 0x18 room's Chris clip joined the pool the same way.
+    ROOM6130's (the bathtub, flag 0x03, gated on the drained-tub story
+    flag, so outside the pool) becomes a supply (`rnd_bathtub_spot`).
+    A room script testing for its spot's original item (`picked_item_test`:
+    the bathtub's small key, the shed's battery - each disarms its pickup
+    scene once taken) also passes for the spot's new item
+    (`zombie_mode_picked_original`). Untested by the user.
+  - Outside the pool: the five ink ribbon spots (main hall, gallery,
+    wardrobe, 2F study, heliport lookout), the sheet music and the
+    chemical become supplies (the supply table holds no ink ribbons:
+    saving is no use in the mode); the main hall's Beretta (flag 0x1A) and the
+    vacant room's broken shotgun (flag 0x30) are emptied - the spot's
+    roomItems flag is cleared at `cmd_item_model_set`, so the record runs
+    as for a taken item (no model, no pickup, the room's taken-state
+    script). The generator's leaf-room broken shotgun is the only one.
     Untested by the user.
   - The 2F small dining room's (ROOM70F0) shells, armed only once Chris's
     lighter lights the candles, are the Ingram with 150 rounds
@@ -459,7 +477,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
     PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 61) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 64) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version

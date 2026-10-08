@@ -186,6 +186,9 @@ unsigned int zombie_mode_event_flag_clear(unsigned int mask);
 // The event VM's state 1 about to run `op` on `entity` for event slot `slot`:
 // the width to step over instead (a reveal leaves the player alone), or 0.
 int  zombie_mode_event_pose_skip(int slot, const void* entity, const unsigned char* op);
+// cmd_picked_item_test: true when `testId` was a randomized spot's original
+// item and that spot's new item was just picked up (mods/ZombieRandom.cpp).
+bool zombie_mode_picked_original(unsigned char testId);
 // cmd_player_pos_set: true to leave the player where it is (a reveal's).
 bool zombie_mode_player_pos_skip(void);
 bool zombie_mode_message_end(void);
@@ -315,6 +318,9 @@ void zombie_mode_item_spot(unsigned char* op);
 void zombie_mode_item_action(unsigned char slot);
 // door_try_enter: the key a key-locked door needs this game.
 unsigned char zombie_mode_door_need(unsigned char lockFlag, unsigned char need);
+// cmd_door_set: the door record (patched in place) with the mode's own key
+// locks - the large gallery's door (ZombieRandom.cpp kAddedLocks).
+void zombie_mode_door_record(unsigned char slot, unsigned char* record);
 // cmd_item_model_set: the {TMD, TIM} model to show at this spot instead of the
 // room's own (a randomized item's look), or NULL.
 const int* zombie_mode_item_look(const unsigned char* op);

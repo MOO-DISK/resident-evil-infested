@@ -395,6 +395,8 @@ int cmd_door_set(void)
     entry[1] = g_ScdOpcodes[0x19];
     *(unsigned short*)(entry + 2) = (unsigned short)doorNumber;
     *(unsigned int*)(entry + 8) = (unsigned int)(g_ScdOpcodes + 2);
+    // Port-added mod: the zombie mode's own key locks (mods/ZombieRandom.cpp).
+    zombie_mode_door_record(doorNumber & 0x7f, g_ScdOpcodes + 2);
     g_ScdOpcodes += 0x1a;
     dbg_printf("DOOR_AT_SET END %s\n", "door_at_set");
     return 1;
@@ -482,7 +484,8 @@ int cmd_picked_item_test(void)
 {
     unsigned char testVal = g_ScdOpcodes[1];
     g_ScdOpcodes += 2;
-    return testVal == g_pickedItemId;
+    // Port-added mod: a randomized spot's script tests for its original item.
+    return testVal == g_pickedItemId || zombie_mode_picked_original(testVal);
 }
 
 // ============================================================================

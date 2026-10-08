@@ -163,6 +163,33 @@ static unsigned int rnd_access_bit(unsigned char stage, unsigned char room, unsi
     return 0;
 }
 
+// Doors the mode locks with a mansion key of its own: the large gallery's,
+// which no key locks in the original, so its puzzle reward would be the
+// same first stop every game. Both sides take one lock flag no mansion door
+// or script uses, so it joins the key-locked doors (s_lockFlag) and draws its
+// key like any other; the record's placeholder need is only there to make it
+// a key door (zm_random_door_need maps the flag to this game's key). The
+// route reads the patched records (rnd_scan_script), the engine's door_set
+// (zombie_mode_door_record) and the AI survivor's door cache too.
+#define RND_ADDED_LOCK 0x28
+struct RndAddedLock { unsigned char stage, room, slot, dest; };
+static const RndAddedLock kAddedLocks[] = {
+    { RND_STAGE_1F, 0x0A, 1, 0x17 },   // back passage -> large gallery
+    { RND_STAGE_1F, 0x17, 0, 0x0A },   // large gallery -> back passage
+};
+
+// A door record's lock (+0x0C) and need (+0x16) with the mode's own locks.
+static void rnd_added_lock(unsigned char stage, unsigned char room, unsigned char slot, unsigned char dest,
+                           unsigned char* lock, unsigned char* need)
+{
+    for (unsigned int i = 0; i < sizeof(kAddedLocks) / sizeof(kAddedLocks[0]); i++) {
+        const RndAddedLock& a = kAddedLocks[i];
+        if (a.stage != stage || a.room != room || a.slot != slot || a.dest != dest) continue;
+        *lock = (unsigned char)((*lock & 0x40) | 0x80 | RND_ADDED_LOCK);
+        *need = ITEM_SWORD_KEY;
+    }
+}
+
 // Rooms whose scripts move or swap furniture (events moving an object, or
 // object positions chosen by a puzzle flag): a floor pickup there may be
 // blocked or need the puzzle. Keys, crests and the puzzle tools stay out until
@@ -421,6 +448,7 @@ static void rnd_scan_script(const unsigned char* rdt, size_t size, unsigned int 
                     d.lock = r[0x0C];
                     d.need = r[0x16];
                     d.slot = (unsigned char)(rdt[q + 1] & 0x7F);
+                    rnd_added_lock(stage, room, d.slot, r[0x0D], &d.lock, &d.need);
                     // Built in an if block, left unarmed for an event, or a
                     // zone nobody can stand in (width or depth of one unit).
                     // rnd_read_room adds the slots a script disarms.
@@ -982,7 +1010,7 @@ static void rnd_supply(unsigned char* id, unsigned char* qty)
     static const unsigned char kSupplies[][2] = {
         { ITEM_GREEN_HERB, 1 }, { ITEM_GREEN_HERB, 1 }, { ITEM_RED_HERB, 1 },
         { ITEM_FIRST_AID_SPRAY, 1 }, { ITEM_CLIP, 15 }, { ITEM_CLIP, 15 }, { ITEM_SHELLS, 7 },
-        { ITEM_SHELLS, 7 }, { ITEM_INK_RIBBONS, 3 },
+        { ITEM_SHELLS, 7 },     // no ink ribbons: saving is no use in the mode
     };
     const int n = (int)(sizeof(kSupplies) / sizeof(kSupplies[0]));
     int k = rnd_below(n + s_t3AmmoCount);
@@ -1255,6 +1283,23 @@ static bool rnd_candle_spot(const RndSpot& s)
     return s.stage == RND_STAGE_2F && s.room == 0x0F && s.flag == 0x0C;
 }
 
+// ROOM6060 (the main hall): the Beretta on the floor. Every survivor starts
+// armed; the mode takes it out.
+static bool rnd_main_hall_beretta(const RndSpot& s)
+{
+    return s.stage == RND_STAGE_1F && s.room == 0x06 && s.flag == 0x1A && s.origId == ITEM_BERETTA;
+}
+
+// ROOM6130 (the bathroom): the small key under the muddy water, armed once
+// the bathtub is drained (both its records, flag 0x03, sit under that story
+// flag, so it stays out of the pool). The small key opens nothing in the
+// mode: the drained bathtub hands out a supply instead.
+static bool rnd_bathtub_spot(const RndSpot& s)
+{
+    return s.stage == RND_STAGE_1F && s.room == 0x13 && s.flag == 0x03 &&
+           s.origId == ITEM_DESK_KEY;
+}
+
 static void rnd_place_weapons(bool barry)
 {
     s_rng = s_rngWeapons;
@@ -1328,8 +1373,14 @@ static void rnd_place_weapons(bool barry)
     for (int i = 0; i < s_spotCount; i++) {
         RndSpot& s = s_spots[i];
         if (s.pool || s.isNew || s.puzzle != 0) continue;
-        if ((s.origId == ITEM_BROKEN_SHOTGUN && !(s.stage == RND_STAGE_1F && s.room == ROOM_LIVING_ROOM)) ||
-            s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL) {
+        // The broken shotgun's own spot (the vacant room) is emptied: the
+        // generator's leaf-room placement is the only broken shotgun. The
+        // living room's record is the shotgun puzzle's plate (ZombieShotgun.cpp).
+        if (s.origId == ITEM_BROKEN_SHOTGUN && !(s.stage == RND_STAGE_1F && s.room == ROOM_LIVING_ROOM)) {
+            s.id = 0; s.qty = 0;
+        }
+        else if (rnd_main_hall_beretta(s)) { s.id = 0; s.qty = 0; }
+        else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL || s.origId == ITEM_INK_RIBBONS) {
             rnd_supply(&s.id, &s.qty);
         }
         else if (rnd_is_key(s.origId) || rnd_is_crest(s.origId) || rnd_is_tier3(s.origId)) { s.id = ITEM_SHELLS; s.qty = 7; }
@@ -1341,6 +1392,7 @@ static void rnd_place_weapons(bool barry)
         // the Ingram, a prize only Chris's lighter reaches (never on the
         // route). The mode's Ingram runs dry (zombie_mode_ingram_finite).
         else if (rnd_candle_spot(s)) { s.id = ITEM_INGRAM; s.qty = RND_INGRAM_ROUNDS; }
+        else if (rnd_bathtub_spot(s)) rnd_supply(&s.id, &s.qty);
     }
     for (int i = 0; i < s_spotCount; i++) {
         RndSpot& s = s_spots[i];
@@ -1544,6 +1596,7 @@ void zm_random_new_game(void)
         FUN_00473f10((int*)&g_ScenarioFlags, bit);
     }
     FUN_00473f10((int*)g_LocksFlags, RND_CREST_LOCK);
+    FUN_00473f10((int*)g_LocksFlags, RND_ADDED_LOCK);
     unsigned int seed = (zm_game_role() != ZM_NET_OFF) ? zm_net_seed() : (zm_game_time_ms() * 2654435761u);
     if (!zm_random_build(seed)) return;
     s_active = true;
@@ -1595,6 +1648,14 @@ unsigned char zm_random_door_need(unsigned char lockFlag, unsigned char need)
     if (!s_active || !rnd_is_key(need)) return need;
     int li = rnd_lock_index(lockFlag);
     return li >= 0 ? s_lockKey[li] : need;
+}
+
+// cmd_door_set / the AI survivor's door cache: a door record's lock and need
+// with the mode's own key locks (kAddedLocks), while this game's scenario is on.
+void zm_random_door_lock(unsigned char stage, unsigned char room, unsigned char slot, unsigned char dest,
+                         unsigned char* lock, unsigned char* need)
+{
+    if (s_active) rnd_added_lock(stage, room, slot, dest, lock, need);
 }
 
 // For the route map: the key-locked doors of (stage, room), as "to room":"key".
@@ -1750,6 +1811,13 @@ static void rnd_match_orientation(unsigned char* op, unsigned char id)
 void zombie_mode_item_spot(unsigned char* op)
 {
     unsigned char id, qty;
+    if (zm_random_item(g_stageId, g_roomId, op[0x16], &id, &qty) && id == 0) {
+        // An emptied spot: the item counts as taken. The record still runs as
+        // the original's does after a pickup (no model, no pickup; the room's
+        // script re-points the slot with its zone, as for a taken item).
+        FUN_00473f10((int*)g_roomItemsFlags, op[0x16]);
+        return;
+    }
     if (zm_random_item(g_stageId, g_roomId, op[0x16], &id, &qty)) {
         op[10] = id;
         op[11] = qty;
@@ -1797,6 +1865,12 @@ void zombie_mode_item_action(unsigned char slot)
 unsigned char zombie_mode_door_need(unsigned char lockFlag, unsigned char need)
 {
     return zm_random_door_need(lockFlag, need);
+}
+
+void zombie_mode_door_record(unsigned char slot, unsigned char* record)
+{
+    if (!zombie_mode_armed()) return;
+    zm_random_door_lock(g_stageId, g_roomId, slot, record[0x0D], &record[0x0C], &record[0x16]);
 }
 
 // ===========================================================================
@@ -1997,6 +2071,22 @@ const int* zm_random_look(unsigned char id)
 }
 
 // Has the item a view model to lie on the floor as?
+// cmd_picked_item_test: room scripts disarm a pickup's own scene once "their"
+// item is taken (picked_item_test on the original id - the bathtub's small
+// key, ROOM6130; the shed's battery, ROOM7190). A changed spot hands out
+// another item, so its original id passes too once that spot's new item
+// has just been taken.
+bool zombie_mode_picked_original(unsigned char testId)
+{
+    if (!s_active || g_pickedItemId == 0) return false;
+    for (int i = 0; i < s_spotCount; i++) {
+        const RndSpot& s = s_spots[i];
+        if (s.stage != g_stageId || s.room != g_roomId || !s.overridden || s.origId != testId) continue;
+        if (s.id == g_pickedItemId && Flg_ck((int)g_roomItemsFlags, s.flag) == 0) return true;
+    }
+    return false;
+}
+
 bool zm_random_has_look(unsigned char id)
 {
     if (id == ITEM_INGRAM || id == ITEM_MINIMI) return true;   // ING.ivm / MINI.ivm (rnd_look)

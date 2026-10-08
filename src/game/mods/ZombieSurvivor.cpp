@@ -125,6 +125,8 @@ static void zm_read_room_doors(ZmRoomDoors* out)
                 d->arriveZ = *(const short*)(r + 0x12);
                 d->arriveAngle = *(const short*)(r + 0x14);
                 d->needItem = r[0x16];
+                zm_random_door_lock(out->stage, out->room, (unsigned char)(s_rdtScratch[q + 1] & 0x7F), d->dest,
+                                    &d->lock, &d->needItem);
             }
             // enemy_set: the same fields cmd_enemy_set reads (CmdFunctions.cpp).
             if (op == 0x1B && q + 22 <= end && out->spawnCount < ZM_MAX_SPAWNS) {

@@ -72,8 +72,10 @@ static bool           s_reveal[8];         // per event slot: a reveal played as
 // itself runs on (the case still opens). The events a reveal starts are
 // reveals too (one group: a cut back drops all their cuts). Found by
 // scanning the return mansion's events that survive the story filter for
-// camera cuts with the control taken or the player placed; pickup
-// close-ups and room-changing scenes (the rope in ROOM70C0) are left out.
+// camera cuts with the control taken or the player placed. The pickup
+// close-ups a monster could walk in on (the bathtub, the attic) are here too:
+// moving cuts back, and the take prompt still holds the survivor while it
+// asks. Room-changing scenes (the rope in ROOM70C0) are left out.
 struct ZmReveal {
     unsigned char stage, room, script;
 };
@@ -82,6 +84,7 @@ static const ZmReveal kReveals[] = {
     { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BAR, 10 },         // ROOM60F0: the emblems' cabinet
     { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BAR, 11 },
     { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BATHROOM, 1 },     // ROOM6130: the bathtub drains
+    { STAGE_MANSION_RETURN_1F, ROOM_MANSION_BATHROOM, 4 },     //   ...the item in it (pickup close-up)
     { STAGE_MANSION_RETURN_1F, ROOM_LARGE_GALLERY, 20 },       // ROOM6170: the last portrait, solved
     { STAGE_MANSION_RETURN_1F, ROOM_LARGE_GALLERY, 21 },       //   ...the panel slides away
     { STAGE_MANSION_RETURN_1F, ROOM_MANSION_1F_STUDY, 0 },     // ROOM6190: the switch
@@ -95,6 +98,7 @@ static const ZmReveal kReveals[] = {
     { STAGE_MANSION_RETURN_2F, ROOM_TROPHY_ROOM, 0 },          // ROOM7150: the light switch
     { STAGE_MANSION_RETURN_2F, ROOM_TROPHY_ROOM, 4 },          //   ...the deer's eye
     { STAGE_MANSION_RETURN_2F, ROOM_PRIVATE_LIBRARY, 1 },      // ROOM7170: the statue in place
+    { STAGE_MANSION_RETURN_2F, ROOM_ATTIC, 1 },                // ROOM7100: the item by the hole (pickup close-up)
 };
 
 static bool zm_is_reveal(int script)
