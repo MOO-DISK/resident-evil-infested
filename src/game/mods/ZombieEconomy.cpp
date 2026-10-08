@@ -86,6 +86,7 @@ void zm_econ_new_game(bool on)
     s_on = on;
     int survivors = zm_net_role() == ZM_NET_OFF ? 1 : zm_net_survivor_count();
     s_startPoints = survivors >= 3 ? 1000 : survivors == 2 ? 800 : 500;
+    s_startPoints = s_startPoints * zm_ai_income_pct() / 100;   // the AI director's difficulty
 #ifdef QUICK_DEBUG
     s_startPoints = 20000;
 #endif
@@ -122,7 +123,7 @@ int zm_econ_points(void)
 {
     if (!s_on) return 0;
     unsigned int now = zm_game_time_ms();
-    s_earnedMilli += (now - s_earnedAtMs) * (unsigned int)zm_econ_rate();
+    s_earnedMilli += (now - s_earnedAtMs) * (unsigned int)zm_econ_rate() * (unsigned int)zm_ai_income_pct() / 100;
     s_earnedAtMs = now;
     return s_startPoints + (int)(s_earnedMilli / 1000) + s_bonus - s_spent;
 }
@@ -152,7 +153,8 @@ int zm_econ_unlock_left_ms(unsigned char id)
     if (p == NULL || p->unlockMs == 0) return 0;
     int in = zm_survivors_in_ms();
     if (in < 0) return -1;
-    return (unsigned int)in >= p->unlockMs ? 0 : (int)(p->unlockMs - (unsigned int)in);
+    unsigned int unlock = p->unlockMs * (unsigned int)zm_ai_unlock_pct() / 100;
+    return (unsigned int)in >= unlock ? 0 : (int)(unlock - (unsigned int)in);
 #endif
 }
 

@@ -693,6 +693,7 @@ void zombie_mode_new_game(int isNewGame)
     }
     // The director's points: its copy, or single player's.
     zm_econ_new_game(s_gameRole != ZM_NET_SURVIVOR);
+    zm_ai_new_game();
 
     // ROOM1060's init SCD starts an intro event on each of these:
     //   bank 1 bit 0 clear            -> opening cutscene (event 0)
@@ -1214,6 +1215,30 @@ static void zm_director_place(unsigned char stage, unsigned char room, unsigned 
     zm_note(line);
 }
 
+// The AI director (ZombieDirectorAI.cpp) places through the same rules as the
+// map. _allowed: would zm_director_place take a monster `id` (not a trap) in
+// (stage, room) now? Silent - no note. _place: place it (or set the trap);
+// true when it was bought.
+bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned char id)
+{
+    if (zm_is_hall(stage, room) && zm_hall_closed(NULL)) return false;
+    if (zm_director_safe_room(stage, room)) return false;
+    if (zm_is_trap_id(id)) return true;
+    if (zm_hall_2f_refuses(stage, room, id)) return false;
+    if (zm_room_has_survivor(stage, room)) return false;
+    char why[48];
+    return zm_econ_can_place(stage, room, id, "", why, sizeof(why));
+}
+
+bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name)
+{
+    ZmEconStats before, after;
+    zm_econ_stats(&before);
+    zm_director_place(stage, room, id, name);
+    zm_econ_stats(&after);
+    return after.placed != before.placed || after.trapsSet != before.trapsSet;
+}
+
 // Extras the roster has for this room that this copy has no entity for -
 // placed by the director while this copy was in the room - come in now.
 // One that cannot (no slot/bank/memory) is not tried again this visit.
@@ -1392,6 +1417,21 @@ void zombie_mode_room_spawn(void)
         s_directorMapOnly = true;
         if (!zm_map_is_open()) zm_map_toggle();
         zm_note("NO IDLE MONSTER - TRY AGAIN OR PLACE ONE");
+        zm_survivor_room_loaded();
+        return;
+    }
+
+    // An AI-hosted game (ZombieDirectorAI.cpp): the host's copy has no body.
+    // It watches from the map, reported as a spectator so it never owns a
+    // room (zm_player_here / zm_compute_owner).
+    if (s_gameRole == ZM_NET_ZOMBIE && s_firstBody && zm_ai_hosted()) {
+        s_firstBody = false;
+        s_directorMapOnly = true;
+        g_zombieModeEntity = NULL;
+        zm_net_freeze_state(true);
+        zm_map_set_read_only(false);
+        if (!zm_map_is_open()) zm_map_toggle();
+        dbg_printf("[zombie] AI director: the host watches from the map\n");
         zm_survivor_room_loaded();
         return;
     }
@@ -2657,6 +2697,7 @@ void zombie_mode_draw_overlay(void)
     if ((g_zombieModeEntity != NULL || s_directorMapOnly) && zm_map_is_open()) {
         zm_map_draw();
         zm_econ_draw();
+        zm_ai_draw();
         zm_piano_draw();
         // The placements' notes, under the map's title.
         if (s_switchNoteFrames > 0 && s_noteText[0] != '\0') {
@@ -2670,6 +2711,7 @@ void zombie_mode_draw_overlay(void)
     if (g_zombieModeEntity != NULL) {
         zm_survivor_draw_hud();
         zm_econ_draw();
+        zm_ai_draw();
     }
     // The director: how long the main hall stays closed.
     unsigned int hallLeft = 0;
@@ -4392,6 +4434,11 @@ static bool zm_director_input(Entity* e, bool busy, unsigned int* heldOut, unsig
     bool gates = (g_message_flags & 0x0101) == 0x0101 &&
                  (g_main_state_flags & MSF_MENU_ACTIVE) == 0;
     bool mapWasOpen = zm_map_is_open();
+    if (zm_ai_hosted()) {
+        // The AI places; the host only looks around the map.
+        if (gates) zm_map_input(rawEdge & 0xF000);
+        return false;
+    }
     if (gates && optionsPressed && !s_directorMapOnly) {
         zm_map_set_read_only(false);
         zm_map_toggle();
@@ -5322,7 +5369,7 @@ static bool zm_player_here(int i)
 {
     // A dead survivor watching the others is in no room: never the owner,
     // never "here" for anyone (ZombieSpectate.cpp).
-    if (i == zm_net_self()) return !zm_spec_away();
+    if (i == zm_net_self()) return !zm_spec_away() && !zm_ai_hosted();
     if (i != ZM_NET_DIRECTOR && zm_net_char(i) < 0) return false;
     const ZmNetPeerState* p = zm_net_player(i);
     if (p != NULL && (p->spectating || p->transitioning)) return false;
@@ -5362,8 +5409,9 @@ static int zm_compute_owner(void)
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (zm_player_here(i)) return i;
     }
-    // Nobody: a spectator's copy runs nothing - its monsters wait as puppets.
-    return zm_spec_away() ? -1 : zm_net_self();
+    // Nobody: a spectator's copy (or an AI-hosted director's) runs nothing -
+    // its monsters wait as puppets.
+    return (zm_spec_away() || zm_ai_hosted()) ? -1 : zm_net_self();
 }
 
 unsigned char zm_survivor_entrance_door(void)
@@ -7149,6 +7197,7 @@ void zombie_mode_net_frame(void)
     zm_roomsync_frame();
     zm_statue_frame();
     zm_end_frame();
+    if (s_gameRole != ZM_NET_SURVIVOR && !s_winShown) zm_ai_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;
         zm_director_input(g_zombieModeEntity, false, &held, &pressed);

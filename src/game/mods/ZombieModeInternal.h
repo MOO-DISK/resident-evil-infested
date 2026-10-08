@@ -5,7 +5,7 @@
 // unlock wait or main-hall lockout, and
 // loaded guns and all four crests in the main hall. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -625,6 +625,25 @@ struct ZmEconStats {
     int survivorHits;
 };
 void zm_econ_stats(ZmEconStats* out);
+
+// The AI director (ZombieDirectorAI.cpp): [Mods] AiDirector drives the
+// director's copy - spending only; the possessed body is left to the player.
+// _level: 0 off for this copy, else 1 easy .. 4 nightmare. The economy scales
+// the income and starting points (_income_pct) and unlock times
+// (_unlock_pct) by it.
+void zm_ai_new_game(void);
+void zm_ai_frame(void);
+void zm_ai_draw(void);
+int  zm_ai_level(void);
+int  zm_ai_income_pct(void);
+int  zm_ai_unlock_pct(void);
+// The host's copy plays no director of its own (a lobby "AI DIRECTOR" game):
+// no body, the map open to watch, never a room's owner.
+bool zm_ai_hosted(void);
+const char* zm_ai_level_name(int level);   // "EASY" .. "NIGHTMARE"
+// ZombieMode.cpp: the map placement's rules and the placement itself.
+bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned char id);
+bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name);
 
 // The end of a match (ZombieStats.cpp): how it ended, each player's numbers
 // (kept on its own copy, sent with ZM_EV_STATS), and the screen every copy

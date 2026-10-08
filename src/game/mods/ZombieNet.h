@@ -95,6 +95,11 @@ void zm_net_set_vote(int vote);                           // survivor
 bool zm_net_timeout_enabled(void);
 void zm_net_set_timeout_enabled(bool on);                 // host
 bool zm_net_survivor_ready(int player);                   // host: reported in (in the game)
+// The AI director (ZombieDirectorAI.cpp): the host's level, 1 easy .. 4
+// nightmare, 0 for a human director. No map review then: each survivor picks
+// a character in the lobby and votes ZM_VOTE_ACCEPT as ready.
+int  zm_net_ai_level(void);
+void zm_net_set_ai_level(int level);                      // host, before GO
 void zm_net_stop(void);
 
 // Pump the socket: receive, time out, resend. Call once per frame anywhere a

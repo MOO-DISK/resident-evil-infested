@@ -45,7 +45,10 @@ extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473
 // A passive message gives way to a different one at once, and to a door or
 // the inventory opening (game_loop waits on g_menu_choice_id 0x80 before
 // either). The same message is not restarted while it is up, nor for
-// ZM_MSG_REPEAT_MS after: walk-in zones probe every frame.
+// ZM_MSG_REPEAT_MS after: walk-in zones probe every frame. The key turning
+// (door_try_enter's global 0x03, naming g_selectedItemId) is exempt: one id
+// for every key, and each unlock is new - two doors opened in quick
+// succession lost the second's message.
 // ============================================================================
 
 #define ZM_MSG_BASE_MS     700   // reading time per page: this
@@ -53,6 +56,7 @@ extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473
 #define ZM_MSG_MIN_MS     1200   //   within these bounds
 #define ZM_MSG_MAX_MS     4000
 #define ZM_MSG_REPEAT_MS  1000
+#define ZM_MSG_KEY_TURNED 0x43      // global message 0x03 (msg id & 0x7F): "unlocked using the %item"
 #define ZM_MSG_PROMPT_MASK 0x0140   // what a Yes/No prompt clears
 
 
@@ -159,7 +163,8 @@ static void zm_msg_finish(void)
 
 bool zombie_mode_message_replace(unsigned short msgId)
 {
-    if (!s_passive || (msgId & 0x7F) == (s_id & 0x7F)) return false;
+    if (!s_passive) return false;
+    if ((msgId & 0x7F) == (s_id & 0x7F) && (msgId & 0x7F) != ZM_MSG_KEY_TURNED) return false;
     g_menu_choice_id &= 0x7F;
     zm_msg_finish();
     return true;
@@ -167,7 +172,7 @@ bool zombie_mode_message_replace(unsigned short msgId)
 
 bool zombie_mode_message_repeat(unsigned short msgId, unsigned short pause)
 {
-    if (!zombie_mode_armed() || pause == 0) return false;
+    if (!zombie_mode_armed() || pause == 0 || (msgId & 0x7F) == ZM_MSG_KEY_TURNED) return false;
     return (msgId & 0x7F) == (s_lastId & 0x7F) &&
            zm_game_time_ms() - s_lastEnd < ZM_MSG_REPEAT_MS;
 }

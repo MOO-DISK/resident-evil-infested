@@ -11,6 +11,14 @@ the director against an AI survivor and is mostly meant for familiarizitng yours
 It is switched on with `[Mods] PlayInfested=1` in `config.ini` (the default in `config.ini.template`); with it
 off, the game plays exactly as the original. 
 
+**HOST - AI DIRECTOR** (NEW GAME's lobby, left/right picks easy, normal, hard or
+nightmare) hosts a game the AI director plays: survivors pick their characters
+in the lobby and ready up, there is no map review or setup, and the host's copy
+watches from the director's map. The AI only buys monsters, traps and doorway
+reinforcements - it never possesses one. Higher levels earn more points, unlock
+the big monsters sooner and press harder. `[Mods] AiDirector=1-4` instead turns
+the same AI on as an autopilot for a human director's copy.
+
 **Survivors** may find some key differences from the old mansion
 - Most weapons are locked behind the progression puzzles, the piano, gallery, armor room, plant room, etc.
 - Keys are randomly spread out across the mansion and their locations are indicated in the special Infested map

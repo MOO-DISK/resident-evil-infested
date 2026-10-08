@@ -115,6 +115,7 @@ set(RE1_SOURCES
     src/game/mods/ZombieEconomy.cpp
     src/game/mods/ZombieSpawnSpots.cpp
     src/game/mods/ZombieTraps.cpp
+    src/game/mods/ZombieDirectorAI.cpp
     src/game/mods/ZombieReinforcements.cpp
     src/game/mods/ZombiePickups.cpp
     src/game/mods/ZombieBox.cpp

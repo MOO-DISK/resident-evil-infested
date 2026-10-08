@@ -18,7 +18,10 @@
 // survivor. Hosting or joining leads into the game's lobby, where everyone
 // sees who is in and each survivor picks a character nobody else has (Chris,
 // Jill, Barry, Rebecca, Richard or Enrico; up to three survivors) until the
-// director starts. Chained from the title screen's NEW GAME when [Mods] PlayInfested is on. Single player goes
+// director starts. HOST - AI DIRECTOR hosts a game the AI director plays
+// (ZombieDirectorAI.cpp, the level picked on that row): no map review and no
+// setup - each survivor picks a character in the lobby and readies up, and
+// the host starts. Chained from the title screen's NEW GAME when [Mods] PlayInfested is on. Single player goes
 // on to the normal character select; a multiplayer game skips it and starts
 // Chris's scenario for everyone (lobby_start_game) - the survivors' picks are
 // the models they wear.
@@ -44,6 +47,7 @@ extern void game_start(void);                   // GameStart.cpp
 enum {
     ROW_SINGLE = 0,
     ROW_HOST,
+    ROW_HOST_AI,
     ROW_JOIN,
     ROW_REJOIN_1,
     ROW_REJOIN_2,
@@ -146,7 +150,10 @@ static void lobby_draw_players(int x, int y)
     char line[80];
     lobby_print(x, y, 0x8F, "PLAYERS");
     y += 11;
-    snprintf(line, sizeof(line), "  DIRECTOR%s", zm_net_self() == 0 ? "  - YOU" : "");
+    int ai = zm_net_ai_level();
+    if (ai > 0) snprintf(line, sizeof(line), "  DIRECTOR  AI - %s%s", zm_ai_level_name(ai),
+                         zm_net_self() == 0 ? "  - YOUR COPY" : "");
+    else snprintf(line, sizeof(line), "  DIRECTOR%s", zm_net_self() == 0 ? "  - YOU" : "");
     lobby_print(x, y, 0x7F, line);
     for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
         y += 11;
@@ -154,7 +161,9 @@ static void lobby_draw_players(int x, int y)
         if (c < 0) {
             snprintf(line, sizeof(line), "  SURVIVOR %d  EMPTY", i);
         } else {
-            snprintf(line, sizeof(line), "  SURVIVOR %d  CONNECTED%s", i,
+            const char* state = "CONNECTED";
+            if (ai > 0) state = zm_net_vote(i) == ZM_VOTE_ACCEPT ? "READY" : "CHOOSING";
+            snprintf(line, sizeof(line), "  SURVIVOR %d  %s  %s%s", i, state, zm_char_name(c),
                      zm_net_self() == i ? "  - YOU" : "");
         }
         lobby_print(x, y, c < 0 ? 0x2F : 0x7F, line);
@@ -578,7 +587,10 @@ void zm_guide_profile(int survivor, int monster)
 // waits it out either way: every survivor spawns at the deadline, which gives
 // the director its two minutes to set up. A pick can be changed until then;
 // at the deadline the survivor keeps the character it holds.
-static void lobby_character_screen(unsigned int deadlineMs)
+// `untilGo`: an AI director's lobby - no deadline; picking a character
+// readies the survivor (cancel unreadies, then leaves) and the screen ends
+// when the host starts the game.
+static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false)
 {
     int mine = zm_net_char(zm_net_self());
     int sel = mine >= 0 ? mine : 0;
@@ -592,7 +604,7 @@ static void lobby_character_screen(unsigned int deadlineMs)
         zm_net_poll();
         if (zm_net_status() != ZM_NET_CONNECTED) break;
         unsigned int now = plat_time_ms();
-        if ((int)(deadlineMs - now) <= 0) break;
+        if (untilGo ? zm_net_lobby_started() : (int)(deadlineMs - now) <= 0) break;
         mine = zm_net_char(zm_net_self());
         unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
         first = false;
@@ -610,9 +622,31 @@ static void lobby_character_screen(unsigned int deadlineMs)
             }
             pressed = 0;
         }
-        char timer[24];
-        unsigned int left = (deadlineMs - now + 999) / 1000;
-        snprintf(timer, sizeof(timer), "SPAWN IN %u:%02u", left / 60, left % 60);
+        char timer[40];
+        bool ready = untilGo && zm_net_vote(zm_net_self()) == ZM_VOTE_ACCEPT;
+        if (untilGo) {
+            int seated = 0, readied = 0;
+            for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+                if (zm_net_char(i) < 0) continue;
+                seated++;
+                if (i == zm_net_self() ? ready : zm_net_vote(i) == ZM_VOTE_ACCEPT) readied++;
+            }
+            snprintf(timer, sizeof(timer), "AI %s  READY %d OF %d", zm_ai_level_name(zm_net_ai_level()),
+                     readied, seated);
+        } else {
+            unsigned int left = (deadlineMs - now + 999) / 1000;
+            snprintf(timer, sizeof(timer), "SPAWN IN %u:%02u", left / 60, left % 60);
+        }
+        if (untilGo && !map && (pressed & PAD_CANCEL)) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            if (ready) {
+                zm_net_set_vote(ZM_VOTE_NONE);
+            } else {
+                zm_net_stop();
+                break;
+            }
+            pressed = 0;
+        }
         if (map) {
             unsigned int seed = zm_net_seed();
             if (seed != shownSeed) {
@@ -633,13 +667,16 @@ static void lobby_character_screen(unsigned int deadlineMs)
             if ((pressed & PAD_CONFIRM) && !other) {
                 play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
                 zm_net_set_char(sel);
+                if (untilGo) zm_net_set_vote(ZM_VOTE_ACCEPT);
             }
             if (sel != loaded) {
                 cs_load_model(sel);
                 loaded = sel;
             }
             cs_draw(sel, mine);
-            lobby_print(8, 214, 0x7F, "OPTIONS: REVIEW MAP");
+            lobby_print(8, 214, 0x7F, !untilGo ? "OPTIONS: REVIEW MAP"
+                        : ready ? "READY - OPTIONS: MAP  CANCEL: NOT READY"
+                                : "ACTION: PICK AND READY  OPTIONS: MAP  CANCEL: LEAVE");
             lobby_print(320 - 8 - (int)strlen(timer) * 6, 6, 0x8F, timer);
             cs_draw_model();
         }
@@ -774,13 +811,47 @@ static void lobby_survivor_go(void)
         lobby_start_game();
         return;
     }
-    lobby_character_screen(plat_time_ms() + ZM_PICK_MS);
+    // An AI director's game: the character was picked in the lobby.
+    if (zm_net_ai_level() == 0) lobby_character_screen(plat_time_ms() + ZM_PICK_MS);
     lobby_start_game();
+}
+
+// The AI director's level for HOST - AI DIRECTOR: config's AiDirector, else normal.
+static int s_aiLevel = 0;
+
+// The host's lobby in an AI director's game: survivors ready up, then start.
+// No map review: the seed hosting drew is the map.
+static bool lobby_ai_host_input(unsigned int pressed)
+{
+    int seated = 0, readied = 0;
+    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (zm_net_char(i) < 0) continue;
+        seated++;
+        if (zm_net_vote(i) == ZM_VOTE_ACCEPT) readied++;
+    }
+    if (pressed & (PAD_UP | PAD_DOWN)) {
+        play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+        int level = zm_net_ai_level() + ((pressed & PAD_UP) ? 1 : -1);
+        if (level < 1) level = 4;
+        if (level > 4) level = 1;
+        s_aiLevel = level;
+        zm_net_set_ai_level(level);
+    }
+    // ENTER once everyone is ready; AIM starts with whoever is.
+    bool all = seated > 0 && readied == seated;
+    if (seated > 0 && (((pressed & PAD_CONFIRM) && all) || (pressed & PAD_AIM))) {
+        play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
+        zm_random_build(zm_net_seed());
+        zm_net_lobby_go();
+        return true;
+    }
+    return false;
 }
 
 void zombie_lobby_state(void)
 {
     int row = ROW_SINGLE;
+    if (s_aiLevel == 0) s_aiLevel = (g_zmAiDirector >= 1 && g_zmAiDirector <= 4) ? g_zmAiDirector : 2;
     int character = ZM_CHAR_CHRIS;
     bool editing = false;
     int cursor = 0;
@@ -798,7 +869,20 @@ void zombie_lobby_state(void)
         bool joining = role == ZM_NET_SURVIVOR && status == ZM_NET_JOINING;
 
         // ---- input ----
-        if (hosting) {
+        if (hosting && zm_net_ai_level() > 0) {
+            if (lobby_ai_host_input(pressed)) {
+                lobby_start_game();             // the host's copy watches the AI play
+                return;
+            }
+            if (pressed & (PAD_LEFT | PAD_RIGHT)) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+                zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
+            }
+            if (pressed & PAD_CANCEL) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+                zm_net_stop();
+            }
+        } else if (hosting) {
             // The director's room: once someone is in, advance to the map.
             if ((pressed & PAD_CONFIRM) && zm_net_survivor_count() > 0) {
                 play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
@@ -822,6 +906,12 @@ void zombie_lobby_state(void)
         } else if (joined || joining) {
             if (zm_net_lobby_started()) {
                 lobby_survivor_go();
+                continue;
+            }
+            // An AI director's lobby: pick a character and ready up here.
+            if (joined && zm_net_ai_level() > 0) {
+                lobby_character_screen(0, true);
+                Task_sleep(1);
                 continue;
             }
             if (joined && zm_net_lobby_phase() == ZM_LOBBY_MAP) {
@@ -849,6 +939,12 @@ void zombie_lobby_state(void)
             if (pressed & PAD_UP)   row = (row + ROW_COUNT - 1) % ROW_COUNT;
             if (pressed & PAD_DOWN) row = (row + 1) % ROW_COUNT;
             if (row != oldRow) play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+            if (row == ROW_HOST_AI && (pressed & (PAD_LEFT | PAD_RIGHT))) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+                s_aiLevel += (pressed & PAD_RIGHT) ? 1 : -1;
+                if (s_aiLevel < 1) s_aiLevel = 4;
+                if (s_aiLevel > 4) s_aiLevel = 1;
+            }
             if (pressed & PAD_CANCEL) {
                 play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
                 zm_guide_background(false);
@@ -868,6 +964,11 @@ void zombie_lobby_state(void)
                 case ROW_HOST:
                     lobby_store_fields();
                     zm_net_host();
+                    break;
+                case ROW_HOST_AI:
+                    lobby_store_fields();
+                    zm_net_host();
+                    zm_net_set_ai_level(s_aiLevel);
                     break;
                 case ROW_JOIN:
                     lobby_store_fields();
@@ -900,7 +1001,8 @@ void zombie_lobby_state(void)
 
         if (hosting || joined || joining) {
             // Show occupied seats here; character picks happen after map review.
-            lobby_print(x, y, 0x8F, hosting ? "LOBBY - YOU ARE THE DIRECTOR" : "LOBBY");
+            lobby_print(x, y, 0x8F, !hosting ? "LOBBY"
+                        : zm_net_ai_level() > 0 ? "LOBBY - THE AI IS THE DIRECTOR" : "LOBBY - YOU ARE THE DIRECTOR");
             y += 18;
             if (joining) {
                 lobby_print(x, y, 0x7F, zm_net_status_text());
@@ -918,6 +1020,12 @@ void zombie_lobby_state(void)
             if (joined) {
                 lobby_print(x, by + 14, 0x7F, "WAITING FOR THE DIRECTOR'S MAP");
                 lobby_print(x, by + 30, 0x7F, "CHOOSE YOUR CHARACTER AFTER REVIEW");
+            } else if (hosting && zm_net_ai_level() > 0) {
+                char diff[48];
+                snprintf(diff, sizeof(diff), "AI DIRECTOR: %s  UP-DOWN: CHANGE", zm_ai_level_name(zm_net_ai_level()));
+                lobby_print(x, by + 8, 0x7F, diff);
+                lobby_print(x, by + 22, 0x7F, zm_net_survivor_count() > 0
+                            ? "ENTER: START WHEN READY  AIM: START NOW" : "WAITING FOR SURVIVORS - UP TO 3");
             } else if (hosting) {
                 lobby_print(x, by + 14, 0x7F, zm_net_survivor_count() > 0
                             ? "ENTER: GENERATE THE MAP" : "WAITING FOR SURVIVORS - UP TO 3");
@@ -930,6 +1038,7 @@ void zombie_lobby_state(void)
         static const char* const labels[ROW_COUNT] = {
             "SINGLE PLAYER - AI SURVIVOR",
             "HOST - PLAY THE DIRECTOR",
+            "",               // host vs the AI director, with its level
             "JOIN - PLAY A SURVIVOR",
             "REJOIN - SURVIVOR 1",
             "REJOIN - SURVIVOR 2",
@@ -946,6 +1055,9 @@ void zombie_lobby_state(void)
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  HOST ADDRESS ", s_addr, cursor,
                                   editing && row == ROW_ADDRESS);
+            } else if (r == ROW_HOST_AI) {
+                snprintf(line, sizeof(line), "%sHOST - AI DIRECTOR  < %s >", mark, zm_ai_level_name(s_aiLevel));
+                lobby_print(x, yy, r == row ? 0x8F : 0x7F, line);
             } else if (r == ROW_PORT) {
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  PORT ", s_port, cursor,

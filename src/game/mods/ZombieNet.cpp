@@ -37,7 +37,7 @@ unsigned short g_zmNetPort = 27960;
 // Version 63: ink ribbons are supplies; the main hall's Beretta and the vacant
 // room's broken shotgun are taken out. Version 64: no ink ribbons among the
 // supplies.
-#define ZM_NET_VERSION    64
+#define ZM_NET_VERSION    65
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -135,6 +135,8 @@ struct NetLobbyBody {
     unsigned char options;                           // ZM_LOBBY_OPT_* (the host's)
 };
 #define ZM_LOBBY_OPT_NO_TIMEOUT 0x01                 // the director turned the survivors' timeout off
+#define ZM_LOBBY_OPT_AI_SHIFT   1                    // bits 1-3: the AI director's level (0 a human)
+#define ZM_LOBBY_OPT_AI_MASK    0x0E
 struct NetHelloBody { unsigned char character, vote; unsigned int revision, seed, token[2]; };
 struct NetPauseBody { unsigned int serial, remainingMs; unsigned char missing, present; };
 struct NetRecoveryChunk { unsigned int offset, total; unsigned short bytes; unsigned char data[900]; };
@@ -1494,6 +1496,17 @@ void zm_net_set_timeout_enabled(bool on)
     if (on) s_lobbyOptions &= (unsigned char)~ZM_LOBBY_OPT_NO_TIMEOUT;
     else s_lobbyOptions |= ZM_LOBBY_OPT_NO_TIMEOUT;
     dbg_printf("[net] survivors' timeout %s\n", on ? "on" : "off");
+    net_broadcast_lobby();
+}
+
+int zm_net_ai_level(void) { return (s_lobbyOptions & ZM_LOBBY_OPT_AI_MASK) >> ZM_LOBBY_OPT_AI_SHIFT; }
+void zm_net_set_ai_level(int level)
+{
+    if (s_role != ZM_NET_ZOMBIE || s_lobbyGo) return;
+    if (level < 0) level = 0;
+    if (level > 4) level = 4;
+    s_lobbyOptions = (unsigned char)((s_lobbyOptions & ~ZM_LOBBY_OPT_AI_MASK) | (level << ZM_LOBBY_OPT_AI_SHIFT));
+    dbg_printf("[net] AI director level %d\n", level);
     net_broadcast_lobby();
 }
 

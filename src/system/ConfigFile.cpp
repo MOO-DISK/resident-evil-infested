@@ -405,6 +405,9 @@ void ConfigFile_EnsureExists(void)
         "; left/right turn, run speeds the walk up, action attacks or opens a\n"
         "; door, aim lies down / gets up (forward crawls while down).\n"
         "PlayInfested=%d\n"
+        "; 0 = a human plays the director; 1-4 = the AI director plays it on the\n"
+        "; director's copy (easy, normal, hard, nightmare).\n"
+        "AiDirector=0\n"
         "\n"
         "[Debug]\n"
         "; Master switch for the port-added debug features: F1 debug menu, F6\n"
@@ -529,6 +532,8 @@ BOOL ConfigFile_Load(void)
     g_bSkipUnskippableFmv = ReadInt(path, "Game", "SkipUnskippableFmv", 0) != 0;
     // Port-added mod (src/game/mods/ZombieMode.cpp). Off unless the key is set.
     g_bPlayAsZombie = ReadInt(path, "Mods", "PlayInfested", 0) != 0;
+    g_zmAiDirector = ReadInt(path, "Mods", "AiDirector", 0);
+    if (g_zmAiDirector < 0 || g_zmAiDirector > 4) g_zmAiDirector = 0;
     g_bRunInBackgroundConfig = ReadInt(path, "Game", "RunInBackground", 0) != 0;
     g_bRunInBackground = g_bRunInBackgroundConfig;
     {

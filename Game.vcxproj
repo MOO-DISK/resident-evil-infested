@@ -201,6 +201,7 @@
     <ClCompile Include="src\game\mods\ZombieEconomy.cpp" />
     <ClCompile Include="src\game\mods\ZombieSpawnSpots.cpp" />
     <ClCompile Include="src\game\mods\ZombieTraps.cpp" />
+    <ClCompile Include="src\game\mods\ZombieDirectorAI.cpp" />
     <ClCompile Include="src\game\mods\ZombieReinforcements.cpp" />
     <ClCompile Include="src\game\mods\ZombiePickups.cpp" />
     <ClCompile Include="src\game\mods\ZombieBox.cpp" />

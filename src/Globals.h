@@ -480,6 +480,9 @@ extern bool          g_bSkipUnskippableFmv;    // [Game] SkipUnskippableFmv
 // Port-added mod: start in the main hall controlling a zombie. Defined in
 // src/game/mods/ZombieMode.cpp, which documents it.
 extern bool          g_bPlayAsZombie;          // [Mods] PlayAsZombie
+// The director's autopilot (src/game/mods/ZombieDirectorAI.cpp): 0 off,
+// 1 easy, 2 normal, 3 hard, 4 nightmare.
+extern int           g_zmAiDirector;           // [Mods] AiDirector
 
 // Every "are we in Director's Cut mode" test in the port. Deliberately a macro
 // over g_GameMode rather than a second global: there is one stored value, so

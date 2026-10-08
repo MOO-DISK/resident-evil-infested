@@ -55,6 +55,10 @@ RunInBackground=0
 ; 1 = enables the infested game mode where you can play against others in a race
 ; to escape the mansion
 PlayInfested=1
+; 0 = a human plays the director; 1-4 = the AI director plays it on the
+; director's copy (1 easy, 2 normal, 3 hard, 4 nightmare). The director's
+; copy still hosts; leave its monster idle or keep the map open.
+AiDirector=0
 
 [Net]
 ; Two-player zombie mode (NEW GAME -> HOST / JOIN, with PlayInfested=1 on both
