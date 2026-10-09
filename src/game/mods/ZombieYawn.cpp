@@ -1,11 +1,17 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
+#include "../PrintText.h"
 #include "../entities/EntityCommon.h"
 #include "../../marni/MarniSound.h"
 #include "../../system/AssetPath.h"
 #include "../../DebugPrint.h"
 #include <cstdio>
 #include <cstring>
+
+static constexpr auto s_gatherMessage = STR("Something feels wrong...\\nI should wait for my squadmates.");
+static_assert(s_gatherMessage.bytes[24] == 0x02, "Boss-door message must use the encoded newline tag");
+static constexpr auto s_atticPrompt = STR("Will you enter the attic?\\c");
+static constexpr auto s_lessonPrompt = STR("Will you enter the lesson room?\\c");
 
 // ============================================================================
 // ZombieYawn.cpp - port-added: the two Yawn fights of the mode.
@@ -281,12 +287,13 @@ static void yw_match_frame(void)
 // Going in together. A boss room's door, open, takes nobody alone while its
 // Yawn waits: every living survivor must stand by the one at the door
 // (YW_GATHER_RADIUS, in the same room), else it says so and stays shut.
-// Gathered, the host asks each of them (YW_ASK_MS to answer, Action yes, Aim
-// no, standing still); all yes, every copy walks through that door at once -
+// Gathered, the host asks each of them through the native Yes/No message
+// (YW_ASK_MS to answer, standing still); all yes, every copy walks through
+// that door at once -
 // the room's own door record, its own door animation - and the fight, and the
 // clock's hold, start with all of them in. A no, a survivor gone off or dead,
-// or the time running out calls it off. One living survivor goes straight in;
-// single player has no vote. ZM_EV_BOSS ops 3-8 (ZombieModeInternal.h).
+// or the time running out calls it off. A lone network survivor confirms too;
+// single player as director has no vote. ZM_EV_BOSS ops 3-8 (ZombieModeInternal.h).
 // ---------------------------------------------------------------------------
 #define YW_GATHER_RADIUS 3000
 #define YW_ASK_MS        15000
@@ -305,6 +312,7 @@ static int           s_askBoss = -1;
 static unsigned short s_askToken = 0;
 static bool          s_askAnswered = false;
 static bool          s_askHeld = false;             // Action / Aim still down from before the question
+static bool          s_askShown = false;
 static unsigned char s_askVoters = 0;               // everyone asked (seat bits)
 // The team's places by the door inside, in seat order among those asked: the
 // door's own arrival point, either side of it, then a step into the room -
@@ -319,6 +327,21 @@ static unsigned int  s_askEnd = 0;
 static int           s_goBoss = -1;
 static unsigned int  s_goUntil = 0;
 static unsigned char s_goRecord[0x20];
+
+static const unsigned char* yw_prompt_text(int b)
+{
+    return b == 0 ? (const unsigned char*)s_atticPrompt : (const unsigned char*)s_lessonPrompt;
+}
+
+static void yw_prompt_close(void)
+{
+    if (s_askBoss >= 0 && s_askShown &&
+        g_MessagePtr == yw_prompt_text(s_askBoss) && (g_menu_choice_id & 0x80) != 0) {
+        g_menu_choice_id &= 0x7F;
+        zombie_mode_message_prompt_end();
+    }
+    s_askShown = false;
+}
 
 static void yw_vote_reset(void)
 {
@@ -443,12 +466,14 @@ void zm_yawn_take(const short* a, int src)
         s_askBoss = b;
         s_askToken = token;
         s_askAnswered = false;
+        s_askShown = false;
         s_askHeld = true;
         s_askVoters = (unsigned char)a[6];
         s_askEnd = zm_game_time_ms() + YW_ASK_MS;
         break;
     case YW_OP_GO:
         if (s_askBoss != b || s_askToken != token) break;
+        yw_prompt_close();
         s_askBoss = -1;
         s_goBoss = b;
         s_goUntil = zm_game_time_ms() + YW_GO_MS;
@@ -457,12 +482,12 @@ void zm_yawn_take(const short* a, int src)
         break;
     case YW_OP_OFF:
         if (s_askBoss == b && s_askToken == token) {
+            yw_prompt_close();
             s_askBoss = -1;
-            zm_note("ENTRY CALLED OFF");
         }
         break;
     case YW_OP_REFUSED:
-        zm_note("SOMETHING FEELS WRONG - GATHER YOUR TEAM");
+        zm_message_show(s_gatherMessage);
         break;
     default:
         break;
@@ -480,9 +505,14 @@ bool zombie_mode_boss_door_gate(const unsigned char* record)
     int b = yw_boss_at(ds, dr);
     if (b < 0 || s_phase[b] != YW_WAITING || yw_beaten(b)) return false;
     ZmSurvivorInfo surv[ZM_NET_MAX_PLAYERS];
-    int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS), living = 0;
-    for (int i = 0; i < n; i++) if (!surv[i].dead) living++;
-    if (living <= 1) return false;
+    // The director's list omits this client's own survivor, but the room
+    // list below includes it. Count the local player once on either host
+    // or client, so a remote teammate cannot be mistaken for a solo game.
+    int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS);
+    int living = g_playerEntity.health >= 0 ? 1 : 0;
+    for (int i = 0; i < n; i++) {
+        if (surv[i].player != zm_net_self() && !surv[i].dead) living++;
+    }
     if (s_askBoss >= 0) return true;                        // the question is up already
     int xz[ZM_NET_MAX_PLAYERS][2], who[ZM_NET_MAX_PLAYERS];
     int here = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS), gathered = 0;
@@ -493,34 +523,45 @@ bool zombie_mode_boss_door_gate(const unsigned char* record)
             dx * dx + dz * dz <= YW_GATHER_RADIUS * YW_GATHER_RADIUS) gathered++;
     }
     if (gathered < living) {
-        zm_note("SOMETHING FEELS WRONG - GATHER YOUR TEAM");
+        zm_message_show(s_gatherMessage);
         return true;
     }
-    zm_note("THE TEAM IS ASKED");
     yw_ask_host(YW_OP_REQUEST, b, 0, 0);
     return true;
 }
 
-// The question up: Action is yes, Aim is no; the survivor stands still.
+// The native message renderer owns the Yes/No cursor and confirm button.
+// Consume its answer before the original item/event post-action dispatch.
+bool zombie_mode_boss_prompt_answer(bool yes)
+{
+    if (!zombie_mode_armed() || s_askBoss < 0 || !s_askShown || s_askAnswered ||
+        g_MessagePtr != yw_prompt_text(s_askBoss)) return false;
+    s_askAnswered = true;
+    yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, yes ? 1 : 0);
+    return true;
+}
+
+// Let the native prompt read the pad; after Yes, stand still for the team.
 bool zm_yawn_prompt_input(void)
 {
     if (s_askBoss < 0) return false;
     if (g_playerEntity.health < 0 || (int)(zm_game_time_ms() - s_askEnd) >= 0) {
+        yw_prompt_close();
+        if (!s_askAnswered) yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, 0);
         s_askBoss = -1;
         return false;
     }
     // The press that took the door is no answer: both buttons up first (the
     // game's pressed word stays set while a button is held).
     if (s_askHeld && ((unsigned short)g_PlayerDpadHeld & (ZM_PAD_ACTION | ZM_PAD_AIM)) == 0) s_askHeld = false;
-    if (!s_askAnswered && !s_askHeld && (g_message_flags & 0x0101) == 0x0101 &&
-        (g_main_state_flags & MSF_MENU_ACTIVE) == 0) {
-        unsigned int pressed = (unsigned short)g_PlayerDpadPressed;
-        if ((pressed & ZM_PAD_ACTION) != 0 || (pressed & ZM_PAD_AIM) != 0) {
-            bool yes = (pressed & ZM_PAD_ACTION) != 0;
-            s_askAnswered = true;
-            yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, yes ? 1 : 0);
-            if (!yes) s_askBoss = -1;
+    if (!s_askAnswered) {
+        if (!s_askShown && (g_menu_choice_id & 0x80) == 0 &&
+            (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) == 0 && g_openMenuFlag == 0) {
+            zm_message_show(yw_prompt_text(s_askBoss));
+            s_askShown = g_MessagePtr == yw_prompt_text(s_askBoss) && (g_menu_choice_id & 0x80) != 0;
         }
+        if (s_askHeld) g_PlayerDpadPressed &= ~ZM_PAD_ACTION;
+        if (s_askShown) return true;
     }
     g_PlayerPadHeld = g_PlayerPadPressed = g_PlayerDpadHeld = g_PlayerDpadPressed = 0;
     return true;
@@ -958,13 +999,6 @@ bool zm_yawn_traps_exit(unsigned char stage, unsigned char room)
 
 void zm_yawn_draw(void)
 {
-    if (zombie_mode_armed() && s_askBoss >= 0) {
-        unsigned int left = (int)(s_askEnd - zm_game_time_ms()) > 0 ? s_askEnd - zm_game_time_ms() : 0;
-        char line[48];
-        if (s_askAnswered) snprintf(line, sizeof(line), "WAITING FOR THE TEAM - %u", (left + 999) / 1000);
-        else snprintf(line, sizeof(line), "ENTER THE FIGHT? ACTION YES - AIM NO - %u", (left + 999) / 1000);
-        zm_draw_centered(line, 96, 0);
-    }
     int b = yw_here();
     if (!zombie_mode_armed() || b < 0 || s_phase[b] != YW_LOCKDOWN) return;
     unsigned int sec = (yw_lock_left(b) + 999) / 1000;
