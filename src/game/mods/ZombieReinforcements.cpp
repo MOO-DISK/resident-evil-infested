@@ -264,7 +264,8 @@ void zm_reinforce_take(const short* a, int src)
     if (!rf_type(r.id) || zombie_mode_match_over()) return;
     if (op == RF_REQUEST && src == ZM_NET_DIRECTOR) {
         if (r.stage != g_stageId || r.room != g_roomId || zm_room_owner_here() != zm_net_self() ||
-            zm_random_room_safe(r.stage, r.room) || !rf_capacity(r.id) || !rf_choose(&r)) {
+            zm_random_room_safe(r.stage, r.room) || zm_yawn_director_closed(r.stage, r.room) ||
+            !rf_capacity(r.id) || !rf_choose(&r)) {
             rf_send(ZM_NET_DIRECTOR, RF_REFUSED, r); return;
         }
         r.active = true; r.at = zm_game_time_ms(); s_warning = r;

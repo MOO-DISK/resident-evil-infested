@@ -35,11 +35,12 @@ enum { ZM_END_ESCAPE, ZM_END_TIME, ZM_END_ALL_DEAD, ZM_END_CONNECTION, ZM_END_UN
 enum { ZM_NET_MAX_PLAYERS = 4, ZM_NET_DIRECTOR = 0, ZM_NET_ALL = 255,
        ZM_EV_WIN = 9, ZM_EV_REVIVE = 21, ZM_EV_ROSTER = 4,
        STAGE_MANSION_1F = 0, STAGE_MANSION_RETURN_1F = 5, ZM_BACK_EXIT_ROOM = 0x1B,
-       ZM_TIME_LIMIT_MS = 1200000, ZM_CLOCK_SEND_MS = 5000, ZM_EV_CLOCK = 17 };
+       ZM_TIME_LIMIT_MS = 1200000, ZM_TIME_MAX_MS = 2400000, ZM_CLOCK_SEND_MS = 5000, ZM_EV_CLOCK = 17 };
 enum { ZM_EV_PICKUP = 30, ZM_EV_DROP = 18, ZM_EV_DROP_TAKE = 19 };
-enum { ZM_EV_BOX=16, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34 };
+enum { ZM_EV_BOX=16, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34, ZM_EV_BOSS=35 };
 static void zm_shotgun_take(const short*,int) {}
 static void zm_piano_take(const short*,int) {}
+static void zm_yawn_take(const short*,int) {}
 static void zm_timeout_take(const short*,int) {}
 static bool zm_shotgun_crushed(int) { return false; }
 static void zm_box_take(const short*,int) {}
@@ -74,6 +75,11 @@ static int zm_net_role() { return s_role; }
 static bool zm_match_authority() { return s_gameRole != ZM_NET_SURVIVOR || s_role == ZM_NET_ZOMBIE; }
 static int zm_survivors_in_ms() { return elapsed; }
 static unsigned int zm_clock_left_ms() { return elapsed >= ZM_TIME_LIMIT_MS ? 0 : ZM_TIME_LIMIT_MS - elapsed; }
+// The boss fights' clock holds and bonuses (ZombieYawn.cpp): none here.
+static unsigned int s_clockBonusMs, s_clockRunMs, s_clockAtMs, s_clockLeftMs, s_clockHeldMs, s_clockHeldAt;
+static bool s_clockRemoteHeld, s_clockHeld;
+static unsigned int zm_clock_run_ms() { return elapsed < 0 ? 0 : (unsigned int)elapsed; }
+static bool zm_yawn_clock_hold() { return false; }
 static bool zm_all_survivors_dead() { return allDead != 0; }
 static void zm_stats_frame(unsigned int) { statsFrames++; }
 static void zm_stats_match_over(int r, int p, unsigned int ms) {
@@ -164,7 +170,7 @@ int main() {
     bad = request(); bad.args[4] ^= 1; net_take_event(bad, 1); assert(!s_winShown);
     reset(ZM_NET_SURVIVOR); bad = timeoutResult; bad.args[3] ^= 1; net_take_event(bad, 0); assert(!s_winShown);
     bad = timeoutResult; bad.args[1] = 99; net_take_event(bad, 0); assert(!s_winShown);
-    bad = timeoutResult; bad.args[2] = 1201; net_take_event(bad, 0); assert(!s_winShown);
+    bad = timeoutResult; bad.args[2] = ZM_TIME_MAX_MS / 1000 + 1; net_take_event(bad, 0); assert(!s_winShown);
     bad = escapeResult; bad.args[0] = 0; net_take_event(bad, 0); assert(!s_winShown);
 
     // A confirmation arriving while the survivor is still initializing is

@@ -46,7 +46,8 @@ def main():
     functions = "\n".join(function(source, name) for name in (
         "rnd_next", "rnd_below", "rnd_is_key", "rnd_lock_index",
         "rnd_door_key_lock", "rnd_room_index", "rnd_item_bit", "rnd_door_open", "rnd_reach",
-        "rnd_route_state", "rnd_route_owned", "rnd_route_cost", "rnd_puzzle_room", "rnd_key_item_room",
+        "rnd_route_state", "rnd_route_owned", "rnd_rooms_from", "rnd_route_cost", "rnd_puzzle_room", "rnd_boss_room",
+        "rnd_key_item_room",
         "rnd_key_spot_ok", "rnd_pick_key_spot", "rnd_pick_back_spot", "rnd_generate_once"))
     harness = r'''
 static void fixture(int gated, int rooms) {

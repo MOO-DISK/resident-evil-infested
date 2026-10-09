@@ -279,6 +279,8 @@ void zm_world_capture_room(const Entity* skip)
         unsigned short uid = s_slotUid[i];
         if (uid == ZM_UID_NONE || e == skip) continue;
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS) continue;
+        // Yawn is the attic's own, back on every visit until its death flag is up.
+        if (zm_yawn_entity(e)) continue;
         // The director's body, never captured yet, walking out with it: it is
         // the body in the next room, nothing to keep here.
         if (e == g_zombieModeEntity && uid == ZM_UID_NEW) continue;
@@ -669,7 +671,8 @@ int zm_world_room_zombies(unsigned char stage, unsigned char room, ZmJumpTarget*
     if (stage == g_stageId && room == g_roomId) {
         for (int i = 0; i < 30; i++) {
             const Entity* e = &g_EnemiesList[i];
-            if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || !zm_is_possessable_id(e->id)) continue;
+            if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 ||
+                (!zm_is_possessable_id(e->id) && !zm_yawn_head(e))) continue;
             if (e->health < 0 || (e->status_flags & ENTITY_STATUS_DEAD) != 0) continue;
             if (count == 0 && first != NULL) {
                 first->slot = (unsigned char)i;
@@ -684,6 +687,16 @@ int zm_world_room_zombies(unsigned char stage, unsigned char room, ZmJumpTarget*
         return count;
     }
 
+    // A boss room with its Yawn alive: the mode places it in slot 0 (uid 0)
+    // when the room loads (ZombieYawn.cpp).
+    if (unsigned char yawn = zm_yawn_jump_room(stage, room)) {
+        if (first != NULL) {
+            memset(first, 0, sizeof(*first));
+            first->id = yawn;
+            zm_yawn_spawn_spot(stage, room, &first->x, &first->z, &first->angle);
+        }
+        return 1;
+    }
     // The rooms' own monsters never spawn in the mode (zombie_mode_enemy_spawn):
     // only the roster's extras - the director's placements - are there.
     const ZmSpawn* spawns;

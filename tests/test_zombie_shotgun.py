@@ -108,6 +108,7 @@ static bool s_deathDropped;
 static bool s_deathSeen[4];
 static int s_revives[4];
 #define ZM_REVIVE_LIMIT 1
+static bool zm_revive_free(int) { return false; }
 static int floorDrops;
 #define ZM_DEATH_DROP_RADIUS 600
 struct SVECTOR { short x,y,z,pad; };

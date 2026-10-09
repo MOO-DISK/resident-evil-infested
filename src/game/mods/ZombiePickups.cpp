@@ -258,10 +258,16 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
         }
         if (s_reply < 0) Task_sleep(1);
     }
+    // Still here: its flag, which a pickup anywhere clears (pickup_hide_world,
+    // zm_drop_unplace) - not the entry's handler, which a room's script may
+    // switch off meanwhile. ROOM7150's frame script disarms the red jewel's
+    // slot 5 whenever another item's flag (0xC8) is clear; the deer's scene
+    // still hands the jewel over through room_action, as in the original.
     bool grant = s_reply == PK_GRANT && zm_net_active() &&
         !interrupted && !zombie_mode_match_over() && g_playerEntity.health >= 0 &&
         request[4] == (short)(g_stageId | (g_roomId << 8)) &&
-        *(unsigned char**)(evt + 8) == rec && evt[0] != 0 && pickup_fits(rec);
+        *(unsigned char**)(evt + 8) == rec && Flg_ck((int)g_roomItemsFlags, rec[0x14]) != 0 &&
+        pickup_fits(rec);
     if (!grant) {
         pickup_send(ZM_NET_DIRECTOR, PK_CANCEL, request);
         s_waiting = false;

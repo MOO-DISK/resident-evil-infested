@@ -128,6 +128,7 @@ set(RE1_SOURCES
     src/game/mods/ZombieGreenhouse.cpp
     src/game/mods/ZombieRoomSync.cpp
     src/game/mods/ZombieStatue.cpp
+    src/game/mods/ZombieYawn.cpp
     src/game/mods/ZombieStats.cpp
     src/game/mods/ZombieDrops.cpp
     src/game/mods/ZombieMessages.cpp

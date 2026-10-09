@@ -771,7 +771,9 @@ void zm_map_draw(void)
         }
         // The director's: safe rooms dark (closed to it), monsters orange,
         // keys and crests still lying there purple (as on the route map).
-        if (!s_readOnly && zm_random_room_safe(stage, m.room)) { colors.add(0x1C, 0x1C, 0x24); }
+        if (!s_readOnly && (zm_random_room_safe(stage, m.room) || zm_yawn_director_closed(stage, m.room))) {
+            colors.add(0x1C, 0x1C, 0x24);
+        }
         if (m.room < MAP_ROOMS && s_zombies[m.homeSheet][m.room] > 0) { colors.add(0xA0, 0x58, 0x18); }
         if (!s_readOnly && zm_random_room_key_left(stage, m.room)) { colors.add(0x90, 0x40, 0xC0); }
         if (m.room == g_roomId && stage == g_stageId) {
@@ -886,6 +888,8 @@ void zm_map_draw(void)
             size_t len = strlen(line);
             if (zm_random_room_safe(selStage, (unsigned char)s_sel)) {
                 snprintf(line + len, sizeof(line) - len, " - SAFE");
+            } else if (zm_yawn_director_closed(selStage, (unsigned char)s_sel)) {
+                snprintf(line + len, sizeof(line) - len, " - BOSS");
             } else if (zm_random_room_key_left(selStage, (unsigned char)s_sel)) {
                 snprintf(line + len, sizeof(line) - len, " - KEY");
             }

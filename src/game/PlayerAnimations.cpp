@@ -6831,6 +6831,9 @@ int door_try_enter(unsigned char* entry)
 
     // 0x0041b441: unlocked outright, or its lock flag is already raised.
     if ((lock & 0x80) == 0 || Flg_ck((int)g_LocksFlags, lock & 0x3f) != 0) {
+        // Port-added mod: a boss room's door, open - the survivors go in all
+        // together or not at all (mods/ZombieYawn.cpp).
+        if (zombie_mode_boss_door_gate(record)) return 0;
         door_begin_transition(record);
         return 0;
     }

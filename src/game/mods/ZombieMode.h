@@ -219,7 +219,26 @@ void zombie_mode_message_frame(void);
 // true = drop the call (an event cut short by a hit or grab no longer offers
 // its pickup).
 bool zombie_mode_action_busy(const unsigned char* entry);
+// cmd_bit_op, a script turning the letterbox on (main-state MSF_INTENSITY_RAMP):
+// false = drop it (an examine or a reveal - ZombieMessages.cpp).
+bool zombie_mode_event_letterbox(void);
 bool zombie_mode_event_room_action_skip(unsigned char actionIdx);
+// cmd_room_action, before a handler runs on `entry`: true = drop the call (the
+// attic's key or crest, held back while Yawn is in the room - ZombieYawn.cpp).
+bool zombie_mode_yawn_guards(const unsigned char* entry, unsigned char handler);
+// Yawn's bite (Yawn.cpp): true while a monster update's target is another
+// copy's survivor swapped into the player entity - the bite's story flags
+// (Yawn's poison) are that copy's, not this one's.
+bool zombie_mode_target_remote(void);
+// Yawn's two moves of the mode (Yawn.cpp actions 9 and 10, ZombieYawn.cpp):
+// the selectors ask which to start (0 none, 9 the thrash, 10 the slam), and
+// each strikes every survivor within `radius` of any of `points` (x, y, z) -
+// the local one and, through PHURT, the other copies'.
+int  zombie_mode_yawn_special(void);
+// door_try_enter, an unlocked door about to be taken: true = held back (a
+// boss room's door, the whole team gathered and asked first - ZombieYawn.cpp).
+bool zombie_mode_boss_door_gate(const unsigned char* record);
+void zombie_mode_yawn_area_hit(const int (*points)[3], int count, int radius, int damage);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,
 // 2 Barry), else `base`. EntityModelLoader.cpp.

@@ -40,6 +40,7 @@ static int zm_econ_unlock_left_ms(unsigned char) { return unlock; }
 static int zm_econ_room_cap(unsigned char, unsigned char) { return cap; }
 static int zm_econ_cost(unsigned char) { return 100; }
 static int zm_econ_points() { return money; }
+static bool zm_yawn_entity(const Entity*) { return false; }
 static void zm_econ_mmss(char* out, int len, int) { snprintf(out,len,"1:00"); }
 int zm_world_room_extra_count(unsigned char, unsigned char, bool slots=false);
 int zm_world_room_unspawned(bool slots=false);

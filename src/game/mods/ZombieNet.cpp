@@ -37,7 +37,7 @@ unsigned short g_zmNetPort = 27960;
 // Version 63: ink ribbons are supplies; the main hall's Beretta and the vacant
 // room's broken shotgun are taken out. Version 64: no ink ribbons among the
 // supplies.
-#define ZM_NET_VERSION    66
+#define ZM_NET_VERSION    69
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -119,7 +119,7 @@ struct NetEnemyEntry {
 };
 
 struct NetEnemiesHeader {
-    unsigned char  count, flags, stage, room;        // flags: 1 adopt
+    unsigned char  count, flags, stage, room;        // flags: 1 adopt, 2 a ZmYawnBody follows the entries
 };
 
 struct NetLobbyBody {
@@ -415,7 +415,8 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
     NetLink& L = s_links[link];
     if (!L.used) return;
     static unsigned char buf[sizeof(NetHeader) + sizeof(NetEvent) * ZM_NET_MAX_PENDING +
-                             sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES];
+                             sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
+                             sizeof(ZmYawnBody)];
     NetHeader* h = (NetHeader*)buf;
     h->magic = ZM_NET_MAGIC;
     h->version = ZM_NET_VERSION;
@@ -458,7 +459,7 @@ static void net_queue(int link, const NetEvent& ev)
     // traffic is awaiting acknowledgement. Never evict an assigned sequence.
     bool critical = ev.kind == ZM_EV_PICKUP || ev.kind == ZM_EV_BOX || ev.kind == ZM_EV_DROP ||
                     ev.kind == ZM_EV_WIN || ev.kind == ZM_EV_REVIVE || ev.kind == ZM_EV_SHOTGUN ||
-                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT;
+                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT || ev.kind == ZM_EV_BOSS;
     int limit = critical ? ZM_NET_MAX_PENDING : ZM_NET_MAX_PENDING - 24;
     if (L.pendingCount >= limit) {
         dbg_printf("[net] link %d event queue full, dropping kind %d\n", link, (int)ev.kind);
@@ -638,7 +639,8 @@ void zm_net_send_state(const Entity* ch, bool inGame, const Entity* zombieOverri
 void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, int count, bool adopt)
 {
     if (!zm_net_active()) return;
-    static unsigned char body[sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES];
+    static unsigned char body[sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
+                              sizeof(ZmYawnBody)];
     NetEnemiesHeader* h = (NetEnemiesHeader*)body;
     NetEnemyEntry* out = (NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
     if (count > ZM_NET_MAX_ENEMIES) count = ZM_NET_MAX_ENEMIES;
@@ -671,8 +673,17 @@ void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, 
             memcpy(d.tail, raw + 0x178, sizeof(d.tail));
         }
     }
-    net_send_all(PKT_ENEMIES, (unsigned char)s_self, body,
-                 (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count), -1);
+    int len = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
+    // Yawn's body, which its head's pose cannot carry (ZombieYawn.cpp).
+    bool yawn = false;
+    for (int i = 0; i < count && !yawn; i++) yawn = zm_yawn_head(list[i]);
+    ZmYawnBody yb;
+    if (yawn && zm_yawn_body_capture(&yb)) {
+        h->flags |= 2;
+        memcpy(body + len, &yb, sizeof(yb));
+        len += (int)sizeof(yb);
+    }
+    net_send_all(PKT_ENEMIES, (unsigned char)s_self, body, len, -1);
 }
 
 static void net_send_lobby(int link, unsigned char type)
@@ -762,6 +773,12 @@ static void net_take_enemies(int origin, const unsigned char* body, int bodyLen)
     if (count > ZM_NET_MAX_ENEMIES) return;
     if (bodyLen < (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count)) return;
     const NetEnemyEntry* list = (const NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
+    int entriesLen = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
+    if ((eh->flags & 2) != 0 && bodyLen >= entriesLen + (int)sizeof(ZmYawnBody)) {
+        ZmYawnBody yb;
+        memcpy(&yb, body + entriesLen, sizeof(yb));
+        zm_yawn_body_take(yb, eh->stage, eh->room, origin);
+    }
     static ZmNetEnemy got[ZM_NET_MAX_ENEMIES];
     int n = 0;
     for (int i = 0; i < count; i++) {
@@ -809,6 +826,17 @@ static void net_take_event(const NetEvent& e, int link)
         } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR ||
                    (e.dst != ZM_NET_ALL && e.dst != s_self) || e.args[0] < 2 || e.args[0] > 4) return;
         zm_timeout_take(e.args, e.src);
+        return;
+    }
+    if (e.kind == ZM_EV_BOSS) {
+        // Only the host decides a boss fight's phases and its entry; a
+        // survivor asks it to enter (3) and answers its question (5), for itself.
+        if (s_role == ZM_NET_ZOMBIE) {
+            if (e.src != link || e.dst != ZM_NET_DIRECTOR || (e.args[0] != 3 && e.args[0] != 5) ||
+                e.args[2] != link) return;
+        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR ||
+                   (e.dst != ZM_NET_ALL && e.dst != s_self) || e.args[0] == 3 || e.args[0] == 5) return;
+        zm_yawn_take(e.args, e.src);
         return;
     }
     if (e.kind == ZM_EV_PIANO) {

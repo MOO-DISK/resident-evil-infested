@@ -277,6 +277,8 @@ static void zm_close_release(void)
     dbg_printf("[msg] close-up %d left for camera %d\n", (int)s_closeCam, (int)g_roomCameraId);
 }
 
+static void zm_letterbox_frame(void);
+
 void zombie_mode_message_frame(void)
 {
     if (!zombie_mode_armed()) {
@@ -284,6 +286,7 @@ void zombie_mode_message_frame(void)
         s_closeUp = false;
         return;
     }
+    zm_letterbox_frame();
     // Hit, grabbed or dead: every examine or reveal still running is cut
     // short - it plays on (a puzzle's scene still finishes) but offers no
     // pickup afterwards (zombie_mode_event_room_action_skip), and its
@@ -328,6 +331,8 @@ bool zombie_mode_action_busy(const unsigned char* entry)
 {
     if (!zombie_mode_armed() || entry == NULL) return false;
     const unsigned char handler = entry[0];
+    // The attic's key or crest and its close-up, while Yawn is there.
+    if (zombie_mode_yawn_guards(entry, handler)) return true;
     if (handler != 4 && handler != 9) return false;
     if (s_closeSlot >= 0 && s_closeUp && !s_closeReleased) {
         dbg_printf("[msg] action (handler %d) refused: close-up still up\n", (int)handler);
@@ -454,6 +459,40 @@ unsigned int zombie_mode_event_flag_clear(unsigned int mask)
     // A reveal does not take the control either.
     if (s_reveal[s_evtSlot]) return mask & ~(unsigned int)(ZM_MSG_WORLD_FLAGS | 0x0100);
     return mask & ~(unsigned int)ZM_MSG_WORLD_FLAGS;
+}
+
+// The letterbox (main-state MSF_INTENSITY_RAMP, MainLoop.cpp's bars) of the
+// scenes played as a close-up stays off. The mode runs them on without the
+// control - cut short by a hit, their later cuts dropped, a reveal's group
+// ending in an event that never comes - so the command that takes the bars
+// away again (bit_op 05 0F 01) can be left unrun: the armor room's display
+// case (ROOM7050 event 1), the large gallery's solve (ROOM6170 event 20, whose
+// bars event 21 takes away) and the rest of kReveals and the examines.
+// Other scenes keep theirs (zm_letterbox_frame is their net).
+bool zombie_mode_event_letterbox(void)
+{
+    if (!zm_in_examine()) return true;
+    dbg_printf("[msg] event %d (slot %d): letterbox left off\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
+    return false;
+}
+
+// Only scenes (SCD events) turn the letterbox on - no room's per-frame script
+// does. Up with no event running for a second (a skipped scene's flag replay
+// that turned it on and not off, a scene the mode ended early), it goes.
+#define ZM_LETTERBOX_IDLE_FRAMES 30
+static void zm_letterbox_frame(void)
+{
+    static int idle = 0;
+    bool running = false;
+    for (int i = 0; i < 8 && !running; i++) running = g_ScdEventTable[i].active != 0;
+    if ((g_main_state_flags & MSF_INTENSITY_RAMP) == 0 || running) {
+        idle = 0;
+        return;
+    }
+    if (++idle < ZM_LETTERBOX_IDLE_FRAMES) return;
+    idle = 0;
+    g_main_state_flags &= ~MSF_INTENSITY_RAMP;
+    dbg_printf("[msg] letterbox left up with no scene running: taken away\n");
 }
 
 // The event VM's state 1, a reveal's command on the player: the look-at

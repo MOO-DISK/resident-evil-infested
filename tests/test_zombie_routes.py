@@ -215,7 +215,7 @@ int main() {
 
 
 class ProductionAdapterTests(unittest.TestCase):
-    def test_open_hole_and_elevator_states_and_mode_guards(self):
+    def test_hole_and_elevator_states_and_mode_guards(self):
         production = (routes.ROOT / "src/game/mods/ZombieRandom.cpp").read_text()
         commands = (routes.ROOT / "src/game/CmdFunctions.cpp").read_text()
         helper = "void zombie_mode_room_prepare(void)" + routes.between(
@@ -223,28 +223,41 @@ class ProductionAdapterTests(unittest.TestCase):
         flag_on = "void Flg_on(int baseAddr, unsigned int bitIndex)" + routes.between(
             commands, "void Flg_on(int baseAddr, unsigned int bitIndex)",
             "// FUN_00473f10")
+        # Flg_on's counterpart (CmdFunctions.cpp FUN_00473f10): MSB-first in the dword.
+        flag_off = r'''
+static void FUN_00473f10(int* baseAddr, unsigned int bitIndex)
+{
+    unsigned int* word = (unsigned int*)((unsigned char*)baseAddr + ((bitIndex & 0xFFFFFFE7u) >> 3));
+    *word &= ~(0x80000000u >> (bitIndex & 0x1F));
+}
+'''
         fixture = r'''
 #include <cassert>
 #include <cstring>
 enum { RND_STAGE_2F=6, ROOM_LESSON_ROOM=12, ROOM_MANSION_B1_PASSAGE_1=26,
        ROOM_MANSION_KITCHEN=28 };
 static int g_stageId, g_roomId;
-static bool armed;
+static bool armed, holeOpen;
 static unsigned int g_ScenarioFlags[8];
 static bool zombie_mode_armed() { return armed; }
+static bool zm_yawn_hole_open() { return holeOpen; }
 '''
         checks = r'''
 int main() {
+    for (int open=0; open<2; ++open)
     for (int mode=0; mode<2; ++mode)
         for (int stage=0; stage<8; ++stage)
             for (int room=0; room<29; ++room) {
                 memset(g_ScenarioFlags,0,sizeof(g_ScenarioFlags));
                 g_ScenarioFlags[0]=0x80000001; g_ScenarioFlags[7]=0x1000;
-                armed=mode!=0; g_stageId=stage; g_roomId=room;
+                armed=mode!=0; holeOpen=open!=0; g_stageId=stage; g_roomId=room;
+                // The hole's bits left over (an old state) are cleared while it is shut.
+                if (mode && stage==6 && (room==12 || room==26) && !open) g_ScenarioFlags[1]=0x01800000;
                 zombie_mode_room_prepare();
                 unsigned int expected=0;
                 if (mode && stage==6) {
-                    if (room==12 || room==26) expected=0x01800000; // bits 0x27, 0x28
+                    // The hole: bits 0x27, 0x28 once Yawn 2 is beaten, else clear.
+                    if ((room==12 || room==26) && open) expected=0x01800000;
                     if (room==28) expected=0x00001000; // bit 0x33
                 }
                 assert(g_ScenarioFlags[0]==0x80000001 && g_ScenarioFlags[1]==expected);
@@ -258,7 +271,7 @@ int main() {
 }
 '''
         with tempfile.TemporaryDirectory(prefix="re1-room-access-test-") as temp:
-            with patch.object(routes, "adapter_source", return_value=fixture + flag_on + helper + checks):
+            with patch.object(routes, "adapter_source", return_value=fixture + flag_on + flag_off + helper + checks):
                 exe = routes.build_adapter(Path(temp), COMPILER)
             subprocess.run([str(exe)], check=True)
         room_init = (routes.ROOT / "src/game/RoomInit.cpp").read_text()

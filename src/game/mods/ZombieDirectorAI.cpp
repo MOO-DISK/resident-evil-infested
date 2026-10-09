@@ -953,7 +953,7 @@ static bool ai_reinforce(unsigned int now)
         AiSurvivor& v = s_surv[i];
         if (!v.valid || v.dead || now - v.enteredMs < s_level->dwellMs) continue;
         if (v.pressedMs != 0 && now - v.pressedMs < s_level->dwellMs) continue;
-        if (zm_random_room_safe(v.stage, v.room)) continue;
+        if (zm_random_room_safe(v.stage, v.room) || zm_yawn_director_closed(v.stage, v.room)) continue;
         v.pressedMs = now;
         unsigned char id = ENEMY_ZOMBIE;
         if (s_level->traps && zm_econ_unlock_left_ms(ENEMY_HUNTER) == 0 &&
@@ -976,7 +976,7 @@ static bool ai_trap(unsigned int now)
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         AiSurvivor& v = s_surv[i];
         if (!v.valid || v.dead || v.health >= AI_LOW_HEALTH) continue;
-        if (zm_random_room_safe(v.stage, v.room)) continue;
+        if (zm_random_room_safe(v.stage, v.room) || zm_yawn_director_closed(v.stage, v.room)) continue;
         if (zm_room_monster_count(v.stage, v.room) <= 0) continue;
         if (!zm_director_place_ai(v.stage, v.room, ZM_TRAP_LOCK_DOORS, ai_name(ZM_TRAP_LOCK_DOORS))) continue;
         v.pressedMs = now;

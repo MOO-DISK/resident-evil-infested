@@ -95,8 +95,14 @@ static bool kp_here(unsigned char room)
 
 void zm_access_new_game(void)
 {
+#ifdef QUICK_DEBUG
+    // Quick testing: the elevator powered and the keypad door open from the start.
+    Flg_on((int)g_ScenarioFlags2, ZM_FLAG2_ELEVATOR_POWER);
+    Flg_on((int)g_ScenarioFlags2, ZM_FLAG2_KEYPAD_OPEN);
+#else
     FUN_00473f10((int*)g_ScenarioFlags2, ZM_FLAG2_ELEVATOR_POWER);
     FUN_00473f10((int*)g_ScenarioFlags2, ZM_FLAG2_KEYPAD_OPEN);
+#endif
     s_known = false;
     s_keypad = false;
     s_len = 0;

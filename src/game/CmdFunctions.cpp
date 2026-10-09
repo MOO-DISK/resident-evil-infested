@@ -211,6 +211,12 @@ int cmd_bit_op(void)
     if (operation == 1 && op1 >> 8 == 6 && bitOffset == 0) {
         mask = zombie_mode_event_flag_clear(mask);
     }
+    // Port-added mod: no letterbox for the scenes the mode plays as a
+    // close-up (an examine or a reveal), which can end without taking it away.
+    if (operation != 1 && op1 >> 8 == 5 && bitOffset == 0 && mask == MSF_INTENSITY_RAMP &&
+        !zombie_mode_event_letterbox()) {
+        return 1;
+    }
 
     if (operation == 0) {
         *target |= mask;
@@ -1452,6 +1458,9 @@ int cmd_room_action(void)
     // Port-added mod: a pickup scene cut short by a hit does not open its take
     // screen afterwards (mods/ZombieMessages.cpp).
     if (zombie_mode_event_room_action_skip(actionIdx)) return 1;
+    // Port-added mod: the attic's key or crest stays put while Yawn is there
+    // (mods/ZombieYawn.cpp).
+    if (zombie_mode_yawn_guards(&g_RoomActionTable[(unsigned int)slotIdx * 0xc], actionIdx)) return 1;
     ((RoomActionFunc)room_check_actions[actionIdx])(
         &g_RoomActionTable[(unsigned int)slotIdx * 0xc]);
     return 1;

@@ -285,6 +285,7 @@ static unsigned char s_jumpRecord[0x18];
 static void zm_start(Entity* e, unsigned char action, unsigned char anim);
 static void zm_note_switch(const Entity* now);
 static void zm_monster_possess(Entity* e);
+static bool zm_possessable(const Entity* e);
 static bool zm_monster_attack_over(const Entity* e);
 static bool zm_possession_busy(const Entity* e);
 static void zm_puppet_awareness(Entity* e, bool dead);
@@ -491,15 +492,24 @@ static int  s_winPlayer = -1;      // who opened the door
 static int  s_winReason = ZM_END_ESCAPE;
 
 // The game clock: the survivors have ZM_TIME_LIMIT_MS from the moment they
-// are all in (zm_survivors_in_ms) to get out; at zero the director wins. The
-// director's copy (and single player) keeps it and sends ZM_EV_CLOCK every
-// ZM_CLOCK_SEND_MS; a survivor's copy counts down from the last one.
-#define ZM_TIME_LIMIT_MS (20 * 60000)
+// are all in (zm_survivors_in_ms) to get out, plus what beating a boss adds
+// (zm_clock_add_bonus); at zero the director wins. It stands still while a
+// boss fight holds it (zm_yawn_clock_hold). The director's copy (and single
+// player) keeps it and sends ZM_EV_CLOCK every ZM_CLOCK_SEND_MS and on every
+// hold or bonus; a survivor's copy counts down from the last one.
+#define ZM_TIME_LIMIT_MS (12 * 60000)
+#define ZM_TIME_MAX_MS   (ZM_TIME_LIMIT_MS + 2 * 5 * 60000)    // with both bosses' time
 #define ZM_CLOCK_SEND_MS 5000
 static unsigned int s_clockLeftMs = ZM_TIME_LIMIT_MS;   // a survivor's: the last ZM_EV_CLOCK
+static unsigned int s_clockRunMs = 0;                   // ...the time it had run
+static bool         s_clockRemoteHeld = false;          // ...and standing still
 static unsigned int s_clockAtMs = 0;                    // ...and when it came
 static bool         s_clockHave = false;
 static unsigned int s_clockSentMs = 0;
+static unsigned int s_clockBonusMs = 0;                 // the keeper's: time added
+static unsigned int s_clockHeldMs = 0;                  // ...time stood still, holds over
+static unsigned int s_clockHeldAt = 0;                  // ...the current hold's start
+static bool         s_clockHeld = false;
 
 // The director's points for a hit (ZombieEconomy.cpp): the survivor in the
 // player entity, before the possessed monster's update and after it. A
@@ -591,7 +601,8 @@ void zm_note(const char* text);
 static bool zm_director_safe_room(unsigned char stage, unsigned char room)
 {
     return s_zombieModeArmed && zm_match_authority() &&
-        (zm_random_room_safe(stage, room) || zm_shotgun_room_blocked(stage, room));
+        (zm_random_room_safe(stage, room) || zm_shotgun_room_blocked(stage, room) ||
+         zm_yawn_director_closed(stage, room));     // a boss room until it is done (ZombieYawn.cpp)
 }
 
 // A living survivor stands in (stage, room): the director may not place a
@@ -679,9 +690,16 @@ void zombie_mode_new_game(int isNewGame)
     s_winReason = ZM_END_ESCAPE;
     zm_stats_new_game();
     s_clockLeftMs = ZM_TIME_LIMIT_MS;
+    s_clockRunMs = 0;
+    s_clockRemoteHeld = false;
     s_clockAtMs = 0;
     s_clockHave = false;
     s_clockSentMs = 0;
+    s_clockBonusMs = 0;
+    s_clockHeldMs = 0;
+    s_clockHeldAt = 0;
+    s_clockHeld = false;
+    zm_yawn_new_game();
     s_gameStartMs = zm_game_time_ms();
     s_allSpawnedMs = 0;
     s_zombieDeathReported = false;
@@ -799,6 +817,7 @@ void zombie_mode_room_reset(void)
     s_lastSkippedEvent = -1;
     zm_random_room_reset();
     zm_statue_room_reset();
+    zm_yawn_room_reset();
     zm_drops_room_reset();
     zm_econ_room_reset();
 }
@@ -822,6 +841,7 @@ static const char* const* zm_monster_sound_row(unsigned char id)
         { 0x09, 4, 0x0F },     // Chimera        - lab              (FL_walk, FL_slash, ...)
         { 0x0A, 2, 0x0D },     // Adder          - courtyard        (PYe_mena, PYe_hit, ...)
         { 0x10, 4, 0x13 },     // rooftop Tyrant - same lab sound bank (TY_foot, TY_slice, ...)
+        { 0x0D, 1, 0x10 },     // Yawn 1         - the first visit's attic (GV_move, GV_bite, ...)
     };
     if (id == ENEMY_ZOMBIE || id == ENEMY_ZOMBIE_VARIANT) return s_zombieSoundRow;
     for (unsigned int i = 0; i < sizeof(kSources) / sizeof(kSources[0]); i++) {
@@ -1088,6 +1108,11 @@ static bool zm_spot_clear(int x, int z)
     return true;
 }
 
+bool zm_spot_free(int x, int z)
+{
+    return zm_spot_clear(x, z);
+}
+
 // A spot in a room that is not loaded: one of its three generated spawn spots,
 // else one of its own enemy_set positions (known good), else where a door from
 // a neighbouring room lets in. Placed
@@ -1163,6 +1188,7 @@ int zm_room_monster_count(unsigned char stage, unsigned char room)
         const Entity* e = &g_EnemiesList[i];
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS) continue;
         if (e->health < 0 || (e->status_flags & ENTITY_STATUS_DEAD) != 0) continue;
+        if (zm_yawn_entity(e)) continue;        // the room's boss, not the director's
         n++;
     }
     return n + zm_world_room_unspawned();
@@ -1177,6 +1203,7 @@ int zm_room_monster_slots(unsigned char stage, unsigned char room)
         const Entity* e = &g_EnemiesList[i];
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS) continue;
         if (e->health < 0 || (e->status_flags & ENTITY_STATUS_DEAD) != 0) continue;
+        if (zm_yawn_entity(e)) continue;
         n += zm_econ_monster_slots(e->id);
     }
     return n + zm_world_room_unspawned(true);
@@ -1418,6 +1445,7 @@ void zombie_mode_room_spawn(void)
     zm_greenhouse_room();
     zm_roomsync_room();
     zm_statue_room();
+    zm_yawn_room();
     zm_drops_room_loaded();
 
     // The roster's extra monsters first, in the free slots above every slot
@@ -1448,14 +1476,14 @@ void zombie_mode_room_spawn(void)
         Entity* bySlot = reservedSlot >= 0 ? &g_EnemiesList[reservedSlot] :
             ((s_jumpTarget.slot < 30) ? &g_EnemiesList[s_jumpTarget.slot] : NULL);
         if (bySlot != NULL && (bySlot->status_flags & ENTITY_STATUS_ACTIVE) != 0 &&
-            zm_is_possessable_id(bySlot->id) && (bySlot->status_flags & ENTITY_STATUS_DEAD) == 0 &&
+            zm_possessable(bySlot) && (bySlot->status_flags & ENTITY_STATUS_DEAD) == 0 &&
             !zm_possession_busy(bySlot)) {
             target = bySlot;
         } else {
             int bestDist = 0x7FFFFFFF;
             for (int i = 0; i < 30; i++) {
                 Entity* e = &g_EnemiesList[i];
-                if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || !zm_is_possessable_id(e->id)) continue;
+                if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || !zm_possessable(e)) continue;
                 if ((e->status_flags & ENTITY_STATUS_DEAD) != 0 || zm_possession_busy(e)) continue;
                 int dx = (int)e->scaMatrixData.localMatrix.t[0] - s_jumpTarget.x;
                 int dz = (int)e->scaMatrixData.localMatrix.t[2] - s_jumpTarget.z;
@@ -1756,6 +1784,11 @@ int zombie_mode_player_voice(int base)
 bool zombie_mode_network_match(void)
 {
     return s_zombieModeArmed && s_gameRole != ZM_NET_OFF;
+}
+
+bool zombie_mode_target_remote(void)
+{
+    return s_zombieModeArmed && s_targetSwapped;
 }
 
 void zombie_mode_damage_model_loaded(const Entity* e, unsigned int header, unsigned int base)
@@ -2250,9 +2283,12 @@ bool zombie_mode_skip_scd_event(int scriptIndex)
     // native story rescue/fatal scripts must not move or kill one local player.
     if (g_stageId == STAGE_MANSION_RETURN_1F &&
         (g_roomId == ROOM_TRAP_ROOM || g_roomId == ROOM_LIVING_ROOM)) return true;
+    // The attic's scene once Yawn has fled (ROOM7100 event 0) takes the
+    // camera and places the player: skipped like a monster's entrance.
+    bool yawnScene = g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_ATTIC && scriptIndex == 0;
     ZmEvtScan scan = { false, false, false, false, false, 0 };
     zm_evt_scan(scriptIndex, 0, &scan, true);
-    if (!scan.story && !(scan.control && scan.enemy)) return false;
+    if (!yawnScene && !scan.story && !(scan.control && scan.enemy)) return false;
     // A per-frame script can ask again every frame: the persistent flags are
     // written each time (cheap, idempotent), the control flags and the player
     // only the first time - a scene asked for over and over must not hand the
@@ -2324,6 +2360,8 @@ bool zombie_mode_enemy_spawn(Entity* e, unsigned char slot, unsigned char id)
 }
 
 static void zm_shared_after_update(Entity* e);   // with the shared-room state below
+static void zm_yawn_init_here(Entity* e);         // with the puppets below
+static void zm_area_resolve(void);                 // with the target swap below
 static void zm_owner_intercept_attack(Entity* e);
 
 static bool zm_greenhouse_vine(const Entity* e)
@@ -2341,7 +2379,9 @@ void zombie_mode_after_entity_update(Entity* e)
     // bit before the death tests below read it (zm_owner_intercept_attack).
     if (s_gameRole != ZM_NET_OFF) zm_owner_intercept_attack(e);
     zm_world_after_update(e);
-    if (zm_econ_on()) {
+    zm_yawn_after_update(e);
+    // Yawn is nobody's purchase: no refund, no kill.
+    if (zm_econ_on() && !zm_yawn_entity(e)) {
         int slot = (int)(e - g_EnemiesList);
         if (slot >= 0 && slot < ZM_FIRST_SURVIVOR_SLOT && e->id < NPC_ENTITIES_IDS && !zombie_mode_is_puppet(e)) {
             zm_econ_after_update(e, slot, zm_world_uid_of_slot(slot));
@@ -2349,6 +2389,7 @@ void zombie_mode_after_entity_update(Entity* e)
     }
     zm_hit_probe_end(e);
     zm_shared_after_update(e);      // ends the target swap
+    zm_area_resolve();              // a Yawn's strike on everyone in reach
 }
 
 // Snd_em (SoundSystem.cpp), for every enemy sound cue. Sharing a room, the
@@ -2688,28 +2729,52 @@ void zm_draw_centered(const char* text, short y, unsigned char color)
     PrintText8x14((short)((320 - (int)strlen(text) * 8) / 2), y, color, 0);
 }
 
+// The keeper's: the time the clock has run since every survivor came in,
+// the holds taken out.
+static unsigned int zm_clock_run_ms(void)
+{
+    int in = zm_survivors_in_ms();
+    if (in < 0) return 0;
+    unsigned int held = s_clockHeldMs + (s_clockHeld ? zm_game_time_ms() - s_clockHeldAt : 0);
+    return (unsigned int)in > held ? (unsigned int)in - held : 0;
+}
+
+static bool zm_clock_held(void)
+{
+    return zm_match_authority() ? s_clockHeld : s_clockRemoteHeld;
+}
+
 // Time left on the game clock (ZM_TIME_LIMIT_MS before it starts).
 static unsigned int zm_clock_left_ms(void)
 {
     if (zm_match_authority()) {
-        int in = zm_survivors_in_ms();
-        if (in < 0) return ZM_TIME_LIMIT_MS;
-        return in >= ZM_TIME_LIMIT_MS ? 0 : (unsigned int)(ZM_TIME_LIMIT_MS - in);
+        if (zm_survivors_in_ms() < 0) return ZM_TIME_LIMIT_MS;
+        unsigned int limit = ZM_TIME_LIMIT_MS + s_clockBonusMs, run = zm_clock_run_ms();
+        return run >= limit ? 0 : limit - run;
     }
     if (!s_clockHave) return ZM_TIME_LIMIT_MS;
-    unsigned int gone = zm_game_time_ms() - s_clockAtMs;
+    unsigned int gone = s_clockRemoteHeld ? 0 : zm_game_time_ms() - s_clockAtMs;
     return gone >= s_clockLeftMs ? 0 : s_clockLeftMs - gone;
+}
+
+void zm_clock_add_bonus(unsigned int ms)
+{
+    if (!zm_match_authority()) return;
+    s_clockBonusMs += ms;
+    s_clockSentMs = 0;                  // out at once
+    dbg_printf("[zombie] the game clock gains %u s\n", ms / 1000);
 }
 
 // Every player's: bottom right.
 void zm_clock_draw(void)
 {
     unsigned int sec = (zm_clock_left_ms() + 999) / 1000;
-    char line[16];
-    snprintf(line, sizeof(line), "TIME %u:%02u", sec / 60, sec % 60);
+    char line[24];
+    snprintf(line, sizeof(line), zm_clock_held() ? "PAUSED %u:%02u" : "TIME %u:%02u", sec / 60, sec % 60);
     snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "%s", line);
     zm_text_encode(PRINT_TEXT_BUFFER);
     PrintText8x14((short)(320 - 8 - (int)strlen(line) * 8), 222, 0x8F, 0);
+    zm_yawn_draw();
 }
 
 // A survivor's room view: the room it is in, bottom left in green (the
@@ -2822,11 +2887,13 @@ unsigned int zm_match_elapsed_ms(void)
 {
     if (s_winShown) return s_finalElapsedMs;
     if (zm_match_authority()) {
-        int in = zm_survivors_in_ms();
-        if (in < 0) return 0;
-        return in >= ZM_TIME_LIMIT_MS ? ZM_TIME_LIMIT_MS : (unsigned int)in;
+        unsigned int limit = ZM_TIME_LIMIT_MS + s_clockBonusMs, run = zm_clock_run_ms();
+        return run >= limit ? limit : run;
     }
-    return s_clockHave ? ZM_TIME_LIMIT_MS - zm_clock_left_ms() : 0;
+    if (!s_clockHave) return 0;
+    unsigned int gone = s_clockRemoteHeld ? 0 : zm_game_time_ms() - s_clockAtMs;
+    if (gone > s_clockLeftMs) gone = s_clockLeftMs;
+    return s_clockRunMs + gone;
 }
 
 // The match is over, for `reason` (ZM_END_*); `player` opened the back exit.
@@ -2891,7 +2958,7 @@ bool zm_match_take_win(const short* a, int src)
         unsigned int resultSeed = (unsigned short)a[3] | ((unsigned int)(unsigned short)a[4] << 16);
         if (resultSeed != seed || (a[1] != ZM_END_UNSOLVABLE &&
             (a[1] < ZM_END_ESCAPE || a[1] > ZM_END_ALL_DEAD)) ||
-            (unsigned short)a[2] > ZM_TIME_LIMIT_MS / 1000) return true;
+            (unsigned short)a[2] > ZM_TIME_MAX_MS / 1000) return true;
         if (a[1] == ZM_END_ESCAPE ? (a[0] < 0 || a[0] >= ZM_NET_MAX_PLAYERS || zm_net_char(a[0]) < 0)
                                   : a[0] != -1) return true;
         zm_match_end(a[1], a[1] == ZM_END_ESCAPE ? a[0] : -1, (unsigned short)a[2] * 1000u);
@@ -2921,11 +2988,21 @@ static void zm_clock_frame(void)
 {
     if (!s_zombieModeArmed || s_winShown || !zm_match_authority()) return;
     if (zm_survivors_in_ms() < 0) return;
-    unsigned int left = zm_clock_left_ms();
     unsigned int now = zm_game_time_ms();
+    // A boss fight holds the clock (ZombieYawn.cpp); the survivors hear at once.
+    bool hold = zm_yawn_clock_hold();
+    if (hold != s_clockHeld) {
+        if (hold) s_clockHeldAt = now;
+        else s_clockHeldMs += now - s_clockHeldAt;
+        s_clockHeld = hold;
+        s_clockSentMs = 0;
+        dbg_printf("[zombie] the game clock %s\n", hold ? "stands still" : "runs again");
+    }
+    unsigned int left = zm_clock_left_ms();
     if (zm_net_role() == ZM_NET_ZOMBIE && (s_clockSentMs == 0 || now - s_clockSentMs >= ZM_CLOCK_SEND_MS)) {
-        zm_net_send_event(ZM_EV_CLOCK, (short)((left + 999) / 1000), 0, 0, 0);
-        s_clockSentMs = now;
+        zm_net_send_event(ZM_EV_CLOCK, (short)((left + 999) / 1000), (short)(hold ? 1 : 0),
+                          (short)(zm_match_elapsed_ms() / 1000), 0);
+        s_clockSentMs = now != 0 ? now : 1;
     }
     int reason = left == 0 ? ZM_END_TIME : zm_all_survivors_dead() ? ZM_END_ALL_DEAD : -1;
     if (reason >= 0) {
@@ -2960,7 +3037,10 @@ bool zombie_mode_match_over(void)
 void zm_reconnect_match_clock(int elapsedMs)
 {
     unsigned int now = zm_game_time_ms();
-    s_clockLeftMs = elapsedMs < 0 ? ZM_TIME_LIMIT_MS : ZM_TIME_LIMIT_MS - (unsigned int)elapsedMs;
+    s_clockLeftMs = elapsedMs < 0 || elapsedMs >= ZM_TIME_LIMIT_MS ? (elapsedMs < 0 ? ZM_TIME_LIMIT_MS : 0)
+                                                                    : ZM_TIME_LIMIT_MS - (unsigned int)elapsedMs;
+    s_clockRunMs = elapsedMs < 0 ? 0 : (unsigned int)elapsedMs;
+    s_clockRemoteHeld = false;          // the host's next CLOCK puts the bonus and holds right
     s_clockAtMs = now; s_clockHave = elapsedMs >= 0;
     s_gameStartMs = now - (elapsedMs < 0 ? 0 : (unsigned int)elapsedMs);
     s_allSpawnedMs = elapsedMs < 0 ? 0 : now - (unsigned int)elapsedMs;
@@ -2979,6 +3059,17 @@ bool zombie_mode_door_trapped(const unsigned char* record)
     if (!s_zombieModeArmed) return false;
     if (zm_shotgun_door(record)) return true;
     if (s_gameRole != ZM_NET_SURVIVOR) return false;
+    // No way out of a boss room while its Yawn is there or its lockdown
+    // holds, and the lesson room's door for good once Yawn 2 is beaten
+    // (ZombieYawn.cpp).
+    if (zm_yawn_traps_exit(g_stageId, g_roomId) && (record[0x0B] & 0x80) == 0) {
+        zm_note("THE DOOR WON'T OPEN");
+        return true;
+    }
+    if (zm_yawn_lesson_sealed(g_stageId, g_roomId, record[0x0D]) && (record[0x0B] & 0x80) == 0) {
+        zm_note("THE DOOR IS BLOCKED");
+        return true;
+    }
     // The small elevator before the battery is in (ZombieKeypad.cpp).
     if (zm_access_door_refused(record)) return true;
     unsigned int left = 0;
@@ -3419,7 +3510,7 @@ static Entity* zm_find_target(Entity* self)
         Entity* e = &g_EnemiesList[i];
         if (e == self || (e->status_flags & ENTITY_STATUS_ACTIVE) == 0) continue;
         if ((e->status_flags & (0x02 | ENTITY_STATUS_DEAD)) != 0) continue;
-        if (e->id >= NPC_ENTITIES_IDS || e->health < 0 || e->hit_state != 0) continue;
+        if (e->id >= NPC_ENTITIES_IDS || e->health < 0 || e->hit_state != 0 || zm_yawn_entity(e)) continue;
 
         int dx = e->scaMatrixData.localMatrix.t[0] - self->scaMatrixData.localMatrix.t[0];
         int dz = e->scaMatrixData.localMatrix.t[2] - self->scaMatrixData.localMatrix.t[2];
@@ -4102,7 +4193,7 @@ static void zm_note_switch(const Entity* now)
     for (int i = 0; i < 30; i++) {
         const Entity* e = &g_EnemiesList[i];
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0) continue;
-        if (!zm_is_possessable_id(e->id) || e->health < 0) continue;
+        if (!zm_possessable(e) || e->health < 0) continue;
         if ((e->status_flags & ENTITY_STATUS_DEAD) != 0) continue;
         count++;
         if (e == now) index = count;
@@ -4124,7 +4215,7 @@ static bool zm_possess_next(Entity* cur)
         int i = (curSlot + step) % 30;
         Entity* e = &g_EnemiesList[i];
         if (e == cur || (e->status_flags & ENTITY_STATUS_ACTIVE) == 0) continue;
-        if (!zm_is_possessable_id(e->id) || e->health < 0) continue;
+        if (!zm_possessable(e) || e->health < 0) continue;
         if ((e->status_flags & ENTITY_STATUS_DEAD) != 0 || zm_shared_slot_busy(i)) continue;
         if (e == s_biteVictim || zm_possession_busy(e)) continue;
         best = e;
@@ -4192,7 +4283,8 @@ static bool zm_jump_to(unsigned char stage, unsigned char room)
         zm_note_hall_closed();
         return false;
     }
-    if (zm_director_safe_room(stage, room)) {
+    // A boss room is the director's only to take its Yawn (ZombieYawn.cpp).
+    if (zm_director_safe_room(stage, room) && !zm_yawn_jump_room(stage, room)) {
         zm_note("MONSTERS CANNOT ENTER A SAFE ROOM");
         return false;
     }
@@ -4500,6 +4592,19 @@ static bool zm_director_input(Entity* e, bool busy, unsigned int* heldOut, unsig
     s_optionsWasDown = optionsDown;
     bool gates = (g_message_flags & 0x0101) == 0x0101 &&
                  (g_main_state_flags & MSF_MENU_ACTIVE) == 0;
+    // A boss fight under way plays its Yawn by a human director's hand
+    // (ZombieYawn.cpp): taken there as soon as nothing holds the director, and
+    // kept until it is beaten - no switching to another monster, no map jump.
+    unsigned char bossStage, bossRoom;
+    if (gates && !busy && !s_jumpPending && zm_yawn_force_jump(e, &bossStage, &bossRoom)) {
+        if (zm_map_is_open()) zm_map_toggle();
+        if (zm_jump_to(bossStage, bossRoom)) {
+            ENTITY = e;
+            return true;
+        }
+    }
+    bool bossBound = zm_yawn_director_bound(e);
+    if (bossBound) startPressed = false;
     bool mapWasOpen = zm_map_is_open();
     if (gates && optionsPressed && !s_directorMapOnly) {
         zm_map_set_read_only(false);
@@ -4532,7 +4637,10 @@ static bool zm_director_input(Entity* e, bool busy, unsigned int* heldOut, unsig
     unsigned char jumpStage, jumpRoom;
     // The map stays open when the jump is refused (an empty room, the closed
     // hall), so the note shows under its title.
-    if (zm_map_take_jump(&jumpStage, &jumpRoom) && !busy && zm_jump_to(jumpStage, jumpRoom)) {
+    bool jumpPicked = zm_map_take_jump(&jumpStage, &jumpRoom);
+    if (jumpPicked && bossBound) {
+        zm_note("THE FIGHT HOLDS YOU TO YAWN");
+    } else if (jumpPicked && !busy && zm_jump_to(jumpStage, jumpRoom)) {
         if (zm_map_is_open()) zm_map_toggle();
         ENTITY = e;     // as after a door: the hand-off slept a frame
         return true;
@@ -4612,6 +4720,13 @@ static const ZmMonsterType* zm_monster_type(unsigned char id)
 bool zm_is_possessable_id(unsigned char id)
 {
     return zm_is_zombie_id(id) || zm_monster_type(id) != NULL;
+}
+
+// A monster the director can take: a possessable type, or a Yawn's head
+// (never its body segments) - ZombieYawn.cpp, zm_yawn_possessed.
+static bool zm_possessable(const Entity* e)
+{
+    return zm_is_possessable_id(e->id) || zm_yawn_head(e);
 }
 
 // The possessed monster's own engine owns it this frame (an attack under way,
@@ -4718,6 +4833,8 @@ static bool zm_possession_busy(const Entity* e)
 {
     // A dead body must still allow the existing automatic death handoff.
     if (e->health < 0) return false;
+    // Yawn: its attacks (bite, rear, swallow, thrash, slam) and its reactions.
+    if (zm_yawn_head(e)) return e->state != 1 || e->action_behavior >= 2;
     int slot = (int)(e - g_EnemiesList);
     if (slot >= 0 && slot < 30 && zm_shared_slot_busy(slot)) return true;
     if (e == g_zombieModeEntity && (s_remoteGrab || s_biteVictim != NULL || s_riding)) return true;
@@ -4826,6 +4943,72 @@ static void zm_monster_walk(Entity* e, const ZmMonsterType* t, unsigned int held
         extern void tyrant_director_walk_finish(void);
         tyrant_director_walk_finish();
     }
+}
+
+// ---------------------------------------------------------------------------
+// A possessed Yawn (its own update, yawn_update, for everything but the
+// choosing): the decision tree is kept off (ignore_player, +0x85, held at 1),
+// and the pad picks its action - Forward crawls (Run with it, faster), the
+// turns steer, Action bites, Aim + Action thrashes, Run + Action rears and
+// slams (Yawn.cpp actions 2, 9, 10). An attack, a flinch or a death is the
+// engine's until it hands back to the crawl. Beaten - Yawn 1 under its flee
+// health, or Yawn 2 dead - it goes back to its own AI (the flee, the death)
+// and the director to the next monster in reach (zm_possessed_died).
+// ---------------------------------------------------------------------------
+#define ZM_YAWN_CRAWL  450
+#define ZM_YAWN_RUSH   900
+#define ZM_YAWN_TURN   0x30
+#define ZM_YAWN_FLEE_HEALTH 0x0AF0          // yawn_pick_action_normal's flee
+static void zm_yawn_possessed(Entity* e)
+{
+    if (s_jumpFixCamera && (g_main_state_flags & MSF_CAMERA_LOCK) == 0) {
+        s_jumpFixCamera = false;
+        zm_fix_camera(e);
+    }
+    if (e->state == 0) {                    // its init: the skeleton and the body
+        s_jumpFreshInit = false;
+        yawn_update();
+        ENTITY = e;
+        return;
+    }
+    if ((g_message_flags & 0x0004) == 0) return;
+    bool beaten = (e->id == ENEMY_YAWN_1 && e->health < ZM_YAWN_FLEE_HEALTH) || e->health < 0;
+    if (beaten) {
+        if (e->id == ENEMY_YAWN_1 && e->health >= 0 && e->action_behavior != 7) {
+            *(unsigned int*)((char*)e + 0x84) = 0x70101;    // the flee (yawn_action_flee)
+        }
+        yawn_update();
+        ENTITY = e;
+        if (!s_zombieDeathReported && (e->health >= 0 || ++s_monDeathFrames > 90)) {
+            s_zombieDeathReported = true;
+            dbg_printf("[yawn] the possessed Yawn is beaten: back to its own AI\n");
+            zm_possessed_died(e);
+        }
+        return;
+    }
+    bool busy = e->state != 1 || e->action_behavior >= 2;
+    unsigned int held = 0, pressed = 0;
+    if (zm_director_input(e, busy, &held, &pressed)) return;
+    if (!busy) {
+        e->ignore_player_flag = 1;
+        if ((pressed & (ZM_PAD_ACTION | ZM_PAD_FIRE)) != 0) {
+            unsigned int action = (held & ZM_PAD_AIM) != 0 ? 9 : (held & ZM_PAD_RUN) != 0 ? 10 : 2;
+            *(unsigned int*)((char*)e + 0x84) = 0x101u | (action << 16);
+            dbg_printf("[yawn] the director's %s\n", action == 9 ? "thrash" : action == 10 ? "slam" : "bite");
+        } else {
+            if ((held & ZM_PAD_TURN_A) != 0) e->angle = (short)((e->angle + ZM_YAWN_TURN) & 0xFFF);
+            if ((held & ZM_PAD_TURN_B) != 0) e->angle = (short)((e->angle - ZM_YAWN_TURN) & 0xFFF);
+            bool forward = (held & ZM_PAD_FORWARD) != 0;
+            unsigned char want = forward ? 1 : 0;
+            if (e->action_behavior != want) {
+                e->action_behavior = want;
+                e->action_state = 0;
+            }
+            *(short*)((char*)e + 0x172) = (short)(!forward ? 0 : (held & ZM_PAD_RUN) != 0 ? ZM_YAWN_RUSH : ZM_YAWN_CRAWL);
+        }
+    }
+    yawn_update();
+    ENTITY = e;
 }
 
 static void zm_monster_update(Entity* e)
@@ -4959,7 +5142,11 @@ void zombie_mode_update(void)
             }
         } else zm_monster_possess(e);
     }
-    // A possessed Cerberus, Hunter or Chimera has its own controller.
+    // A possessed Yawn, Cerberus, Hunter or Chimera has its own controller.
+    if (zm_yawn_head(e)) {
+        zm_yawn_possessed(e);
+        return;
+    }
     if (!zm_is_zombie_id(e->id)) {
         zm_monster_update(e);
         return;
@@ -5278,7 +5465,7 @@ static void zm_stun_at(int x, int z, const char* who)
     for (int slot = 0; slot < ZM_FIRST_SURVIVOR_SLOT; slot++) {
         const Entity* e = &g_EnemiesList[slot];
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS) continue;
-        if (zombie_mode_is_puppet(e) || e->health < 0) continue;
+        if (zombie_mode_is_puppet(e) || e->health < 0 || zm_yawn_entity(e)) continue;   // no boss stun
         long long dx = (long long)e->scaMatrixData.localMatrix.t[0] - x;
         long long dz = (long long)e->scaMatrixData.localMatrix.t[2] - z;
         if (dx * dx + dz * dz > (long long)ZM_STUN_RADIUS * ZM_STUN_RADIUS) continue;
@@ -5402,7 +5589,7 @@ static void zm_stun_before_update(Entity* e)
 {
     s_stunHeld = false;
     int slot = zm_slot_of(e);
-    if (slot < 0 || e->id >= NPC_ENTITIES_IDS) return;
+    if (slot < 0 || e->id >= NPC_ENTITIES_IDS || zm_yawn_entity(e)) return;
     if (e->state == 0) {
         zm_stun_slot_reset(slot);       // a new monster in this slot
         return;
@@ -5855,13 +6042,25 @@ void zm_shared_receive_enemies(const ZmNetEnemy* list, int count, bool adopt,
             if (e == g_zombieModeEntity) continue;
             if (!corpse && s_slotCorpse[slot] && s_snapHave[slot] && s_snap[slot].uid == n.uid)
                 continue; // a delayed live handoff cannot undo confirmed death
-            zm_init_puppet(e);
+            if (zm_yawn_head(e)) {
+                // Yawn's init (its body segments) runs only with the
+                // monsters' turn on; the snake waits for it below otherwise.
+                if (e->state == ZOMBIE_STATE_INIT && (g_message_flags & 0x0004) == 0) continue;
+                zm_yawn_init_here(e);
+            } else {
+                zm_init_puppet(e);
+            }
             zm_world_accept_net_state(e);
             e->scaMatrixData.localMatrix.t[0] = n.pose.x;
             e->scaMatrixData.localMatrix.t[1] = n.pose.y;
             e->scaMatrixData.localMatrix.t[2] = n.pose.z;
             e->angle = n.pose.angle;
             e->health = n.health;
+            if (zm_yawn_head(e)) {
+                zm_yawn_pose_apply(e, n.pose, origin);
+                for (int k = 0; k < ZM_YAWN_SLOTS; k++) zm_yawn_status_apply(&g_EnemiesList[k], k);
+                zm_yawn_mark_scaled();
+            }
             if (corpse) {
                 if (e->health >= 0) e->health = -1;
                 // Adopt the final joints, not an idle state that replays death.
@@ -5921,6 +6120,8 @@ static int zm_room_monsters(const Entity** out, unsigned short* uids, bool inclu
         if (zm_greenhouse_vine(e)) continue;
         if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0) continue;
         if (!includePuppetZombie && e == s_puppetZombie) continue;
+        // Yawn's body segments go as the head's ZmYawnBody (ZombieYawn.cpp).
+        if (zm_yawn_segment(e)) continue;
         uids[n] = zm_wire_uid(e);
         out[n++] = e;
     }
@@ -5961,6 +6162,19 @@ static void zm_room_update(void)
                 if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e == s_puppetZombie || zm_greenhouse_vine(e)) continue;
                 if (i == s_grabSlot) continue;
                 s_slotShown[i] = true;
+                // Yawn goes on from the pose its owner last sent. Its body
+                // segments' -1 health is how the original keeps them, not a
+                // death; a fled snake's head flees again from where it is.
+                if (zm_yawn_entity(e)) {
+                    if (zm_yawn_head(e) && e->state != ZOMBIE_STATE_INIT) {
+                        e->state = ZOMBIE_STATE_IDLE;
+                        e->ignore_player_flag = 0;
+                        e->action_behavior = 0;
+                        e->action_state = 0;
+                        e->hit_state = 0;
+                    }
+                    continue;
+                }
                 if (zm_monster_dead(e)) {
                     if (s_snapHave[i] && !s_snap[i].settled && !s_slotCorpse[i]) {
                         // Continue the owner's exact death phase and frame,
@@ -6017,7 +6231,7 @@ static void zm_room_update(void)
         for (int i = 0; i < ZM_FIRST_SURVIVOR_SLOT; i++) {
             const Entity* e = &g_EnemiesList[i];
             if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e == s_puppetZombie ||
-                e->id >= NPC_ENTITIES_IDS || e->health >= 0 || zm_greenhouse_vine(e)) continue;
+                e->id >= NPC_ENTITIES_IDS || e->health >= 0 || zm_greenhouse_vine(e) || zm_yawn_entity(e)) continue;
             // Do not turn another copy's in-progress death into a frozen
             // corpse. Only its owner can first confirm the completed fall.
             if (!s_slotCorpse[i] && (!s_iOwn || !zm_monster_death_settled(e))) continue;
@@ -6189,6 +6403,96 @@ static void zm_target_end(void)
     s_targetSwapped = false;
 }
 
+// ---------------------------------------------------------------------------
+// A strike on every survivor in reach (Yawn's thrash and slam, Yawn.cpp)
+//
+// The engine's monsters hit only g_playerEntity - one survivor, the target
+// swapped in for the update. A strike along a whole body hits all of them: it
+// is kept from the monster's update and dealt after it (zm_area_resolve,
+// once the swap has ended), to this copy's own survivor as a PHURT would be
+// played here and to each other copy's as a PHURT - each with the reaction
+// a Yawn bite gives, facing or not.
+// ---------------------------------------------------------------------------
+static void zm_take_hurt(const short* a);
+
+int zm_room_survivors(int (*xz)[2], int* who, int max)
+{
+    int n = 0;
+    // This copy's own survivor - the real one, under a target swap too.
+    bool local = s_gameRole == ZM_NET_OFF ? zm_survivor_present() : zm_survivor_role();
+    short health = s_targetSwapped ? s_swapHealth : g_playerEntity.health;
+    if (local && health >= 0 && !zm_spec_away() && n < max) {
+        xz[n][0] = s_targetSwapped ? s_swapT[0] : g_playerEntity.scaMatrixData.localMatrix.t[0];
+        xz[n][1] = s_targetSwapped ? s_swapT[2] : g_playerEntity.scaMatrixData.localMatrix.t[2];
+        who[n++] = s_gameRole == ZM_NET_OFF ? -1 : zm_net_self();
+    }
+    if (s_gameRole == ZM_NET_OFF) return n;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS && n < max; i++) {
+        if (i == zm_net_self() || zm_net_char(i) < 0) continue;
+        const ZmNetPeerState* p = zm_net_player(i);
+        if (!zm_state_here(p) || p->dead || p->spectating || p->transitioning) continue;
+        xz[n][0] = p->x;
+        xz[n][1] = p->z;
+        who[n++] = i;
+    }
+    return n;
+}
+
+struct ZmAreaHit {
+    bool          have;
+    int           count, radius;
+    short         damage, angle;
+    unsigned char id;
+    int           pts[16][3];
+};
+static ZmAreaHit s_areaHit;
+
+void zombie_mode_yawn_area_hit(const int (*points)[3], int count, int radius, int damage)
+{
+    if (!s_zombieModeArmed || ENTITY == NULL || count <= 0) return;
+    if (count > 16) count = 16;
+    s_areaHit.have = true;
+    s_areaHit.count = count;
+    s_areaHit.radius = radius;
+    s_areaHit.damage = (short)damage;
+    s_areaHit.angle = ENTITY->angle;
+    s_areaHit.id = ENTITY->id;
+    memcpy(s_areaHit.pts, points, sizeof(int) * 3 * count);
+}
+
+static void zm_area_resolve(void)
+{
+    if (!s_areaHit.have) return;
+    s_areaHit.have = false;
+    int xz[ZM_NET_MAX_PLAYERS][2], who[ZM_NET_MAX_PLAYERS];
+    int n = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS);
+    unsigned int now = zm_game_time_ms();
+    int r = s_areaHit.radius;
+    for (int k = 0; k < n; k++) {
+        bool hit = false;
+        for (int i = 0; i < s_areaHit.count && !hit; i++) {
+            int dx = xz[k][0] - s_areaHit.pts[i][0], dz = xz[k][1] - s_areaHit.pts[i][2];
+            // Each axis bounded before squaring: strictly 32-bit arithmetic.
+            if (dx < -r || dx > r || dz < -r || dz > r) continue;
+            hit = dx * dx + dz * dz <= r * r;
+        }
+        if (!hit) continue;
+        bool local = who[k] < 0 || who[k] == zm_net_self();
+        short facingAngle = local ? (short)g_playerEntity.directionAngle : zm_net_player(who[k])->angle;
+        short facing = (short)((((facingAngle - s_areaHit.angle) + 0x400) & 0xFFF) < 0x800 ? 1 : 0);
+        short a[8] = { s_areaHit.damage, (short)(facing + 1), 2, (short)(0x66 + facing), 0x7FFF, 0,
+                       (short)s_areaHit.id, (short)(g_stageId | (g_roomId << 8)) };
+        if (local) {
+            zm_take_hurt(a);
+        } else {
+            if ((int)(s_hurtUntilMs[who[k]] - now) > 0) continue;
+            zm_net_send_event_to(who[k], ZM_EV_PHURT, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+            s_hurtUntilMs[who[k]] = now + 700;
+        }
+        dbg_printf("[yawn] area strike on survivor %d for %d\n", who[k], (int)s_areaHit.damage);
+    }
+}
+
 // Before a monster's update on the copy that runs it, with its target in the
 // player entity: a survivor of another copy swapped in, a survivor's own
 // player, or single player's AI survivor when it is in the room.
@@ -6198,6 +6502,7 @@ static void zm_hit_probe_begin(const Entity* e)
     if (!zm_econ_on() && s_gameRole != ZM_NET_SURVIVOR) return;
     int slot = (int)(e - g_EnemiesList);
     if (slot < 0 || slot >= ZM_FIRST_SURVIVOR_SLOT || e->id >= NPC_ENTITIES_IDS || zombie_mode_is_puppet(e)) return;
+    if (zm_yawn_entity(e)) return;          // the room's boss earns the director nothing
     bool target;
     if (s_gameRole == ZM_NET_OFF) target = zm_survivor_present();
     else if (!s_iOwn) target = false;
@@ -6571,7 +6876,7 @@ static void zm_burst_watch(void)
     if (s_gameRole == ZM_NET_OFF || !s_iOwn || !s_shared) return;
     for (int i = 0; i < ZM_FIRST_SURVIVOR_SLOT; i++) {
         const Entity* e = &g_EnemiesList[i];
-        if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS) continue;
+        if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id >= NPC_ENTITIES_IDS || zm_yawn_entity(e)) continue;
         unsigned short mask = zm_burst_mask(e);
         if ((mask & ~s_burstSent[i]) == 0) continue;
         s_burstSent[i] |= mask;
@@ -6579,11 +6884,95 @@ static void zm_burst_watch(void)
     }
 }
 
+// Yawn's init on a copy that does not run it: its skeleton, and the twelve
+// body segments it copies itself into (slots 1-12).
+static void zm_yawn_init_here(Entity* e)
+{
+    if (e->state != ZOMBIE_STATE_INIT) return;
+    Entity* saved = ENTITY;
+    ENTITY = e;
+    yawn_update();
+    ENTITY = saved;
+    s_slotHealth[zm_slot_of(e)] = e->health;
+    dbg_printf("[yawn] p%d: body set up here (slots 0-%d)\n", zm_net_self(), ZM_YAWN_SLOTS - 1);
+}
+
+// A Yawn slot where another copy runs the room (ZombieYawn.cpp): the head
+// gets its skeleton once, then the owner's pose each frame; a segment rides
+// its joint. A shot that landed on either here (apply_weapon_damage set its
+// state) is the owner's to count: the head's by the health it lost, a
+// segment's by its hit state, which drains the owner's head as it would here.
+static void zm_yawn_puppet_update(Entity* e, int slot)
+{
+    bool segment = zm_yawn_segment(e);
+    if (!segment && e->state == ZOMBIE_STATE_INIT) {
+        if ((g_message_flags & 0x0004) == 0) return;     // the monsters' turn is off
+        zm_yawn_init_here(e);
+    }
+    if (e->state != ZOMBIE_STATE_IDLE) {
+        short damage = segment ? 0 : (short)(s_slotHealth[slot] - e->health);
+        if (!s_iOwn && s_owner >= 0 && (damage > 0 || (e->hit_state & 0x07) != 0)) {
+            zm_net_send_event_to(s_owner, ZM_EV_HIT, damage, e->hit_state, (short)slot, 0, 0, 0, 0, 0);
+            dbg_printf("[yawn] p%d: hit slot %d for %d (hit state %02X)\n", zm_net_self(), slot,
+                       (int)damage, (unsigned)e->hit_state);
+        }
+        e->state = ZOMBIE_STATE_IDLE;
+        e->ignore_player_flag = 0;
+        e->action_behavior = 0;
+        e->action_state = 0;
+        e->hit_state = 0;
+        if (segment) e->health = -1;
+    }
+
+    Entity* head = &g_EnemiesList[0];
+    if (segment) {
+        if (!s_slotShown[0] || head->state == ZOMBIE_STATE_INIT) {
+            s_slotShown[slot] = false;
+            e->status_flags &= 0x1F;
+            return;
+        }
+        const JointStruct* j = (const JointStruct*)(uintptr_t)e->scd_target_ptr;
+        if (j != NULL) {
+            e->scaMatrixData.localMatrix.t[0] = j->world.t[0];
+            e->scaMatrixData.localMatrix.t[1] = j->world.t[1];
+            e->scaMatrixData.localMatrix.t[2] = j->world.t[2];
+            zm_set_rollback(e);
+        }
+        zm_yawn_status_apply(e, slot);
+        s_slotShown[slot] = true;
+        SetEntityScaHitData(e);
+        return;
+    }
+
+    const ZmNetEnemy* n = (!s_iOwn && s_snapHave[slot]) ? &s_snap[slot] : NULL;
+    if (n == NULL || e->state == ZOMBIE_STATE_INIT || !zm_yawn_pose_apply(e, n->pose, s_owner)) {
+        s_slotShown[slot] = false;
+        e->status_flags &= 0x1F;
+        return;
+    }
+    e->scaMatrixData.localMatrix.t[0] = n->pose.x;
+    e->scaMatrixData.localMatrix.t[1] = n->pose.y;
+    e->scaMatrixData.localMatrix.t[2] = n->pose.z;
+    e->angle = n->pose.angle;
+    e->health = n->health;
+    s_slotHealth[slot] = e->health;
+    zm_world_accept_net_state(e);
+    zm_set_rollback(e);
+    zm_yawn_status_apply(e, slot);
+    zm_yawn_mark_scaled();
+    s_slotShown[slot] = true;
+    SetEntityScaHitData(e);
+}
+
 void zombie_mode_puppet_update(void)
 {
     Entity* e = ENTITY;
     int slot = zm_slot_of(e);
     if (slot < 0) return;
+    if (zm_yawn_entity(e)) {
+        zm_yawn_puppet_update(e, slot);
+        return;
+    }
 
     if (zm_is_survivor_slot(slot) && e->id >= NPC_ENTITIES_IDS) {
         zm_survivor_puppet_update(e, slot);
@@ -7039,6 +7428,8 @@ static void zm_route_events(void)
             break;
         case ZM_EV_CLOCK:
             s_clockLeftMs = (unsigned int)(unsigned short)a[0] * 1000u;
+            s_clockRemoteHeld = a[1] != 0;
+            s_clockRunMs = (unsigned int)(unsigned short)a[2] * 1000u;
             s_clockAtMs = zm_game_time_ms();
             s_clockHave = true;
             break;
@@ -7257,6 +7648,7 @@ void zombie_mode_net_frame(void)
     zm_greenhouse_frame();
     zm_roomsync_frame();
     zm_statue_frame();
+    zm_yawn_frame();
     zm_end_frame();
     if (zm_match_authority() && !s_winShown) zm_ai_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {

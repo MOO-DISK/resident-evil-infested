@@ -164,7 +164,8 @@ static int zm_scan_enemy_slots(const unsigned char* script)
             unsigned char op = *q;
             if (op >= sizeof(kScdOperandWidth)) break;
             if (op == 0x1B) {
-                int slot = q[0x12] & 0x0F;
+                // Yawn takes twelve slots after its own for its body.
+                int slot = zm_yawn_last_slot(q[1], q[0x12] & 0x0F);
                 if (slot > highest) highest = slot;
             }
             q += 1u + kScdOperandWidth[op];
@@ -236,6 +237,11 @@ bool zm_door_usable(const ZmDoor* d, unsigned char stage, unsigned char room)
     if (zm_trap_door_locked(stage, room, d->dest, d->flags0B, NULL)) return false;
     // The unpowered elevator, the keypad door before its pass number (ZombieKeypad.cpp).
     if (zm_access_door_closed(stage, room, d->dest)) return false;
+    // The lesson room's hole before Yawn 2 is beaten, and the attic while
+    // Yawn is in it (ZombieYawn.cpp).
+    if (zm_yawn_hole_shut(stage, room, d->dest)) return false;
+    if (zm_yawn_traps_exit(stage, room)) return false;
+    if (zm_yawn_lesson_sealed(stage, room, d->dest)) return false;
     unsigned char ds, dr;
     zm_decode_dest(d->dest, stage, &ds, &dr);
     return !(ds == stage && dr == room);

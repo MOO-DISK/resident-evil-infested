@@ -79,6 +79,8 @@
 #include "EntityCommon.h"
 #include "../../Globals.h"
 #include "../BioCard.h"
+#include "../mods/ZombieMode.h"
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 
@@ -203,6 +205,12 @@ inline void set_action(unsigned char behavior, unsigned char state)
 inline JointStruct* jnt(int n)   { return ENTITY->jointsStructs + n; }
 inline MATRIX*      jw(int n)    { return &ENTITY->jointsStructs[n].world; }
 inline int*         jwt(int n)   { return ENTITY->jointsStructs[n].world.t; }
+
+// Port-added mod: in a networked Infested match the swallow cannot be played -
+// it carries the victim in Yawn's mouth for seconds, and the victim's copy
+// has no such handoff (as the Hunter's drag, Hunter.cpp). The bites go on at
+// any health instead, and a bite on a nearly dead survivor kills.
+inline bool yawn_net_match(void) { return zombie_mode_network_match(); }
 
 inline VECTOR* entity_pos(void)      { return (VECTOR*)ENTITY->scaMatrixData.localMatrix.t; }
 inline VECTOR* player_pos_vec(void)  { return (VECTOR*)g_playerEntity.scaMatrixData.localMatrix.t; }
@@ -880,7 +888,7 @@ void yawn_action_bite(void)
                 } else {
                     g_playerEntity.health = (short)(g_playerEntity.health - 0x1c);
                 }
-                if (g_playerEntity.health < 0) g_playerEntity.health = 1;
+                if (g_playerEntity.health < 0 && !yawn_net_match()) g_playerEntity.health = 1;
 
                 g_playerEntity.isBeingAttackedFlag = (unsigned char)(g_animFrameIdSave + 1);
                 g_playerEntity.action_behavior     = (unsigned char)(g_animFrameIdSave + 0x66);
@@ -901,7 +909,11 @@ void yawn_action_bite(void)
                 // Only the FIRST Yawn (entity id 13) poisons, and only if the
                 // serum has not already been taken.
                 if (ENTITY->id == 0x0d && Flg_ck((int)&g_ScenarioFlags, SCENARIO_FLAG_YAWN_SERUM) == 0) {
-                    Flg_on((int)&g_ScenarioFlags2, SCENARIO2_FLAG_YAWN_POISONED);
+                    // Port-added mod: another copy's survivor gets the poison
+                    // with the bite (its status bit); the flag is that copy's.
+                    if (!zombie_mode_target_remote()) {
+                        Flg_on((int)&g_ScenarioFlags2, SCENARIO2_FLAG_YAWN_POISONED);
+                    }
                     g_playerEntity.healthStatusFlags |= 0x20;
                 }
 
@@ -1605,6 +1617,185 @@ void yawn_action_reposition(void)
 }
 
 // ============================================================================
+// Port-added: the mode's two moves against several survivors at once
+// (ZombieYawn.cpp picks them; a possessing director starts them from the pad).
+// Neither is the original's: the model has no such animations, so each is
+// built from its own - action_behavior 9 and 10, past the original's last (8).
+// Both hold 0x17C, so a shot does not flinch them (yawn_damaged), and
+// ignore_player, so the selector waits for them to end.
+// ============================================================================
+#define YT_WARN_FRAMES   24     // the thrash's hiss before it
+#define YT_WHIP_FRAMES   40     // two swings each way
+#define YT_WHIP_PERIOD   20
+#define YT_WHIP_SWING    0x280  // the head's swing each way (4096 a turn)
+#define YT_WHIP_REACH    1300   // the body's radius (Sca 800) and a survivor's
+#define YT_WHIP_DAMAGE   20
+#define YS_SWAY_FRAMES   45     // the slam's reared weave before the crash
+#define YS_REACH         2000
+#define YS_DAMAGE        30
+#define YS_RECOVER       24
+
+static int yawn_whip_offset(int t)
+{
+    if (t <= 0 || t >= YT_WHIP_FRAMES) return 0;
+    return (int)(YT_WHIP_SWING * std::sin(6.283185307179586 * (double)t / YT_WHIP_PERIOD));
+}
+
+// The head and the twelve body joints, as they stand now.
+static int yawn_body_points(int (*pts)[3], int first, int last)
+{
+    int n = 0;
+    JointStruct* j = ENTITY->jointsStructs;
+    for (int k = 0; k <= 14; k++) {
+        if (k == 1 || k == 2 || (k != 0 && (k < first || k > last))) continue;
+        pts[n][0] = j[k].world.t[0];
+        pts[n][1] = j[k].world.t[1];
+        pts[n][2] = j[k].world.t[2];
+        n++;
+    }
+    return n;
+}
+
+// Action behaviour 9 - the thrash. A hiss (animation 5) as the warning, then
+// the head's whip (animation 6, the death's) with the head swung hard side to
+// side - the body, dragged after it with a long step (yawn_post_move), whips
+// into an S - striking everyone along the body at each swing's end.
+void yawn_action_thrash(void)
+{
+    short angleStep = 0x30;
+    switch (eub(ENTITY, 0x87)) {
+    case 0:
+        eub(ENTITY, 0x87) = 1;
+        eub(ENTITY, 0xbe) = 0;
+        eub(ENTITY, 0xbf) = 0;
+        eub(ENTITY, 0xbd) = 5;
+        eub(ENTITY, 0x8c) = 7;
+        ew(ENTITY, 0x172) = 0;
+        euw(ENTITY, 0xc2) = 0;
+        ew(ENTITY, 0xc4) = YT_WARN_FRAMES;
+        eub(ENTITY, 0x17c) = 1;
+        Snd_em(1);
+        // fall through
+    case 1: {
+        yawn_anim_advance(0, 0x200);
+        short ticks = ew(ENTITY, 0xc4);
+        ew(ENTITY, 0xc4) = (short)(ticks - 1);
+        if (ticks <= 0) eub(ENTITY, 0x87) = 2;
+        break;
+    }
+    case 2:
+        eub(ENTITY, 0x87) = 3;
+        eub(ENTITY, 0xbe) = 0;
+        eub(ENTITY, 0xbf) = 0;
+        eub(ENTITY, 0xbd) = 6;
+        eub(ENTITY, 0x8c) = 7;
+        ew(ENTITY, 0xc4) = 0;
+        euw(ENTITY, 0xc2) = 0xa0;           // the whole body follows (yawn_post_move)
+        Snd_em(2);
+        // fall through
+    case 3: {
+        short t = ew(ENTITY, 0xc4);
+        ew(ENTITY, 0xc4) = (short)(t + 1);
+        ENTITY->angle = (short)((ENTITY->angle + yawn_whip_offset(t + 1) - yawn_whip_offset(t)) & 0xFFF);
+        yawn_anim_advance(0, 0x200);
+        angleStep = 0x80;
+        if (t + 1 == YT_WHIP_PERIOD / 4 || t + 1 == YT_WHIP_PERIOD * 3 / 4 ||
+            t + 1 == YT_WHIP_PERIOD * 5 / 4 || t + 1 == YT_WHIP_PERIOD * 7 / 4) {
+            int pts[13][3];
+            int n = yawn_body_points(pts, 3, 14);
+            zombie_mode_yawn_area_hit(pts, n, YT_WHIP_REACH, YT_WHIP_DAMAGE);
+            Snd_em(3);
+        }
+        if (t + 1 >= YT_WHIP_FRAMES) {
+            euw(ENTITY, 0xc2) = 0;
+            eub(ENTITY, 0x17c) = 0;
+            eub(ENTITY, 0x85) = 0;
+            eub(ENTITY, 0x8a) = 0;
+            set_action(1, 0);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    Add_speedXZ(0);
+    yawn_post_move(angleStep);
+}
+
+// Action behaviour 10 - the slam. The reared weave no other scene plays
+// (animation 12) turned toward its target as the warning, then the rear-up
+// backwards at double speed - the head and front body crash down - striking
+// everyone near them, in a cloud of dust.
+void yawn_action_slam(void)
+{
+    switch (eub(ENTITY, 0x87)) {
+    case 0:
+        eub(ENTITY, 0x87) = 1;
+        eub(ENTITY, 0xbe) = 0;
+        eub(ENTITY, 0xbf) = 0;
+        eub(ENTITY, 0xbd) = 12;
+        eub(ENTITY, 0x8c) = 7;
+        ew(ENTITY, 0x172) = 0;
+        euw(ENTITY, 0xc2) = 0;
+        eub(ENTITY, 0x17c) = 1;
+        Snd_em(1);
+        // fall through
+    case 1:
+        entity_rotate_toward_target(player_pos_vec(), 0x30);
+        if (yawn_anim_advance(0, 0x200) != 0 || eub(ENTITY, 0xbe) >= YS_SWAY_FRAMES) eub(ENTITY, 0x87) = 2;
+        break;
+    case 2:
+        eub(ENTITY, 0x87) = 3;
+        eub(ENTITY, 0xbe) = 0;
+        eub(ENTITY, 0xbf) = 0;
+        eub(ENTITY, 0xbd) = 4;
+        eub(ENTITY, 0x8c) = 4;
+        // fall through
+    case 3: {
+        unsigned char done = yawn_anim_advance(1, 0x200);
+        if (!done) done = yawn_anim_advance(1, 0x200);
+        if (done) {
+            int pts[5][3];
+            int n = yawn_body_points(pts, 3, 6);
+            zombie_mode_yawn_area_hit(pts, n, YS_REACH, YS_DAMAGE);
+            Snd_em(3);
+            for (int i = 0; i < 4; i++) yawn_spawn_dust(i & 1);
+            const int* head = ENTITY->jointsStructs[0].world.t;
+            for (int i = 0; i < 8; i++) {
+                g_playerPosScratch.x = head[0] + (int)((unsigned int)rand() & 0x7ff) - 0x400;
+                g_playerPosScratch.y = -(int)((unsigned int)rand() & 0x1ff);
+                g_playerPosScratch.z = head[2] + (int)((unsigned int)rand() & 0x7ff) - 0x400;
+                Effect_CreateBillboard(9, 0x11, 0, (void*)g_deadMoveValue, &g_playerPosScratch, 0);
+            }
+            eub(ENTITY, 0x87) = 4;
+            eub(ENTITY, 0xbe) = 0;
+            eub(ENTITY, 0xbf) = 0;
+            eub(ENTITY, 0xbd) = 1;
+            eub(ENTITY, 0x8c) = 7;
+            ew(ENTITY, 0xc4) = YS_RECOVER;
+        }
+        break;
+    }
+    case 4: {
+        yawn_anim_advance(0, 0x200);
+        short ticks = ew(ENTITY, 0xc4);
+        ew(ENTITY, 0xc4) = (short)(ticks - 1);
+        if (ticks <= 0) {
+            eub(ENTITY, 0x17c) = 0;
+            eub(ENTITY, 0x85) = 0;
+            eub(ENTITY, 0x8a) = 0;
+            set_action(1, 0);
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    Add_speedXZ(0);
+    yawn_post_move(0x30);
+}
+
+// ============================================================================
 // yawn_damaged_run @ 0x00407af0  (state 2)
 // The flinch.  action_state 0/1 is the recoil, 2/3 the recovery turn (which
 // swings the other way once the timer drops past 30).  On exit the snake is
@@ -1903,12 +2094,12 @@ void yawn_pick_action_normal(void)
 
         // Close enough to bite outright.
         if (g_playerDisplacement < 2000 && player_distance_z == 0
-            && g_playerEntity.health > 9) {
+            && (g_playerEntity.health > 9 || yawn_net_match())) {
             set_state_word(0x20101);
         }
         // Or inside the form's lunge range and already lined up.
         if (g_playerDisplacement < (int)(((unsigned int)eub(ENTITY, 0x16e) * 5 + 0x19) * 200)
-            && player_distance_z == 0 && g_playerEntity.health > 9) {
+            && player_distance_z == 0 && (g_playerEntity.health > 9 || yawn_net_match())) {
             if ((short)turn_toward_target(player_pos_vec(), 0x200) == 0) {
                 set_state_word(0x20101);
             }
@@ -1919,7 +2110,7 @@ void yawn_pick_action_normal(void)
         }
         // Grown form, player nearly dead, lined up and off cooldown -> swallow.
         if (g_playerDisplacement < 4000 && eb(ENTITY, 0x16e) != 0
-            && player_distance_z == 0) {
+            && player_distance_z == 0 && !yawn_net_match()) {
             if ((short)turn_toward_target(player_pos_vec(), 0x40) == 0
                 && g_playerEntity.health - 10 < 0
                 && eb(ENTITY, 0x185) == 0) {
@@ -1947,6 +2138,11 @@ void yawn_pick_action_normal(void)
             set_state_word(0x30101);
             eub(ENTITY, 0x17f) = 0;
         }
+        // Port-added mod: the thrash or the slam against several survivors
+        // (ZombieYawn.cpp) - the flee below still comes first.
+        if (int special = zombie_mode_yawn_special()) {
+            set_state_word(0x101u | ((unsigned int)special << 16));
+        }
         // Low health -> flee.
         if (ew(ENTITY, 0x88) < 0xaf0) {
             set_state_word(0x70101);
@@ -1971,11 +2167,11 @@ void yawn_pick_action_scripted(void)
         player_distance_z = check_line_of_sight(player_pos_vec());
 
         if (g_playerDisplacement < 2000 && player_distance_z == 0
-            && g_playerEntity.health > 9) {
+            && (g_playerEntity.health > 9 || yawn_net_match())) {
             set_state_word(0x20101);
         }
         if (g_playerDisplacement < (int)(((unsigned int)eub(ENTITY, 0x16e) * 5 + 0x19) * 200)
-            && player_distance_z == 0 && g_playerEntity.health > 9) {
+            && player_distance_z == 0 && (g_playerEntity.health > 9 || yawn_net_match())) {
             if ((short)turn_toward_target(player_pos_vec(), 0x200) == 0) {
                 set_state_word(0x20101);
             }
@@ -1984,7 +2180,7 @@ void yawn_pick_action_scripted(void)
             set_state_word(0x30101);
         }
         if (g_playerDisplacement < 4000 && eb(ENTITY, 0x16e) != 0
-            && player_distance_z == 0) {
+            && player_distance_z == 0 && !yawn_net_match()) {
             if ((short)turn_toward_target(player_pos_vec(), 0x40) == 0
                 && g_playerEntity.health - 10 < 0
                 && eb(ENTITY, 0x185) == 0) {
@@ -1994,6 +2190,10 @@ void yawn_pick_action_scripted(void)
         if (g_playerEntity.health - 10 < 0 && eb(ENTITY, 0x16e) == 0) {
             eub(ENTITY, 0x17f) = 1;
             set_state_word(0x30101);
+        }
+        // Port-added mod: the thrash or the slam (ZombieYawn.cpp).
+        if (int special = zombie_mode_yawn_special()) {
+            set_state_word(0x101u | ((unsigned int)special << 16));
         }
     }
 
@@ -2043,6 +2243,8 @@ void yawn_check_actions(void)
     case 6: yawn_action_emerge();     break;
     case 7: yawn_action_flee();       break;
     case 8: yawn_action_reposition(); break;
+    case 9: yawn_action_thrash();     break;   // port-added: the mode's
+    case 10: yawn_action_slam();      break;   // port-added: the mode's
     default:
         // Entry [9] of the table is NULL; nothing ever writes a value above 8.
         break;

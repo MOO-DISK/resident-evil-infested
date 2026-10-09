@@ -75,6 +75,7 @@ static int zm_econ_monster_slots(unsigned char id) { return id == ENEMY_HUNTER ?
 static int zm_econ_room_cap(unsigned char, unsigned char) { return cap; }
 static int zm_room_highest_script_slot() { return -1; }
 static bool zm_random_room_safe(unsigned char, unsigned char) { return safe; }
+static bool zm_yawn_director_closed(unsigned char, unsigned char) { return false; }
 static bool zm_shotgun_room_blocked(unsigned char, unsigned char) { return false; }
 static bool zm_random_room_stub(unsigned char, unsigned char) { return false; }
 static int zm_room_doors(unsigned char, unsigned char room, const ZmDoor** out) {

@@ -445,6 +445,8 @@ bool zm_spec_input(void)
     return true;
 }
 
+static bool zm_revive_free(int target);   // with the revive below
+
 bool zm_spec_draw(void)
 {
     if (!s_dead) return false;
@@ -453,7 +455,7 @@ bool zm_spec_draw(void)
     char revive[48];
     if (zm_shotgun_crushed(zm_net_self()))
         snprintf(revive, sizeof(revive), "CRUSHED - REVIVE UNAVAILABLE");
-    else if (s_revives[zm_net_self()] < ZM_REVIVE_LIMIT)
+    else if (s_revives[zm_net_self()] < ZM_REVIVE_LIMIT || zm_revive_free(zm_net_self()))
         snprintf(revive, sizeof(revive), "REVIVE AVAILABLE");
     else snprintf(revive, sizeof(revive), "REVIVE UNAVAILABLE");
     zm_draw_centered(revive, 188, 0);
@@ -472,6 +474,26 @@ bool zm_spec_draw(void)
     return true;
 }
 
+// A corpse in a boss room during its lockdown (ZombieYawn.cpp): revived there
+// without a healing item, however often it has been.
+static bool zm_revive_free(int target)
+{
+    const ZmNetPeerState* p = zm_seat_state(target);
+    return p != NULL && zm_yawn_free_revive(p->stage, p->room);
+}
+
+// A boss's lockdown over: every survivor's revives are counted afresh - those
+// lying elsewhere too, to be reached and revived (with a healing item) again.
+void zm_revive_reset_counts(void)
+{
+    memset(s_revives, 0, sizeof(s_revives));
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (s_claimDone[i]) s_claimOwner[i] = -1;
+        s_claimDone[i] = false;
+    }
+    dbg_printf("[revive] revive counts reset\n");
+}
+
 void zm_revive_cancel(void)
 {
     if (s_requestTarget >= 0) {
@@ -485,7 +507,7 @@ static bool zm_revive_eligible(int i)
 {
     const ZmNetPeerState* p = zm_net_player(i);
     return i >= 0 && i < ZM_NET_MAX_PLAYERS && zm_net_char(i) >= 0 && p != NULL && p->dead && p->spectating &&
-           !zm_shotgun_crushed(i) && s_deathSeen[i] && s_revives[i] < ZM_REVIVE_LIMIT;
+           !zm_shotgun_crushed(i) && s_deathSeen[i] && (s_revives[i] < ZM_REVIVE_LIMIT || zm_revive_free(i));
 }
 
 static int zm_revive_item(void)
@@ -502,11 +524,12 @@ static int zm_revive_near(void)
 {
     if (zm_game_role() != ZM_NET_SURVIVOR || g_playerEntity.health < 0 || zombie_mode_match_over() ||
         zm_map_is_open() || g_openMenuFlag != 0 || (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_CAMERA_LOCK)) != 0 ||
-        (g_message_flags & 0x0101) != 0x0101 || g_playerEntity.isBeingAttackedFlag != 0 || zm_revive_item() < 0)
+        (g_message_flags & 0x0101) != 0x0101 || g_playerEntity.isBeingAttackedFlag != 0)
         return -1;
+    bool item = zm_revive_item() >= 0;
     int best = -1, dist = ZM_REVIVE_RANGE * ZM_REVIVE_RANGE + 1;
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
-        if (!zm_revive_eligible(i)) continue;
+        if (!zm_revive_eligible(i) || (!item && !zm_revive_free(i))) continue;
         const ZmNetPeerState* p = zm_net_player(i);
         if (p->stage != g_stageId || p->room != g_roomId) continue;
         int dx = p->x - g_playerEntity.scaMatrixData.localMatrix.t[0];
@@ -555,16 +578,19 @@ void zm_revive_take(const short* a, int src)
         // and commit; a refused or cancelled hold spends nothing.
         if (target != s_requestTarget) return;
         int slot = zm_revive_item();
-        if (a[1] != s_requestHealth || slot < 0 || zombie_mode_match_over() ||
+        bool free = zm_revive_free(target);
+        if (a[1] != s_requestHealth || (slot < 0 && !free) || zombie_mode_match_over() ||
             g_playerEntity.health < 0 || g_playerEntity.isBeingAttackedFlag != 0) {
             zm_revive_cancel();
             return;
         }
-        unsigned char* item = (unsigned char*)g_ItemSlotsPointer + slot * 2;
-        if (g_EquippedItemId == slot + 1) g_EquippedItemId = 0;
-        item[0] = item[1] = 0;
-        s_reconnectSpentMask |= (unsigned char)(1 << target);
-        rearrange_item_slots();
+        if (!free) {
+            unsigned char* item = (unsigned char*)g_ItemSlotsPointer + slot * 2;
+            if (g_EquippedItemId == slot + 1) g_EquippedItemId = 0;
+            item[0] = item[1] = 0;
+            s_reconnectSpentMask |= (unsigned char)(1 << target);
+            rearrange_item_slots();
+        }
         s_requestTarget = -1;
         s_reviveTarget = -1;
         zm_net_send_event(ZM_EV_REVIVE, a[0], a[1], 0, 0);
@@ -578,7 +604,8 @@ void zm_revive_take(const short* a, int src)
     }
     if (a[2] == 1) return;          // another survivor's grant
     if (zombie_mode_match_over() || src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0 ||
-        target < 0 || target >= ZM_NET_MAX_PLAYERS || zm_net_char(target) < 0 || src == target || s_revives[target] >= ZM_REVIVE_LIMIT || a[1] <= 0) return;
+        target < 0 || target >= ZM_NET_MAX_PLAYERS || zm_net_char(target) < 0 || src == target ||
+        (s_revives[target] >= ZM_REVIVE_LIMIT && !zm_revive_free(target)) || a[1] <= 0) return;
     ZmPerkInfo info;
     zm_perk_describe(zm_net_char(target), &info);
     int expected = info.health * (zm_net_char(src) == ZM_CHAR_REBECCA ? ZM_REVIVE_MEDIC_PCT : ZM_REVIVE_HEALTH_PCT) / 100;
@@ -603,7 +630,15 @@ bool zm_revive_host_claim(int target, int health, int src)
         if (s_claimOwner[target] == src && !s_claimDone[target]) s_claimOwner[target] = -1;
         return false;
     }
-    if (zombie_mode_match_over() || zm_shotgun_crushed(target) || s_claimDone[target] || s_revives[target] >= ZM_REVIVE_LIMIT) return false;
+    // A boss room's lockdown: revived again however often - a body that died
+    // after its last revive takes a new claim.
+    bool free = zm_revive_free(target);
+    if (free && health < 0 && s_claimDone[target]) {
+        s_claimDone[target] = false;
+        s_claimOwner[target] = -1;
+    }
+    if (zombie_mode_match_over() || zm_shotgun_crushed(target) || s_claimDone[target] ||
+        (s_revives[target] >= ZM_REVIVE_LIMIT && !free)) return false;
     if (health > 0) {
         // The reliable stream delivers the grant before this commit.
         if (s_claimOwner[target] != src) return false;

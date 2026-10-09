@@ -18,7 +18,12 @@ How a spot is found, per room:
   * candidates: floor cells at least 2000 units from every door zone and
     arrival point of the room.
   * the three: farthest-point picks - the candidate furthest from the doors,
-    then each next one furthest from those already picked.
+    then each next one furthest from those already picked - kept as far as
+    the room's floor allows of ITEM_CLEAR from the room's own pickups (item_model_set: its pickup zone and, placed
+    in room coordinates, its model), while the room has floor that far. The
+    randomizer's extra pickups lie on these spots (ZombieRandom.cpp), so one
+    must not end up among the room's own items - the boiler room's spot on
+    its four green herbs was all but out of reach.
   * the height: the most common arrival height in the room.
 
 The cap is the room's floor area: the cells of the flood fill a camera shows
@@ -60,6 +65,7 @@ PLACE_SPOTS = 16
 PLACE_DOOR_CLEAR = 1000
 PLACE_STUN_CLEAR = 2700
 PLACE_SPACING = 1000
+ITEM_CLEAR = (4000, 3000, 2000, 1500)      # the most a room's floor allows
 PLACE_OPEN_CELLS = 3            # a 7 x 7 cell square around the spot: openness 1..49
 # (floor cells at least, cap): the first row a room reaches.
 CAP_STEPS = [(6000, 5), (1500, 4), (700, 3), (250, 2), (0, 1)]
@@ -128,6 +134,29 @@ def doors_of(b):
                 zx, zz, zw, zd = struct.unpack_from('<4H', r, 0)
                 ax, ay, az = struct.unpack_from('<HhH', r, 0x0E)
                 out.append((zx, zz, zw, zd, r[0x0D], r[0x0B], ax, ay, az))
+            q += 1 + W[op]
+        p = e
+    return out
+
+
+def items_of(b):
+    """item_model_set records of the init SCD: (zone x, z, w, d, x, z or None) - the
+    model's position only when it is in room coordinates (no parent)."""
+    out = []
+    p = struct.unpack_from('<I', b, 0x60)[0]
+    while p + 2 <= len(b):
+        bs = struct.unpack_from('<H', b, p)[0]
+        if bs == 0:
+            break
+        q, e = p + 2, p + bs
+        while q < e:
+            op = b[q]
+            if op >= len(W):
+                break
+            if op == 0x18 and q + 0x1A <= len(b):
+                zx, zz, zw, zd = struct.unpack_from('<4H', b, q + 2)
+                x, z = struct.unpack_from('<hxxh', b, q + 0x0E)
+                out.append((zx, zz, zw, zd, x if b[q + 0x0D] == 0xFF else None, z))
             q += 1 + W[op]
         p = e
     return out
@@ -278,6 +307,16 @@ def spots_for(root, stage, room, arrivals):
         cand = [(x, z) for x, z in floor if not in_steps(x, z, steps)] or floor
     if not cand:
         return None
+    # Clear of the room's own pickups (the randomizer's extra ones lie here).
+    items = items_of(b)
+    def item_gap(x, z):
+        g = min([rect_dist(x, z, i[0], i[1], i[2], i[3]) for i in items] or [99999])
+        return min([g] + [((x - i[4]) ** 2 + (z - i[5]) ** 2) ** 0.5 for i in items if i[4] is not None])
+    for need in ITEM_CLEAR:
+        clear = [(x, z) for x, z in cand if item_gap(x, z) >= need]
+        if clear:
+            cand = clear
+            break
     heights = collections.Counter(a[1] for a in seeds)
     y = heights.most_common(1)[0][0]
     picks = [max(cand, key=lambda p: door_gap(*p))]
