@@ -262,6 +262,13 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   The pickup close-ups a monster can walk in on - the bathtub (6130 ev4)
   and the attic (7100 ev1) - are in the list too. The heliport lookout's
   (7180) and the rope (70C0) are not. Untested by the user.
+  An Action press never starts an examine/reveal still running (it used to
+  restart it in its slot: the close-up re-locked onto itself and stuck, and
+  each run asked for the pickup again), nor any pickup or event while a
+  close-up is up (`zombie_mode_action_busy` in check_action_object). A hit,
+  grab or death cuts every running examine/reveal short: its close-up cuts
+  back and its later pickup (`cmd_room_action` handler 4/8, `cmd_got_item`)
+  is dropped (`zombie_mode_event_room_action_skip`). Untested by the user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.

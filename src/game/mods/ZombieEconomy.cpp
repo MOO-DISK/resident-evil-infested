@@ -187,6 +187,16 @@ static void zm_econ_mmss(char* out, int len, int ms)
     snprintf(out, len, "%d:%02d", s / 60, s % 60);
 }
 
+// Is there room in (stage, room) for a monster of type `id` (its slots under
+// the cap; a Tyrant always fits an empty room)?
+bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id)
+{
+    int cap = zm_econ_room_cap(stage, room);
+    int n = zm_room_monster_slots(stage, room);
+    bool emptyTyrant = n == 0 && (id == ENEMY_TYRANT_1 || id == ENEMY_TYRANT_2);
+    return n + zm_econ_monster_slots(id) <= cap || emptyTyrant;
+}
+
 // May the director put a monster of type `id` into (stage, room)? If not,
 // `why` says so (for the map's note).
 bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id,
@@ -204,11 +214,9 @@ bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id
         snprintf(why, whyLen, "%s UNLOCKS IN %s", name, t);
         return false;
     }
-    int cap = zm_econ_room_cap(stage, room);
-    int n = zm_room_monster_slots(stage, room);
-    bool emptyTyrant = n == 0 && (id == ENEMY_TYRANT_1 || id == ENEMY_TYRANT_2);
-    if (n + zm_econ_monster_slots(id) > cap && !emptyTyrant) {
-        snprintf(why, whyLen, "ROOM FULL: %d OF %d SLOTS", n, cap);
+    if (!zm_econ_room_fits(stage, room, id)) {
+        snprintf(why, whyLen, "ROOM FULL: %d OF %d SLOTS", zm_room_monster_slots(stage, room),
+                 zm_econ_room_cap(stage, room));
         return false;
     }
     int cost = zm_econ_cost(id);

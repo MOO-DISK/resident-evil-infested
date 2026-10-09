@@ -26,6 +26,7 @@ static unsigned int crushed;
 static int dropRoom=-1;
 static unsigned char dropItem;
 static const ZmNetPeerState* zm_net_player(int i) { return &peers[i]; }
+static const ZmNetPeerState* zm_seat_state(int i) { return &peers[i]; }
 static bool zm_net_inventory(int i,unsigned char out[16]) {
   if(missingCheckpoint)return false; memcpy(out,inventory[i],16); return true;
 }

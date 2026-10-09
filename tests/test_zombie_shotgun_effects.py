@@ -26,15 +26,20 @@ fixture = r'''
 enum {ROOM_TRAP_PASSAGE=9,ROOM_TRAP_ROOM=21,ROOM_LIVING_ROOM=22,STAGE_MANSION_RETURN_1F=5,ZM_NET_SURVIVOR=2,ZM_NET_ZOMBIE=1,ENTITY_STATUS_ACTIVE=1,ZM_ROSTER_MAX=1024,MSF_CAMERA_LOCK=0x100000};
 int g_stageId=5,g_roomId=9;
 int role=1;int zm_net_role(){return role;}
+#define ZM_FIRST_SURVIVOR_SLOT 26
 struct CAM_SWITCH_ZONE {short camFrom,camTo;};
-CAM_SWITCH_ZONE zones[]={{0,0},{1,1},{2,2},{-1,-1}};
-struct Rdt {void* cam_switch_zones=zones;unsigned short cameras_count=3;} rdt;
+CAM_SWITCH_ZONE zones[]={{0,0},{1,1},{2,2},{3,3},{4,4},{-1,-1}};
+struct Rdt {void* cam_switch_zones=zones;unsigned short cameras_count=5;} rdt;
 Rdt* g_RdtPointer=&rdt;void* g_CurrentRdtDataTypePtr;
 int g_main_state_flags=0,g_roomCameraId=2,g_cutId=0,cuts=0;
 void cut_set(){cuts++;}
 struct Entity {int id=0,state=0,action_state=0,status_flags=0,health=100;struct {struct {int t[3]={};} localMatrix;} scaMatrixData;};
 Entity g_EnemiesList[27];
 Entity* g_zombieModeEntity=g_EnemiesList;
+#define NPC_ENTITIES_IDS 0x20
+#define ZM_TRAP_CAMERA 3
+static Entity* hiddenEntity;
+bool zombie_mode_hide_entity(const Entity* e) {return e==hiddenEntity;}
 int s_gameRole=1,handoffs=0;bool s_zombieDeathReported=false;
 bool zm_possessed_died(Entity*) {handoffs++;return true;}
 struct ZmRosterEntry {bool used=false,alive=false,departed=false;unsigned char stage=5,room=9,id=0;unsigned short uid=0;short x=0,z=0,health=100;};
@@ -56,9 +61,14 @@ int main() {
  roster.room=21;roster.x=1500;roster.z=5000;roster.uid=2;
  assert(!zm_world_shotgun_clear(5,21,1500,5000)); // inside axe user protected too
  roster.alive=false;assert(zm_world_shotgun_clear(5,21,1500,5000));
- // Switch away from the overhead intro and hold the low shot for every role.
+ // A hidden entity (the unused director-body stand-in) is not in the way.
+ roster.alive=false;g_roomId=ROOM_TRAP_ROOM;enemy.health=100;enemy.status_flags=ENTITY_STATUS_ACTIVE;
+ assert(!zm_world_shotgun_clear(5,21,1500,5000));
+ hiddenEntity=&enemy;assert(zm_world_shotgun_clear(5,21,1500,5000));hiddenEntity=nullptr;
+ // Switch away from the overhead intro and hold the from-below shot (camera
+ // 3, looking up at the ceiling) for every role.
  g_roomCameraId=0;
- zm_shotgun_crush_view(true);assert(g_roomCameraId==2&&cuts==1&&(g_main_state_flags&MSF_CAMERA_LOCK));
+ zm_shotgun_crush_view(true);assert(g_roomCameraId==3&&cuts==1&&(g_main_state_flags&MSF_CAMERA_LOCK));
  zm_shotgun_crush_view(true);assert(cuts==1);zm_shotgun_crush_view(false);assert(!(g_main_state_flags&MSF_CAMERA_LOCK));
  enemy.health=100;roster.alive=true;g_roomId=ROOM_TRAP_ROOM;
  zm_world_shotgun_crush();assert(enemy.health==-1&&!roster.alive&&roster.health==-1&&enemy.state==3&&enemy.action_state==3);

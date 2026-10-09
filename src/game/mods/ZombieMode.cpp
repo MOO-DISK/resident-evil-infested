@@ -93,9 +93,7 @@ static int     s_corpseAdoptFrames = 0;        // repeat corpse handoff while th
 
 // The other survivors, as NPC-model entities in fixed slots at the top of the
 // enemy list (above anything a room or the roster uses): survivor n in slot
-// ZM_SURVIVOR_SLOT_BASE + n. The same layout on every copy.
-#define ZM_SURVIVOR_SLOT_BASE 26
-#define ZM_FIRST_SURVIVOR_SLOT (ZM_SURVIVOR_SLOT_BASE + 1)
+// ZM_SURVIVOR_SLOT_BASE + n (ZombieModeInternal.h). The same layout on every copy.
 static bool zm_is_survivor_slot(int slot)
 {
     return slot >= ZM_FIRST_SURVIVOR_SLOT && slot < 30;
@@ -337,6 +335,45 @@ int zm_game_role(void)
     return s_gameRole;
 }
 
+bool zm_match_authority(void)
+{
+    return s_gameRole != ZM_NET_SURVIVOR || zm_net_role() == ZM_NET_ZOMBIE;
+}
+
+// This copy's own survivor as a STATE would carry it (the host's arbitration
+// reads it like any other seat's).
+static ZmNetPeerState s_selfState;
+
+const ZmNetPeerState* zm_seat_state(int player)
+{
+    if (player < 0 || player >= ZM_NET_MAX_PLAYERS) return NULL;
+    if (player != zm_net_self()) return zm_net_player(player);
+    if (!s_zombieModeArmed || s_gameRole != ZM_NET_SURVIVOR || zm_net_char(player) < 0) return NULL;
+    ZmNetPeerState& p = s_selfState;
+    memset(&p, 0, sizeof(p));
+    p.valid = true;
+    p.dead = g_playerEntity.health < 0;
+    p.spectating = zm_spec_corpse() != NULL;
+    p.stage = g_stageId;
+    p.room = g_roomId;
+    p.x = g_playerEntity.scaMatrixData.localMatrix.t[0];
+    p.y = g_playerEntity.scaMatrixData.localMatrix.t[1];
+    p.z = g_playerEntity.scaMatrixData.localMatrix.t[2];
+    p.angle = g_playerEntity.directionAngle;
+    if (const ZmNetPeerState* corpse = zm_spec_corpse()) {
+        p.stage = corpse->stage; p.room = corpse->room;
+        p.x = corpse->x; p.y = corpse->y; p.z = corpse->z; p.angle = corpse->angle;
+    }
+    p.viewStage = g_stageId;
+    p.viewRoom = g_roomId;
+    p.health = g_playerEntity.health;
+    p.weapon = g_playerEntity.equippedWeaponId;
+    p.attacked = g_playerEntity.isBeingAttackedFlag != 0;
+    p.entranceDoor = s_survivorEntranceDoor;
+    p.receivedMs = zm_game_time_ms();
+    return &p;
+}
+
 // action_behavior values while the pad drives the zombie. The engine's own
 // values take over while s_engineOwned is set.
 enum {
@@ -506,15 +543,15 @@ static bool zm_hall_2f_refuses(unsigned char stage, unsigned char room, unsigned
 // while survivors are still choosing).
 static bool zm_hall_closed(unsigned int* leftMs)
 {
-    if (s_gameRole != ZM_NET_ZOMBIE) return false;
+    if (zm_net_role() != ZM_NET_ZOMBIE || s_gameRole == ZM_NET_OFF) return false;
     unsigned int now = zm_game_time_ms();
     if (s_allSpawnedMs == 0) {
         bool all = true;
         int seated = 0;
-        for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+        for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
             if (zm_net_char(i) < 0) continue;
             seated++;
-            const ZmNetPeerState* p = zm_net_player(i);
+            const ZmNetPeerState* p = zm_seat_state(i);
             if (p == NULL || !p->valid) all = false;
         }
         if ((all && seated > 0) || now - s_gameStartMs > ZM_SPAWN_WAIT_MS) {
@@ -553,7 +590,7 @@ void zm_note(const char* text);
 // the whole game: no entering, no placing.
 static bool zm_director_safe_room(unsigned char stage, unsigned char room)
 {
-    return s_zombieModeArmed && s_gameRole != ZM_NET_SURVIVOR &&
+    return s_zombieModeArmed && zm_match_authority() &&
         (zm_random_room_safe(stage, room) || zm_shotgun_room_blocked(stage, room));
 }
 
@@ -686,13 +723,15 @@ void zombie_mode_new_game(int isNewGame)
     if (zm_net_active()) {
         int role = zm_net_role();
         if (zm_net_start_game(60000)) {
-            s_gameRole = role;
+            // An AI director's host plays a survivor itself (seat 0) and still
+            // arbitrates (zm_match_authority).
+            s_gameRole = (role == ZM_NET_ZOMBIE && zm_net_ai_level() > 0) ? ZM_NET_SURVIVOR : role;
         } else {
             zm_net_stop();      // nobody came: single player
         }
     }
     // The director's points: its copy, or single player's.
-    zm_econ_new_game(s_gameRole != ZM_NET_SURVIVOR);
+    zm_econ_new_game(zm_match_authority() && (s_gameRole != ZM_NET_SURVIVOR || zm_ai_hosted()));
     zm_ai_new_game();
 
     // ROOM1060's init SCD starts an intro event on each of these:
@@ -873,7 +912,7 @@ static Entity* zm_standin_spawn(int who, int ch)
 static void zm_spawn_survivor_puppets(void)
 {
     if (s_gameRole == ZM_NET_OFF) return;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         int ch = zm_net_char(i);
         if (ch < 0 || i == zm_net_self()) continue;
         int slot = ZM_SURVIVOR_SLOT_BASE + i;
@@ -899,7 +938,7 @@ static int s_standInFailedChar[ZM_NET_MAX_PLAYERS] = { -1, -1, -1, -1 };
 static void zm_standin_refresh(void)
 {
     if (s_gameRole == ZM_NET_OFF) return;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         int ch = zm_net_char(i);
         if (ch < 0 || i == zm_net_self()) continue;
         Entity* e = &g_EnemiesList[ZM_SURVIVOR_SLOT_BASE + i];
@@ -1020,8 +1059,16 @@ static Entity* zm_spawn_live(unsigned char id, unsigned char behavior, int x, in
     return e;
 }
 
+// The AI director's own placements say nothing on screen: the host's copy is
+// a survivor's then (zm_director_place_ai).
+static bool s_notesMuted = false;
+
 void zm_note(const char* text)
 {
+    if (s_notesMuted) {
+        dbg_printf("[ai] %s\n", text);
+        return;
+    }
     snprintf(s_noteText, sizeof(s_noteText), "%s", text);
     s_switchNoteFrames = ZM_SWITCH_NOTE_FRAMES * 2;
 }
@@ -1140,7 +1187,7 @@ int zm_room_monster_slots(unsigned char stage, unsigned char room)
 // whenever someone walks in. Kept in the roster either way, so every copy
 // has it.
 static void zm_director_place(unsigned char stage, unsigned char room, unsigned char id,
-                              const char* name)
+                              const char* name, const short* at = NULL)
 {
     char line[48];
     if (zm_is_hall(stage, room) && zm_hall_closed(NULL)) {
@@ -1201,7 +1248,9 @@ static void zm_director_place(unsigned char stage, unsigned char room, unsigned 
         return;
     }
     short x, y, zz, angle;
-    if (!zm_remote_spot(stage, room, &x, &y, &zz, &angle)) {
+    if (at != NULL) {
+        x = at[0]; y = at[1]; zz = at[2]; angle = at[3];
+    } else if (!zm_remote_spot(stage, room, &x, &y, &zz, &angle)) {
         zm_note("NO SPOT FOR IT THERE");
         return;
     }
@@ -1230,11 +1279,39 @@ bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned
     return zm_econ_can_place(stage, room, id, "", why, sizeof(why));
 }
 
-bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name)
+bool zm_director_move_allowed(unsigned char stage, unsigned char room, unsigned char id)
+{
+    if (zm_is_hall(stage, room) && zm_hall_closed(NULL)) return false;
+    if (zm_director_safe_room(stage, room)) return false;
+    if (zm_hall_2f_refuses(stage, room, id)) return false;
+    if (zm_room_has_survivor(stage, room)) return false;
+    return zm_econ_room_fits(stage, room, id);
+}
+
+bool zm_room_watched(unsigned char stage, unsigned char room)
+{
+    if (stage == g_stageId && room == g_roomId) return true;          // this copy's
+    if (s_gameRole == ZM_NET_OFF) {
+        unsigned char s, r;                                            // the AI survivor's
+        return zm_survivor_location(&s, &r) && s == stage && r == room;
+    }
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (i == zm_net_self()) continue;
+        const ZmNetPeerState* p = zm_net_player(i);
+        if (p == NULL || !p->valid) continue;
+        if ((p->stage == stage && p->room == room) || (p->viewStage == stage && p->viewRoom == room)) return true;
+    }
+    return false;
+}
+
+bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name,
+                          const short* at)
 {
     ZmEconStats before, after;
     zm_econ_stats(&before);
-    zm_director_place(stage, room, id, name);
+    s_notesMuted = true;
+    zm_director_place(stage, room, id, name, at);
+    s_notesMuted = false;
     zm_econ_stats(&after);
     return after.placed != before.placed || after.trapsSet != before.trapsSet;
 }
@@ -1417,21 +1494,6 @@ void zombie_mode_room_spawn(void)
         s_directorMapOnly = true;
         if (!zm_map_is_open()) zm_map_toggle();
         zm_note("NO IDLE MONSTER - TRY AGAIN OR PLACE ONE");
-        zm_survivor_room_loaded();
-        return;
-    }
-
-    // An AI-hosted game (ZombieDirectorAI.cpp): the host's copy has no body.
-    // It watches from the map, reported as a spectator so it never owns a
-    // room (zm_player_here / zm_compute_owner).
-    if (s_gameRole == ZM_NET_ZOMBIE && s_firstBody && zm_ai_hosted()) {
-        s_firstBody = false;
-        s_directorMapOnly = true;
-        g_zombieModeEntity = NULL;
-        zm_net_freeze_state(true);
-        zm_map_set_read_only(false);
-        if (!zm_map_is_open()) zm_map_toggle();
-        dbg_printf("[zombie] AI director: the host watches from the map\n");
         zm_survivor_room_loaded();
         return;
     }
@@ -1656,7 +1718,7 @@ void zombie_mode_preview_skin(int ch)
 int zombie_mode_player_skin(int base)
 {
     if (s_previewSkin >= 0) return s_previewSkin;
-    if (!g_bPlayAsZombie || zm_net_role() != ZM_NET_SURVIVOR) return base;
+    if (!g_bPlayAsZombie || zm_net_role() == ZM_NET_OFF) return base;
     int ch = zm_net_char(zm_net_self());
     return (ch >= 0) ? ch : base;
 }
@@ -1673,7 +1735,7 @@ int zombie_mode_player_model_index(int base)
 // Rebecca Jill's, id 3; Richard and Enrico move on Chris's animations.)
 int zombie_mode_player_body(void)
 {
-    if (s_targetSwapped && s_targetIdx > 0) {
+    if (s_targetSwapped && s_targetIdx >= 0) {
         int targetChar = zm_net_char(s_targetIdx);
         return (targetChar == ZM_CHAR_JILL || targetChar == ZM_CHAR_REBECCA) ? 1 : 0;
     }
@@ -2446,7 +2508,7 @@ void zombie_mode_on_player_sound(int bank, int soundId, int vol, int pos)
 static void zm_replay_player_sound(const short* a, int src)
 {
     if (a[2] != (short)(g_stageId | (g_roomId << 8))) return;
-    if (src < 1 || src >= ZM_NET_MAX_PLAYERS) return;
+    if (src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0) return;
     Entity* e = &g_EnemiesList[ZM_SURVIVOR_SLOT_BASE + src];
     if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0) return;
     s_psndReplaying = true;
@@ -2629,7 +2691,7 @@ void zm_draw_centered(const char* text, short y, unsigned char color)
 // Time left on the game clock (ZM_TIME_LIMIT_MS before it starts).
 static unsigned int zm_clock_left_ms(void)
 {
-    if (s_gameRole != ZM_NET_SURVIVOR) {
+    if (zm_match_authority()) {
         int in = zm_survivors_in_ms();
         if (in < 0) return ZM_TIME_LIMIT_MS;
         return in >= ZM_TIME_LIMIT_MS ? 0 : (unsigned int)(ZM_TIME_LIMIT_MS - in);
@@ -2715,7 +2777,7 @@ void zombie_mode_draw_overlay(void)
     }
     // The director: how long the main hall stays closed.
     unsigned int hallLeft = 0;
-    if (zm_hall_closed(&hallLeft)) {
+    if (s_gameRole != ZM_NET_SURVIVOR && zm_hall_closed(&hallLeft)) {
         char line[40];
         if (hallLeft == 0xFFFFFFFFu) snprintf(line, sizeof(line), "HALLS CLOSED - SURVIVORS ARRIVING");
         else snprintf(line, sizeof(line), "HALLS OPEN IN %u:%02u", (hallLeft + 999) / 1000 / 60, (hallLeft + 999) / 1000 % 60);
@@ -2759,7 +2821,7 @@ static bool zm_is_last_door(const unsigned char* record)
 unsigned int zm_match_elapsed_ms(void)
 {
     if (s_winShown) return s_finalElapsedMs;
-    if (s_gameRole != ZM_NET_SURVIVOR) {
+    if (zm_match_authority()) {
         int in = zm_survivors_in_ms();
         if (in < 0) return 0;
         return in >= ZM_TIME_LIMIT_MS ? ZM_TIME_LIMIT_MS : (unsigned int)in;
@@ -2790,9 +2852,9 @@ static void zm_match_end(int reason, int player, unsigned int elapsedMs)
 // and confirmations to this match. A confirmed outcome is immutable.
 static void zm_host_finish(int reason, int player)
 {
-    if (s_winShown || s_gameRole == ZM_NET_SURVIVOR) return;
+    if (s_winShown || !zm_match_authority()) return;
     unsigned int elapsed = zm_match_elapsed_ms();
-    if (s_gameRole == ZM_NET_ZOMBIE) {
+    if (zm_net_role() == ZM_NET_ZOMBIE) {
         unsigned int seed = zm_net_seed();
         zm_net_send_event8(ZM_EV_WIN, (short)player, (short)reason, (short)(elapsed / 1000),
                           (short)seed, (short)(seed >> 16), 0, 0, 0);
@@ -2814,14 +2876,14 @@ bool zm_match_take_win(const short* a, int src)
     if (!s_zombieModeArmed || s_gameRole == ZM_NET_OFF) return false;
     if (s_winShown) return true;
     unsigned int seed = zm_net_seed();
-    if (s_gameRole == ZM_NET_ZOMBIE) {
+    if (zm_net_role() == ZM_NET_ZOMBIE) {
         // The request includes the alive survivor's exit-room snapshot. Do
         // not reject an escape on a newer dead STATE from the same poll: the
         // survivor may have been hit after it successfully attempted the exit.
         unsigned int requestSeed = (unsigned short)a[4] | ((unsigned int)(unsigned short)a[5] << 16);
         unsigned char stage = (unsigned char)a[2], room = (unsigned char)((unsigned short)a[2] >> 8);
-        if (src < 1 || src >= ZM_NET_MAX_PLAYERS || a[0] != src || a[1] != ZM_END_ESCAPE ||
-            requestSeed != seed || zm_shotgun_crushed(src) || zm_net_char(src) < 0 || zm_net_player(src) == NULL ||
+        if (src < 0 || src >= ZM_NET_MAX_PLAYERS || a[0] != src || a[1] != ZM_END_ESCAPE ||
+            requestSeed != seed || zm_shotgun_crushed(src) || zm_net_char(src) < 0 || zm_seat_state(src) == NULL ||
             a[3] < 0 || a[3] > 255 || room != ZM_BACK_EXIT_ROOM ||
             (stage != STAGE_MANSION_1F && stage != STAGE_MANSION_RETURN_1F)) return true;
         zm_host_finish(ZM_END_ESCAPE, src);
@@ -2830,7 +2892,8 @@ bool zm_match_take_win(const short* a, int src)
         if (resultSeed != seed || (a[1] != ZM_END_UNSOLVABLE &&
             (a[1] < ZM_END_ESCAPE || a[1] > ZM_END_ALL_DEAD)) ||
             (unsigned short)a[2] > ZM_TIME_LIMIT_MS / 1000) return true;
-        if (a[1] == ZM_END_ESCAPE ? (a[0] < 1 || a[0] >= ZM_NET_MAX_PLAYERS) : a[0] != -1) return true;
+        if (a[1] == ZM_END_ESCAPE ? (a[0] < 0 || a[0] >= ZM_NET_MAX_PLAYERS || zm_net_char(a[0]) < 0)
+                                  : a[0] != -1) return true;
         zm_match_end(a[1], a[1] == ZM_END_ESCAPE ? a[0] : -1, (unsigned short)a[2] * 1000u);
     }
     return true;
@@ -2856,11 +2919,11 @@ static bool zm_all_survivors_dead(void)
 // end the game at zero.
 static void zm_clock_frame(void)
 {
-    if (!s_zombieModeArmed || s_winShown || s_gameRole == ZM_NET_SURVIVOR) return;
+    if (!s_zombieModeArmed || s_winShown || !zm_match_authority()) return;
     if (zm_survivors_in_ms() < 0) return;
     unsigned int left = zm_clock_left_ms();
     unsigned int now = zm_game_time_ms();
-    if (s_gameRole == ZM_NET_ZOMBIE && (s_clockSentMs == 0 || now - s_clockSentMs >= ZM_CLOCK_SEND_MS)) {
+    if (zm_net_role() == ZM_NET_ZOMBIE && (s_clockSentMs == 0 || now - s_clockSentMs >= ZM_CLOCK_SEND_MS)) {
         zm_net_send_event(ZM_EV_CLOCK, (short)((left + 999) / 1000), 0, 0, 0);
         s_clockSentMs = now;
     }
@@ -3379,7 +3442,7 @@ static bool zm_can_grab_survivor(Entity* self)
 {
     // Networked, the target is whichever survivor zm_target_begin put in the
     // player entity for this update.
-    bool here = (s_gameRole == ZM_NET_OFF) ? zm_survivor_present() : (s_targetSwapped && s_targetIdx > 0);
+    bool here = (s_gameRole == ZM_NET_OFF) ? zm_survivor_present() : (s_targetSwapped && s_targetIdx >= 0);
     if (!here || g_playerEntity.health < 0) return false;
     // In single player the player entity's own state says whether it is free.
     // With two players it is a puppet; the survivor's copy decides (and
@@ -4201,10 +4264,14 @@ int zombie_mode_door_frames(void)
 // (any group's) lead into the spot the zombie stands on, and cut to it the
 // way check_camera_switch does.
 // At a spot: the spectator's (ZombieSpectate.cpp) follows another survivor.
-// ROOM1150 event 0 (+0x88) selects cut 2 before moving the ceiling.
-// Camera 0 is the overhead introduction; camera 1 faces the passage door.
-// Keep the low shot on all local roles throughout movement, then release only the
-// camera lock owned here when the room/cycle ends.
+// The trap room's (ROOM1150 / ROOM6150) cameras: 0 overhead, 1 level, 2 low
+// along the room toward the passage door (the one the original's event 0
+// cuts to), 3 from below the floor looking straight up at the ceiling, 4
+// high. The mode holds camera 3 while the slab moves: the ceiling and the
+// pickaxe's door both stay readable. Keep it on all local roles throughout
+// movement, then release only the camera lock owned here when the room/cycle
+// ends.
+#define ZM_TRAP_CAMERA 3
 void zm_shotgun_crush_view(bool enable)
 {
     static bool locked = false;
@@ -4214,18 +4281,18 @@ void zm_shotgun_crush_view(bool enable)
         return;
     }
     if (!g_RdtPointer || !g_RdtPointer->cam_switch_zones || !g_RdtPointer->cameras_count) return;
-    if (g_RdtPointer->cameras_count < 3) return;
-    if (g_roomCameraId != 2) {
+    if (g_RdtPointer->cameras_count <= ZM_TRAP_CAMERA) return;
+    if (g_roomCameraId != ZM_TRAP_CAMERA) {
         const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
         for (int i = 0; i < 1024; i++, zone++) {
             if ((unsigned short)zone->camFrom >= g_RdtPointer->cameras_count) return;
-            if (zone->camFrom != 2) continue;
+            if (zone->camFrom != ZM_TRAP_CAMERA) continue;
             g_CurrentRdtDataTypePtr = (void*)zone;
-            g_cutId = g_roomCameraId; g_roomCameraId = 2;
+            g_cutId = g_roomCameraId; g_roomCameraId = ZM_TRAP_CAMERA;
             cut_set();
             break;
         }
-        if (g_roomCameraId != 2) return;
+        if (g_roomCameraId != ZM_TRAP_CAMERA) return;
     }
     if (!(g_main_state_flags & MSF_CAMERA_LOCK)) locked = true;
     g_main_state_flags |= MSF_CAMERA_LOCK;
@@ -4434,11 +4501,6 @@ static bool zm_director_input(Entity* e, bool busy, unsigned int* heldOut, unsig
     bool gates = (g_message_flags & 0x0101) == 0x0101 &&
                  (g_main_state_flags & MSF_MENU_ACTIVE) == 0;
     bool mapWasOpen = zm_map_is_open();
-    if (zm_ai_hosted()) {
-        // The AI places; the host only looks around the map.
-        if (gates) zm_map_input(rawEdge & 0xF000);
-        return false;
-    }
     if (gates && optionsPressed && !s_directorMapOnly) {
         zm_map_set_read_only(false);
         zm_map_toggle();
@@ -5369,7 +5431,7 @@ static bool zm_player_here(int i)
 {
     // A dead survivor watching the others is in no room: never the owner,
     // never "here" for anyone (ZombieSpectate.cpp).
-    if (i == zm_net_self()) return !zm_spec_away() && !zm_ai_hosted();
+    if (i == zm_net_self()) return !zm_spec_away();
     if (i != ZM_NET_DIRECTOR && zm_net_char(i) < 0) return false;
     const ZmNetPeerState* p = zm_net_player(i);
     if (p != NULL && (p->spectating || p->transitioning)) return false;
@@ -5409,9 +5471,8 @@ static int zm_compute_owner(void)
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (zm_player_here(i)) return i;
     }
-    // Nobody: a spectator's copy (or an AI-hosted director's) runs nothing -
-    // its monsters wait as puppets.
-    return (zm_spec_away() || zm_ai_hosted()) ? -1 : zm_net_self();
+    // Nobody: a spectator's copy runs nothing - its monsters wait as puppets.
+    return zm_spec_away() ? -1 : zm_net_self();
 }
 
 unsigned char zm_survivor_entrance_door(void)
@@ -5433,7 +5494,7 @@ void zm_reinforce_notice(const char* text)
 // sends its monsters for it, as for a player here.
 static bool zm_spectated_here(void)
 {
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (i == zm_net_self()) continue;
         const ZmNetPeerState* p = zm_net_player(i);
         if (p != NULL && p->spectating && p->viewStage == g_stageId && p->viewRoom == g_roomId) return true;
@@ -6008,7 +6069,7 @@ static void zm_target_begin(Entity* e)
         best = dx * dx + dz * dz;
         bestIdx = self;
     }
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (i == self || zm_net_char(i) < 0) continue;
         if (pinned >= 0 && i != pinned) continue;
         const ZmNetPeerState* p = zm_net_player(i);
@@ -6069,7 +6130,7 @@ static void zm_target_begin(Entity* e)
 // their grab is handed over whole (zm_owner_intercept_attack).
 static void zm_target_report_hit(const Entity* monster)
 {
-    if (!s_targetSwapped || s_targetIdx <= 0 || zm_is_zombie_id(monster->id)) return;
+    if (!s_targetSwapped || s_targetIdx < 0 || zm_is_zombie_id(monster->id)) return;
     short damage = (short)(s_probeHealth - g_playerEntity.health);
     unsigned char flag = g_playerEntity.isBeingAttackedFlag;
     // The monsters only strike a clear flag, and set it when they do.
@@ -6140,7 +6201,7 @@ static void zm_hit_probe_begin(const Entity* e)
     bool target;
     if (s_gameRole == ZM_NET_OFF) target = zm_survivor_present();
     else if (!s_iOwn) target = false;
-    else if (s_targetSwapped) target = s_targetIdx > 0;
+    else if (s_targetSwapped) target = s_targetIdx >= 0;
     else target = s_gameRole == ZM_NET_SURVIVOR;     // the director's own player is no survivor
     if (!target || g_playerEntity.health < 0) return;
     s_hitProbe = true;
@@ -6626,7 +6687,7 @@ static void zm_owner_intercept_attack(Entity* e)
 {
     int slot = zm_slot_of(e);
     if (slot < 0 || e == g_zombieModeEntity || !s_iOwn || s_slotRemote[slot]) return;
-    if (!s_targetSwapped || s_targetIdx <= 0) return;     // its target is local
+    if (!s_targetSwapped || s_targetIdx < 0) return;      // its target is local
     // zombie_chase_player enters the attack with a WORD store of 5 at +0x84
     // (state and ignore_player_flag only), so action_state can still hold the
     // walk's value; the state alone says it, and this hook sees it the same
@@ -6657,7 +6718,7 @@ static void zm_shared_after_update(Entity* e)
         zombie_mode_begin_feeding(e);
     }
     if (e->id == ENEMY_TYRANT_2 && slot >= 0 && slot < 30 &&
-        !s_targetSwapped && s_targetIdx > 0 &&
+        !s_targetSwapped && s_targetIdx >= 0 &&
         (g_playerEntity.animationId == 6 || g_playerEntity.animationId == 7) &&
         g_playerEntity.animFrameId == 0x0C) {
         s_tyrantTarget[slot] = (signed char)s_targetIdx;
@@ -7197,7 +7258,7 @@ void zombie_mode_net_frame(void)
     zm_roomsync_frame();
     zm_statue_frame();
     zm_end_frame();
-    if (s_gameRole != ZM_NET_SURVIVOR && !s_winShown) zm_ai_frame();
+    if (zm_match_authority() && !s_winShown) zm_ai_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;
         zm_director_input(g_zombieModeEntity, false, &held, &pressed);
@@ -7253,19 +7314,25 @@ int zm_survivor_list(ZmSurvivorInfo* out, int max)
         if (max > 0 && zm_survivor_location(&out[0].stage, &out[0].room)) {
             out[0].character = (g_playerEntity.id & 1) ? ZM_CHAR_JILL : ZM_CHAR_CHRIS;
             out[0].dead = g_playerEntity.health < 0;
+            out[0].health = g_playerEntity.health;
+            out[0].player = 1;
             n = 1;
         }
         return n;
     }
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS && n < max; i++) {
+    // The arbiter counts its own survivor too (an AI director's host).
+    bool own = zm_match_authority();
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS && n < max; i++) {
         int ch = zm_net_char(i);
-        if (ch < 0) continue;
-        const ZmNetPeerState* p = zm_net_player(i);
+        if (ch < 0 || (i == zm_net_self() && !own)) continue;
+        const ZmNetPeerState* p = zm_seat_state(i);
         if (p == NULL) continue;
         out[n].stage = p->stage;
         out[n].room = p->room;
         out[n].character = ch;
         out[n].dead = p->dead;
+        out[n].health = p->health;
+        out[n].player = i;
         n++;
     }
     return n;

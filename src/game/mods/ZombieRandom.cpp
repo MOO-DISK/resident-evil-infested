@@ -66,6 +66,12 @@ extern void FUN_00473f10(int* baseAddr, unsigned int bitIndex);        // clear 
 // crests are in (bit_test on
 // ScenarioFlags 0x69-0x6C, then bit_op LocksFlags 23).
 #define RND_CREST_LOCK   23
+// The key-locked doors into the attic (from the front of the attic) and into
+// the pillar passage (from the C passage): their lock flags (+0x0C & 0x3F).
+#define RND_ATTIC_LOCK   0x07
+#define RND_PILLAR_LOCK  0x0D
+#define RND_ATTIC_ROOM   0x10            // 2F
+#define RND_PILLAR_ROOM  0x0D
 
 static const unsigned char kKeys[4]    = { ITEM_SWORD_KEY, ITEM_ARMOR_KEY, ITEM_SHIELD_KEY, ITEM_HELMET_KEY };
 static const unsigned char kCrests[4]  = { ITEM_WIND_CREST, ITEM_MOON_CREST, ITEM_STAR_CREST, ITEM_SUN_CREST };
@@ -485,6 +491,31 @@ static void rnd_scan_script(const unsigned char* rdt, size_t size, unsigned int 
     }
 }
 
+// Rooms that were too generous: their listed pickups (by roomItems flag) are
+// emptied and the rooms take none of the randomizer's extra spots - reviewed
+// by hand. The mansion storeroom (a safe room) keeps its first aid spray and
+// one random pickup, the clip's spot.
+static const unsigned char kTrimmedSpots[][3] = {
+    { RND_STAGE_1F, 0x18, 218 },     // mansion storeroom: the shells
+};
+static const unsigned char kNoExtraSpotRooms[][2] = {
+    { RND_STAGE_1F, 0x18 },          // mansion storeroom
+};
+
+static bool rnd_trimmed_spot(const RndSpot& s)
+{
+    for (unsigned int i = 0; i < sizeof(kTrimmedSpots) / sizeof(kTrimmedSpots[0]); i++)
+        if (s.stage == kTrimmedSpots[i][0] && s.room == kTrimmedSpots[i][1] && s.flag == kTrimmedSpots[i][2]) return true;
+    return false;
+}
+
+static bool rnd_no_extra_spots(unsigned char stage, unsigned char room)
+{
+    for (unsigned int i = 0; i < sizeof(kNoExtraSpotRooms) / sizeof(kNoExtraSpotRooms[0]); i++)
+        if (stage == kNoExtraSpotRooms[i][0] && room == kNoExtraSpotRooms[i][1]) return true;
+    return false;
+}
+
 static void rnd_read_room(unsigned char stage, unsigned char room)
 {
     static const char hex[] = "0123456789abcdef";
@@ -551,6 +582,7 @@ static void rnd_read_room(unsigned char stage, unsigned char room)
         }
         // ROOM6160's shotgun is the ceiling trap's bait.
         if (stage == RND_STAGE_1F && room == 0x16) s.pool = false;
+        if (rnd_trimmed_spot(s)) s.pool = false;          // emptied (rnd_place_weapons)
         s.id = s.origId;
         s.qty = s.origQty;
     }
@@ -704,7 +736,19 @@ static int rnd_route_cost(int goal, int need)
     return -1;
 }
 
-// Leaf rooms: a single neighbouring room through usable doors.
+// Rooms that take key items like a leaf room though more than one door leads
+// in - reviewed by hand.
+static const unsigned char kExtraLeafRooms[][2] = {
+    { RND_STAGE_1F, 0x19 },    // 1F study (a leaf already; this keeps it a key-item spot)
+    { RND_STAGE_1F, 0x1A },    // roofed passage
+    { RND_STAGE_2F, 0x06 },    // small library
+    { RND_STAGE_2F, 0x0B },    // front lesson room
+    { RND_STAGE_2F, 0x0C },    // lesson room
+    { RND_STAGE_2F, 0x1A },    // B1 passage 1
+};
+
+// Leaf rooms: a single neighbouring room through usable doors (and the
+// kExtraLeafRooms).
 static void rnd_find_leaves(void)
 {
     for (int r = 0; r < RND_ROOMS * 2; r++) {
@@ -720,6 +764,10 @@ static void rnd_find_leaves(void)
             else if (neighbour != other) many = true;
         }
         s_leaf[r] = s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].exists && neighbour >= 0 && !many;
+    }
+    for (unsigned int i = 0; i < sizeof(kExtraLeafRooms) / sizeof(kExtraLeafRooms[0]); i++) {
+        int r = rnd_room_index(kExtraLeafRooms[i][0], kExtraLeafRooms[i][1]);
+        if (r >= 0 && s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].exists) s_leaf[r] = true;
     }
 }
 
@@ -759,8 +807,8 @@ int zm_random_remaining_solvable(void)
     bool reach[RND_ROOMS * 2] = {};
     unsigned int carried[ZM_NET_MAX_PLAYERS] = {}, owned = 0;
     bool living = false, jill = false;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        const ZmNetPeerState* p = zm_net_player(i);
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        const ZmNetPeerState* p = zm_seat_state(i);
         if (!p || !p->valid || zm_shotgun_crushed(i)) continue;
         unsigned char inventory[16];
         if (!zm_net_inventory(i, inventory)) return -1;
@@ -819,8 +867,8 @@ int zm_random_remaining_solvable(void)
         owned |= zm_drops_progression(reach);
         // Ordinary corpses can retain items if the drop list was full; their
         // reachable inventory remains recoverable through revival. Crushes cannot.
-        for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-            const ZmNetPeerState* p = zm_net_player(i);
+        for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+            const ZmNetPeerState* p = zm_seat_state(i);
             if (!p || !p->valid || zm_shotgun_crushed(i)) continue;
             int r = rnd_room_index(p->stage, p->room);
             if (r >= 0 && reach[r]) owned |= carried[i];
@@ -866,6 +914,7 @@ static bool rnd_back_room_ok(unsigned char stage, unsigned char room)
 
 static bool rnd_add_new_spot(const ZmSpawnSpots& t, bool ammoOnly, int* flag)
 {
+    if (rnd_no_extra_spots(t.stage, t.room)) return false;
     int st = t.stage - RND_STAGE_1F;
     const RndRoomInfo& info = s_roomInfo[st][t.room];
     int k = s_newInRoom[st][t.room];
@@ -931,9 +980,17 @@ static void rnd_add_new_spots(void)
         }
         if (!has && rnd_add_new_spot(t, false, &flag)) added++;
     }
-    for (int n = 0; n < count && added < RND_NEW_SPOTS; n++) {
+    // Every key-item room without a pool spot of its own gets one, however
+    // many that takes (the boiler had none in about a fifth of the games).
+    for (int n = 0; n < count; n++) {
         const ZmSpawnSpots& t = g_zmSpawnSpots[candidates[n]];
-        if (rnd_key_item_room(t.stage, t.room) && rnd_add_new_spot(t, false, &flag)) added++;
+        if (!rnd_key_item_room(t.stage, t.room)) continue;
+        bool has = false;
+        for (int i = 0; i < s_spotCount && !has; i++) {
+            const RndSpot& sp = s_spots[i];
+            has = sp.stage == t.stage && sp.room == t.room && sp.pool && !sp.rewardOnly;
+        }
+        if (!has && rnd_add_new_spot(t, false, &flag)) added++;
     }
     for (int n = 0; n < count && added < RND_NEW_SPOTS; n++) {
         const ZmSpawnSpots& t = g_zmSpawnSpots[candidates[n]];
@@ -1063,12 +1120,12 @@ static int rnd_pick_key_spot(const bool* reach, const bool* taken, int lo, int h
 }
 
 // The back area's crest: a back-area room at random (each alike, however many
-// spots it has), then a spot in it. -1: none.
+// spots it has, never a safe room), then a spot in it. -1: none.
 static int rnd_pick_back_spot(const bool* reach, const bool* taken)
 {
     int rooms[RND_ROOMS * 2], roomCount = 0;
     for (int r = 0; r < RND_ROOMS * 2; r++) {
-        if (!s_back[r]) continue;
+        if (!s_back[r] || s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].safe) continue;
         for (int i = 0; i < s_spotCount; i++) {
             const RndSpot& s = s_spots[i];
             if (rnd_room_index(s.stage, s.room) == r && rnd_key_spot_ok(s, reach, taken)) { rooms[roomCount++] = r; break; }
@@ -1095,9 +1152,40 @@ static bool rnd_place_key_items(bool* taken)
     bool reach[RND_ROOMS * 2];
     rnd_reach(0, true, reach);
     const unsigned char items[4] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL };
+    // Exactly one of them in exactly one safe room (none needed to escape, so
+    // the director's keeping out of it costs nothing): which at random, in a
+    // safe room reached with everything; the others keep out of the safe rooms.
+    bool safeOnly[RND_ROOMS * 2], notSafe[RND_ROOMS * 2], all[RND_ROOMS * 2];
+    for (int r = 0; r < RND_ROOMS * 2; r++) {
+        safeOnly[r] = s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].safe;
+        notSafe[r] = !safeOnly[r];
+    }
+    rnd_reach(0xFF, true, all);
+    int safeTool = rnd_below(4);
+    {
+        // The safe room first, each alike however many spots it has.
+        int rooms[RND_ROOMS * 2], nr = 0;
+        for (int r = 0; r < RND_ROOMS * 2; r++) {
+            if (!safeOnly[r]) continue;
+            for (int i = 0; i < s_spotCount; i++) {
+                const RndSpot& sp = s_spots[i];
+                if (rnd_room_index(sp.stage, sp.room) == r && rnd_key_spot_ok(sp, all, taken)) { rooms[nr++] = r; break; }
+            }
+        }
+        if (nr == 0) return false;
+        int room = rooms[rnd_below(nr)];
+        for (int r = 0; r < RND_ROOMS * 2; r++) safeOnly[r] = r == room;
+        int i = rnd_pick_key_spot(all, taken, -1, -1, false, safeOnly);
+        if (i < 0) return false;
+        RndSpot& s = s_spots[i];
+        s.id = items[safeTool];
+        s.qty = 1;
+        taken[rnd_room_index(s.stage, s.room)] = true;
+    }
     for (int t = 0; t < 4; t++) {
-        int i = t < 2 ? rnd_pick_key_spot(reach, taken, RND_TOOL_NEAR, RND_TOOL_FAR)
-                      : rnd_pick_key_spot(reach, taken, -1, -1, items[t] == ITEM_CHEMICAL);
+        if (t == safeTool) continue;
+        int i = t < 2 ? rnd_pick_key_spot(reach, taken, RND_TOOL_NEAR, RND_TOOL_FAR, false, notSafe)
+                      : rnd_pick_key_spot(reach, taken, -1, -1, items[t] == ITEM_CHEMICAL, notSafe);
         if (i < 0) return false;
         RndSpot& s = s_spots[i];
         s.id = items[t];
@@ -1157,6 +1245,18 @@ static bool rnd_generate_once(void)
     for (int i = 0; i < s_lockCount; i++) {
         s_lockKey[order[i]] = (i < 4) ? kKeys[i] : kKeys[rnd_below(4)];
     }
+    // The attic's door and the pillar passage's never take the same key: swap
+    // the pillar passage's with another lock's (every key keeps its doors).
+    int atticLock = rnd_lock_index(RND_ATTIC_LOCK), pillarLock = rnd_lock_index(RND_PILLAR_LOCK);
+    if (atticLock >= 0 && pillarLock >= 0 && s_lockKey[atticLock] == s_lockKey[pillarLock]) {
+        int others[RND_MAX_LOCKS], n = 0;
+        for (int i = 0; i < s_lockCount; i++)
+            if (i != atticLock && i != pillarLock && s_lockKey[i] != s_lockKey[atticLock]) others[n++] = i;
+        if (n > 0) {
+            int j = others[rnd_below(n)];
+            unsigned char t = s_lockKey[j]; s_lockKey[j] = s_lockKey[pillarLock]; s_lockKey[pillarLock] = t;
+        }
+    }
 
     // The items to place: the keys that open something (as many uses as
     // doors), then the crests.
@@ -1188,13 +1288,16 @@ static bool rnd_generate_once(void)
     bool progressionRoom[RND_ROOMS * 2] = {};
     if (s_backAny) {
         rnd_reach(0xFF, true, reach);
-        bool notLeaf[RND_ROOMS * 2];
-        for (int r = 0; r < RND_ROOMS * 2; r++) notLeaf[r] = !s_leaf[r];
+        bool notLeaf[RND_ROOMS * 2], notSafeRoom[RND_ROOMS * 2];
+        for (int r = 0; r < RND_ROOMS * 2; r++) {
+            notSafeRoom[r] = !s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].safe;
+            notLeaf[r] = !s_leaf[r] && notSafeRoom[r];
+        }
         const unsigned char access[2] = { ITEM_BATTERY, ITEM_ZM_PASS_NOTE };
         for (int a = 0; a < 2; a++) {
             bool note = access[a] == ITEM_ZM_PASS_NOTE;
-            int pick = rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, note ? NULL : notLeaf, note);
-            if (pick < 0 && !note) pick = rnd_pick_key_spot(reach, progressionRoom, -1, -1);
+            int pick = rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, note ? notSafeRoom : notLeaf, note);
+            if (pick < 0 && !note) pick = rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, notSafeRoom);
             if (pick < 0) return false;
             RndSpot& s = s_spots[pick];
             s.id = access[a];
@@ -1213,15 +1316,42 @@ static bool rnd_generate_once(void)
 
     // Assumed fill. No key in the back area: everything outside it is then
     // reached without it, so the battery alone or the note alone opens it.
-    bool notBack[RND_ROOMS * 2];
-    for (int r = 0; r < RND_ROOMS * 2; r++) notBack[r] = !s_back[r];
+    // No key or crest in a safe room: the director can never guard one there
+    // (one of the puzzle tools goes there instead, rnd_place_key_items).
+    // One key or crest always lies in the attic - not its own door's key.
+    bool notBack[RND_ROOMS * 2], notSafe[RND_ROOMS * 2], keyRooms[RND_ROOMS * 2], atticOnly[RND_ROOMS * 2];
+    int attic = rnd_room_index(RND_STAGE_2F, RND_ATTIC_ROOM);
+    for (int r = 0; r < RND_ROOMS * 2; r++) {
+        notBack[r] = !s_back[r];
+        notSafe[r] = !s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].safe;
+        keyRooms[r] = notBack[r] && notSafe[r];
+        atticOnly[r] = r == attic;
+    }
+    int atticItem = -1;
+    if (attic >= 0) {
+        unsigned char atticKey = atticLock >= 0 ? s_lockKey[atticLock] : 0;
+        int cand[8], nc = 0;
+        for (int n = (s_backAny ? 1 : 0); n < itemCount; n++)
+            if (items[n] != atticKey && !(rnd_is_key(items[n]) && s_back[attic])) cand[nc++] = n;
+        if (nc > 0) atticItem = cand[rnd_below(nc)];
+        // Assumed fill reaches a room with the items placed after it: the
+        // attic's own key must come later than what goes into the attic.
+        int keyAt = -1;
+        for (int n = 0; n < itemCount; n++) if (items[n] == atticKey) keyAt = n;
+        if (atticItem >= 0 && keyAt >= 0 && keyAt < atticItem) {
+            unsigned char t = items[keyAt]; items[keyAt] = items[atticItem]; items[atticItem] = t;
+            t = qtys[keyAt]; qtys[keyAt] = qtys[atticItem]; qtys[atticItem] = t;
+            atticItem = keyAt;
+        }
+    }
     for (int n = 0; n < itemCount; n++) {
         unsigned int owned = 0;
         for (int m = n + 1; m < itemCount; m++) owned |= rnd_item_bit(items[m]);
         rnd_reach(owned, true, reach);
         int pick = (n == 0 && s_backAny) ? rnd_pick_back_spot(reach, progressionRoom)
-                                         : rnd_pick_key_spot(reach, progressionRoom, -1, -1, false,
-                                                             rnd_is_key(items[n]) ? notBack : NULL);
+                 : n == atticItem ? rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, atticOnly)
+                                  : rnd_pick_key_spot(reach, progressionRoom, -1, -1, false,
+                                                      rnd_is_key(items[n]) ? keyRooms : notSafe);
         if (pick < 0) return false;
         RndSpot& s = s_spots[pick];
         s.id = items[n];
@@ -1252,7 +1382,7 @@ static bool rnd_party(int* survivors, bool* barry)
     if (zm_net_role() == ZM_NET_OFF) return true;
     int n = 0;
     bool allIn = true;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         int ch = zm_net_char(i);
         if (ch < 0) continue;
         n++;
@@ -1340,19 +1470,23 @@ static void rnd_place_weapons(bool barry)
     // tier 3 ammo becomes the game's own tier 3 ammo, else handgun or shotgun
     // ammo), plus the shotgun if the pool had none, shuffled over the spots
     // still empty.
+    // The shotgun is the trap room's alone (ZombieShotgun.cpp): never on the
+    // floor - shells instead. Barry brings no handgun: one Beretta lies about
+    // as his fallback when he plays.
     unsigned char wid[RND_MAX_SPOTS], wqty[RND_MAX_SPOTS];
     int wCount = 0;
-    bool haveShotgun = false;
+    bool haveBeretta = false;
     for (int i = 0; i < s_spotCount && wCount < RND_MAX_SPOTS; i++) {
         const RndSpot& s = s_spots[i];
         if (!s.pool || !rnd_is_weapon_or_ammo(s.origId) || rnd_is_tier3(s.origId)) continue;
         wid[wCount] = s.origId;
         wqty[wCount] = s.origQty;
         if (rnd_is_tier3_ammo(s.origId)) rnd_ammo(&wid[wCount], &wqty[wCount]);
-        if (wid[wCount] == ITEM_SHOTGUN) haveShotgun = true;
+        if (wid[wCount] == ITEM_SHOTGUN) { wid[wCount] = ITEM_SHELLS; wqty[wCount] = 7; }
+        if (wid[wCount] == ITEM_BERETTA) haveBeretta = true;
         wCount++;
     }
-    if (!haveShotgun && wCount < RND_MAX_SPOTS) { wid[wCount] = ITEM_SHOTGUN; wqty[wCount++] = 7; }
+    if (barry && !haveBeretta && wCount < RND_MAX_SPOTS) { wid[wCount] = ITEM_BERETTA; wqty[wCount++] = 15; }
     for (int i = wCount - 1; i > 0; i--) {
         int j = rnd_below(i + 1);
         unsigned char t = wid[i]; wid[i] = wid[j]; wid[j] = t;
@@ -1379,7 +1513,7 @@ static void rnd_place_weapons(bool barry)
         if (s.origId == ITEM_BROKEN_SHOTGUN && !(s.stage == RND_STAGE_1F && s.room == ROOM_LIVING_ROOM)) {
             s.id = 0; s.qty = 0;
         }
-        else if (rnd_main_hall_beretta(s)) { s.id = 0; s.qty = 0; }
+        else if (rnd_main_hall_beretta(s) || rnd_trimmed_spot(s)) { s.id = 0; s.qty = 0; }
         else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL || s.origId == ITEM_INK_RIBBONS) {
             rnd_supply(&s.id, &s.qty);
         }

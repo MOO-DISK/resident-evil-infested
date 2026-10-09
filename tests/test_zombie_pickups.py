@@ -56,7 +56,9 @@ struct ZmReconnectPlayer {
     unsigned char inventory[16], indices[8];
     unsigned int inventoryMask;
 };
-static int zm_net_char(int player) { return player == 1 ? 0 : 1; }
+static bool hostPlays;          // an AI director's game: the host is seat 0's survivor
+static int netRole = -1;        // ...its net role (ZOMBIE) beside its game role (SURVIVOR)
+static int zm_net_char(int player) { return player == 0 ? (hostPlays ? 0 : -1) : player == 1 ? 0 : 1; }
 enum { ZM_CHAR_CHRIS=0, ZM_CHAR_JILL=1 };
 enum { ZM_EV_BOX=16 };
 static bool zm_shotgun_pickup_valid(const short* a) {return a[2] || (unsigned short)a[3]<=255;}
@@ -73,10 +75,14 @@ static bool connected[4] = {false, true, true, true};
 static bool zombie_mode_armed() { return armed; }
 static bool zombie_mode_match_over() { return over; }
 static int zm_game_role() { return role; }
+static int zm_net_role() { return netRole >= 0 ? netRole : role; }
+static bool zm_net_active() { return status == ZM_NET_CONNECTED || status == ZM_NET_LOST; }
 static int zm_net_status() { return status; }
 static unsigned int zm_net_seed() { return seed; }
 static unsigned int plat_time_ms() { return now; }
 static const ZmNetPeerState* zm_net_player(int p) { return connected[p] ? &peers[p] : NULL; }
+static ZmNetPeerState hostSeat;
+static const ZmNetPeerState* zm_seat_state(int p) { return p == 0 ? (hostPlays ? &hostSeat : NULL) : zm_net_player(p); }
 static int zombie_mode_inventory_slots(int) { return slots; }
 static unsigned char dc_item_pickup_quantity(unsigned char, unsigned char q) { return q; }
 static unsigned char zombie_mode_pickup_quantity(unsigned char, unsigned char q, const unsigned char*) { return q; }
@@ -164,6 +170,7 @@ static void reset() {
     for (int i = 0; i < ROOM_ITEM_MODELS; i++) g_item_model_table[i] = models[i];
     for (int i = 1; i < 4; i++) { connected[i] = true; peers[i].dead = false; }
     g_playerEntity.health = 140; slots = 6;
+    hostPlays = false; netRole = -1; hostSeat.dead = false;
 }
 static void request(short* a, int token, bool drop = false, int key = 17) {
     short r[8] = {PK_REQUEST, (short)token, (short)drop, (short)key,
@@ -257,6 +264,19 @@ int main() {
     assert(checkpoint.card.totalHeldItems==1 && checkpoint.inventory[0]==ITEM_CLIP && checkpoint.inventory[1]==22);
     zm_pickups_reconnect_reconcile(1, &checkpoint);
     assert(checkpoint.card.totalHeldItems==1 && checkpoint.inventory[1]==22);
+    // The host of an AI director's game claims as seat 0: granted, committed
+    // and contested like any survivor; replies to it reach its own claim.
+    reset(); hostPlays = true; netRole = ZM_NET_ZOMBIE; role = ZM_NET_SURVIVOR;
+    request(a, 1); zm_pickups_take(a, 0); assert(sent.back().args[0] == PK_GRANT && sent.back().dst == 0);
+    request(b, 1); zm_pickups_take(b, 2); assert(sent.back().args[0] == PK_DENY);
+    a[0] = PK_COMMIT; zm_pickups_take(a, 0);
+    assert(!Flg_ck((int)g_roomItemsFlags, 17) && sent.back().args[0] == PK_DONE && sent.back().dst == 0);
+    request(a, 2); a[3] = 18; memcpy(s_request, a, sizeof(a)); s_waiting = true; s_reply = -1; s_expected = PK_GRANT;
+    a[0] = PK_GRANT; zm_pickups_take(a, 0); assert(s_reply == PK_GRANT);
+    s_waiting = false; hostSeat.dead = true; request(a, 3); a[3] = 19; zm_pickups_take(a, 0);
+    assert(sent.back().args[0] == PK_DENY);
+    // Without a seat of its own the host refuses a forged seat-0 request.
+    reset(); request(a, 1); n = (int)sent.size(); zm_pickups_take(a, 0); assert(sent.size() == n);
     // Single player retains the engine's immediate award.
     reset(); floor_item(); role = ZM_NET_OFF;
     room_event_item_pickup(); assert(g_TotalHeldItems == 1 && sent.empty());

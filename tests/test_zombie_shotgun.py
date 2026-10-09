@@ -43,7 +43,8 @@ struct ZmNetPeerState { bool valid=false,dead=false,spectating=false,transitioni
 static ZmNetPeerState peers[4];
 static unsigned char peerItem[4];
 static int peerChar[4];
-int zm_net_char(int p) {return peerChar[p];}
+static bool hostPlays=false;   // an AI director's game: seat 0 is the host's survivor
+int zm_net_char(int p) {return p==0 && !hostPlays ? -1 : peerChar[p];}
 struct ZmReconnectPlayer { struct { unsigned char stageId=5,roomId=21,roomCameraId=0,
  totalHeldItems=0,equippedItemId=0; } card; unsigned char inventory[16]={},indices[8]={};
  unsigned int inventoryMask=0; int health=100,x=0,y=0,z=0; short angle=0;
@@ -64,6 +65,7 @@ void zm_note(const char*) {}
 void dbg_printf(const char*,...) {}
 void rearrange_item_slots() {}
 const ZmNetPeerState* zm_net_player(int p) { return &peers[p]; }
+const ZmNetPeerState* zm_seat_state(int p) { return p==0 && !hostPlays ? nullptr : &peers[p]; }
 bool zm_net_has_item(int p,unsigned char id) { return peerItem[p]==id; }
 void zm_decode_dest(unsigned char dest,unsigned char stage,unsigned char* s,unsigned char* r) { *s=stage; *r=dest; }
 void zm_net_send_event_to(int dst,int,short a,short b,short c,short d,short e,short f,short g,short h) {
@@ -135,7 +137,7 @@ int main() {
  role=ZM_NET_ZOMBIE;self=0;peers[1].room=ROOM_LIVING_ROOM;
  zm_shotgun_frame();assert(!s_active&&s_blocked&&!zm_shotgun_crushed(1));
  role=ZM_NET_SURVIVOR;self=1;rec[13]=ROOM_TRAP_ROOM;assert(zm_shotgun_door(rec));assert(g_MessagePtr==s_doorBlocked.bytes);
- g_roomId=ROOM_TRAP_ROOM;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-4750);now+=1000;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-4000);now+=2000;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-2500);assert(zm_shotgun_hide_room());
+ g_roomId=ROOM_TRAP_ROOM;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-3650);now+=1000;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-3267);now+=2000;zm_shotgun_room();assert(*(int*)(ceiling+0x38)==-2500);assert(zm_shotgun_hide_room());
  Entity crushedMonster;crushedMonster.health=-1;assert(zombie_mode_shotgun_corpse(&crushedMonster));
  slots[0]=ITEM_PICK_AXE;slots[1]=1;g_playerEntity.scaMatrixData.localMatrix.t[0]=1500;g_playerEntity.scaMatrixData.localMatrix.t[2]=5000;
  assert(!zm_shotgun_use_pickaxe());

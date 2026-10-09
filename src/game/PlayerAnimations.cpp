@@ -2559,12 +2559,15 @@ int check_action_object(void)
                     if ((flags & 0x40) == 0) {
                         if (is_point_in_action_zone((VECTOR*)&g_playerPosScratch,
                                                     *(unsigned short**)(entry + 8)) != 0) {
+                            // Port-added mod: no second run of a scene still playing.
+                            if (zombie_mode_action_busy(entry)) return 0;
                             g_fwdPosActionId = (unsigned char)(index + 1);
                             return ((int(*)(unsigned char*))room_check_actions[*entry])(entry);
                         }
                     } else {
                         if (is_point_in_action_zone((VECTOR*)g_playerEntity.scaMatrixData.localMatrix.t,
                                                     *(unsigned short**)(entry + 8)) != 0) {
+                            if (zombie_mode_action_busy(entry)) return 0;   // port-added mod
                             g_entPosActionId = (unsigned char)(index + 1);
                             return ((int(*)(unsigned char*))room_check_actions[*entry])(entry);
                         }

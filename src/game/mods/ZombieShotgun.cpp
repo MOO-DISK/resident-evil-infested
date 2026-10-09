@@ -14,6 +14,13 @@
 extern void Flg_on(int baseAddr, unsigned int bitIndex);
 
 #define ZM_SHOTGUN_MS 15000u
+// The slab's height (object +0x38): it starts at the top, reaches KILL as the
+// timer runs out (the survivors inside die), then drops to the floor in 3 s.
+// KILL is about 3 feet (1100 units) below the original's -4750: lower and
+// more menacing before it kills.
+#define ZM_CEILING_TOP_Y   (-10280)
+#define ZM_CEILING_KILL_Y  (-3650)
+#define ZM_CEILING_FLOOR_Y (-2500)
 static unsigned char s_placed; // 0: empty, 1: broken replacement, 2: working shotgun returned
 static bool s_broken, s_active, s_blocked, s_consume, s_jump, s_rescueSeen, s_consumeAxe;
 static unsigned char s_requestItem = ITEM_BROKEN_SHOTGUN;
@@ -135,7 +142,7 @@ void zombie_mode_pickaxe_icon_init(const void* statusTim, unsigned int bytes)
 
 bool zm_shotgun_crushed(int player)
 {
-    return player > 0 && player < ZM_NET_MAX_PLAYERS && (s_crushedMask & (1u << player)) != 0;
+    return player >= 0 && player < ZM_NET_MAX_PLAYERS && (s_crushedMask & (1u << player)) != 0;
 }
 
 void zm_shotgun_clear_inventory(void)
@@ -211,8 +218,8 @@ void zm_shotgun_reset(void)
 
 static void shotgun_rescue_dialogue(void)
 {
-    if (s_breaker < 1 || s_breaker >= ZM_NET_MAX_PLAYERS || zm_net_char(s_breaker) != ZM_CHAR_BARRY) return;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    if (s_breaker < 0 || s_breaker >= ZM_NET_MAX_PLAYERS || zm_net_char(s_breaker) != ZM_CHAR_BARRY) return;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (i != s_breaker && (s_rescuedMask & (1u << i)) && zm_net_char(i) == ZM_CHAR_JILL) {
             // ROOM1091 event 0 uses voice IDs 0x35/0x36 (V105_05/06):
             // Jill's thanks followed by Barry's original sandwich reply.
@@ -373,8 +380,8 @@ bool zm_shotgun_route_open(unsigned char fromStage, unsigned char fromRoom,
 
 static bool shotgun_occupied(void)
 {
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        const ZmNetPeerState* p = zm_net_player(i);
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        const ZmNetPeerState* p = zm_seat_state(i);
         if (p && p->valid && !zm_shotgun_crushed(i) && !p->dead && !p->spectating && !p->transitioning &&
             p->stage == STAGE_MANSION_RETURN_1F && p->room == ROOM_TRAP_ROOM) return true;
     }
@@ -397,8 +404,8 @@ static void shotgun_finish(void)
     unsigned int now = zm_game_time_ms();
     s_remaining = (int)(s_deadline - now) > 0 ? s_deadline - now : 0;
     if (s_remaining && shotgun_occupied()) return;
-    if (!s_remaining) for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        const ZmNetPeerState* p = zm_net_player(i);
+    if (!s_remaining) for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        const ZmNetPeerState* p = zm_seat_state(i);
         if (p && p->valid && !zm_shotgun_crushed(i) && !p->dead && !p->spectating && !p->transitioning &&
             p->stage == STAGE_MANSION_RETURN_1F && p->room == ROOM_TRAP_ROOM) {
             s_crushedMask |= 1u << i; s_checkProgression = true; s_checkAt = now + 2000;
@@ -447,9 +454,11 @@ void zm_shotgun_take(const short* a, int src)
 {
     unsigned int seed = (unsigned short)a[6] | ((unsigned int)(unsigned short)a[7] << 16);
     if (!zombie_mode_armed() || seed != zm_net_seed()) return;
-    if (zm_net_role() == ZM_NET_ZOMBIE) {
-        if (src < 1 || src >= ZM_NET_MAX_PLAYERS || (a[0] != 1 && a[0] != 2)) return;
-        const ZmNetPeerState* p = zm_net_player(src);
+    // Requests (1 place, 2 break) are the host's; the rest come from it - to
+    // its own survivor too, in an AI director's game.
+    if (a[0] == 1 || a[0] == 2) {
+        if (zm_net_role() != ZM_NET_ZOMBIE || src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0) return;
+        const ZmNetPeerState* p = zm_seat_state(src);
         if (!p || !p->valid || zm_shotgun_crushed(src) || p->dead || p->spectating || p->transitioning || p->attacked ||
             p->stage != STAGE_MANSION_RETURN_1F) { shotgun_refuse(src); return; }
         shotgun_finish(); // finish/kill before considering a request at the deadline
@@ -472,6 +481,11 @@ void zm_shotgun_take(const short* a, int src)
             s_active = s_blocked = false; s_remaining = 0;
             Flg_on((int)g_roomItemsFlags, 1);
             shotgun_send(0, 0);
+            // The host's own survivor gets no broadcast back: its swap now.
+            if (src == zm_net_self() && s_request == 1) {
+                s_consume = true; s_consumeItem = s_requestItem; s_consumeSerial = (unsigned short)s_serial;
+                s_request = 0;
+            }
             dbg_printf("[shotgun] survivor %d placed %s shotgun, receipt %u\n", src,
                 s_placed == 2 ? "working" : "broken", s_serial);
         } else {
@@ -482,8 +496,8 @@ void zm_shotgun_take(const short* a, int src)
                 !zm_net_has_item(src, ITEM_PICK_AXE)) { shotgun_refuse(src); return; }
             if (!shotgun_clear(p->room, p->x, p->z)) { shotgun_refuse(src, 1); return; }
             unsigned int mask = 1u << src;
-            for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-                const ZmNetPeerState* victim = zm_net_player(i);
+            for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+                const ZmNetPeerState* victim = zm_seat_state(i);
                 if (victim && victim->valid && !zm_shotgun_crushed(i) && !victim->dead && !victim->spectating &&
                     victim->stage == STAGE_MANSION_RETURN_1F &&
                     (victim->room == ROOM_TRAP_ROOM || victim->room == ROOM_LIVING_ROOM)) mask |= 1u << i;
@@ -493,6 +507,10 @@ void zm_shotgun_take(const short* a, int src)
             shotgun_rescue_dialogue();
             if (shotgun_here(ROOM_TRAP_PASSAGE)) s_fadeAt = zm_game_time_ms() + 900;
             shotgun_send(3, mask);
+            // The host's own survivor: the broadcast's effects here.
+            if (src == zm_net_self()) { s_consumeAxe = !s_consumedAxe; s_request = 0; }
+            if ((mask & (1u << zm_net_self())) && zm_game_role() == ZM_NET_SURVIVOR &&
+                (shotgun_here(ROOM_TRAP_ROOM) || shotgun_here(ROOM_LIVING_ROOM) || shotgun_here(ROOM_TRAP_PASSAGE))) s_jump = true;
             dbg_printf("[shotgun] survivor %d broke door and spent pickaxe, rescue mask %X\n", src, mask);
         }
         return;
@@ -513,7 +531,7 @@ void zm_shotgun_take(const short* a, int src)
     if (s_blocked && !wasBlocked) s_crushAt = zm_game_time_ms();
     s_placer = (int)(metadata & 7) - 1; s_breaker = (int)((metadata >> 3) & 7) - 1;
     s_serial = metadata >> 6;
-    s_crushedMask |= ((unsigned short)a[4] >> 4) & 14u;
+    s_crushedMask |= ((unsigned short)a[4] >> 4) & 15u;
     s_remaining = a[3] >= 0 ? (unsigned int)a[3] * 100 : 0;
     s_deadline = zm_game_time_ms() + s_remaining;
     s_active = !s_broken && !s_blocked && a[3] >= 0;
@@ -535,7 +553,7 @@ void zm_shotgun_take(const short* a, int src)
         }
     }
     if (a[0] == 3 && !s_rescueSeen) {
-        s_rescuedMask = (unsigned short)a[4] & 14u;
+        s_rescuedMask = (unsigned short)a[4] & 15u;
         s_rescueSeen = true;
         shotgun_rescue_dialogue();
         if (shotgun_here(ROOM_TRAP_PASSAGE)) s_fadeAt = zm_game_time_ms() + 900;
@@ -586,8 +604,9 @@ void zm_shotgun_room(void)
             if (crushElapsed > 3000) crushElapsed = 3000;
             // Keep descending through death until the slab reaches the floor.
             // A disarmed trap returns at the normal descent speed.
-            *(int*)((unsigned char*)g_omodel_table[0] + 0x38) = s_blocked ? -4750 + (int)(crushElapsed*2250u/3000u) :
-                -10280 + (int)(depth*5530u/ZM_SHOTGUN_MS);
+            *(int*)((unsigned char*)g_omodel_table[0] + 0x38) = s_blocked ?
+                ZM_CEILING_KILL_Y + (int)(crushElapsed * (unsigned)(ZM_CEILING_FLOOR_Y - ZM_CEILING_KILL_Y) / 3000u) :
+                ZM_CEILING_TOP_Y + (int)(depth * (unsigned)(ZM_CEILING_KILL_Y - ZM_CEILING_TOP_Y) / ZM_SHOTGUN_MS);
         }
     }
 }
@@ -758,7 +777,7 @@ void zm_shotgun_import(const unsigned int in[16])
     s_remaining=in[2]<=ZM_SHOTGUN_MS?in[2]:0;
     s_placer=(int)in[3]-1;s_active=in[2]<=ZM_SHOTGUN_MS&&!s_broken&&!s_blocked;
     s_deadline=zm_game_time_ms()+s_remaining;s_rescuedMask=in[4];
-    s_crushedMask=in[5]&14u;s_checkProgression=(in[5]&16u)!=0;s_checkAt=zm_game_time_ms()+2000;
+    s_crushedMask=in[5]&15u;s_checkProgression=(in[5]&16u)!=0;s_checkAt=zm_game_time_ms()+2000;
     s_serial=in[6];s_breaker=(int)in[7]-1;
     for(int i=0;i<4;i++){s_receipt[i]=in[8+i];s_receiptItem[i]=in[12+i];}
     int self=zm_net_self();s_consumedReplacement=self>0?(unsigned short)s_receipt[self]:0;

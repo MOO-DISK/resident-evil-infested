@@ -66,8 +66,12 @@ static std::vector<NetEvent> sent;
 static unsigned int plat_time_ms() { return now; }
 static unsigned int zm_net_seed() { return seed; }
 static int zm_net_self() { return s_self; }
-static int zm_net_char(int p) { return p > 0 && p < 4 ? p - 1 : -1; }
+static bool hostPlays;   // an AI director's game: the host is seat 0's survivor
+static int zm_net_char(int p) { return p == 0 ? (hostPlays ? 3 : -1) : p > 0 && p < 4 ? p - 1 : -1; }
 static const int* zm_net_player(int p) { static int marker; return p > 0 && p < 4 ? &marker : NULL; }
+static const int* zm_seat_state(int p) { static int own; return p == 0 ? (hostPlays ? &own : NULL) : zm_net_player(p); }
+static int zm_net_role() { return s_role; }
+static bool zm_match_authority() { return s_gameRole != ZM_NET_SURVIVOR || s_role == ZM_NET_ZOMBIE; }
 static int zm_survivors_in_ms() { return elapsed; }
 static unsigned int zm_clock_left_ms() { return elapsed >= ZM_TIME_LIMIT_MS ? 0 : ZM_TIME_LIMIT_MS - elapsed; }
 static bool zm_all_survivors_dead() { return allDead != 0; }
@@ -100,7 +104,7 @@ static void reset(int role) {
     s_finalElapsedMs = s_winAtMs = s_clockSentMs = 0;
     s_zombieModeArmed = s_clockHave = true;
     elapsed = 1000; allDead = 0; statsCalls = statsFrames = relays = 0;
-    s_inboxCount = 0; sent.clear(); g_playerEntity.health = 140;
+    s_inboxCount = 0; sent.clear(); g_playerEntity.health = 140; hostPlays = false;
 }
 static NetEvent request(int p = 1) {
     return {ZM_EV_WIN,(unsigned char)p,ZM_NET_DIRECTOR,
@@ -170,6 +174,15 @@ int main() {
     s_zombieModeArmed = true;
     assert(zm_match_take_win(s_pendingWin.args, s_pendingWin.src));
     assert(s_winShown && reason == ZM_END_ESCAPE && statsCalls == 1);
+    // The host of an AI director's game escapes itself: its own request (the
+    // loopback hands it straight to zm_match_take_win) wins for seat 0, and
+    // every survivor copy accepts seat 0 as the winner.
+    reset(ZM_NET_ZOMBIE); s_gameRole = ZM_NET_SURVIVOR; hostPlays = true;
+    assert(zm_match_take_win(request(0).args, 0));
+    assert(s_winShown && reason == ZM_END_ESCAPE && winner == 0 && sent.back().dst == ZM_NET_ALL);
+    NetEvent hostEscape = sent.back();
+    reset(ZM_NET_SURVIVOR); hostPlays = true; net_take_event(hostEscape, 0);
+    assert(s_winShown && winner == 0);
     puts("Host result arbitration, race ordering, stale/forged events and initialization checks passed.");
 }
 '''

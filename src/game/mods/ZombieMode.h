@@ -214,6 +214,12 @@ bool zombie_mode_cut_skip(void);
 void zombie_mode_cut_closeup(unsigned char prevCam);
 void zombie_mode_cut_restored(void);
 void zombie_mode_message_frame(void);
+// check_action_object, before an Action press runs its entry: true = refuse it
+// (an examine/reveal still running, or its close-up still up). cmd_room_action:
+// true = drop the call (an event cut short by a hit or grab no longer offers
+// its pickup).
+bool zombie_mode_action_busy(const unsigned char* entry);
+bool zombie_mode_event_room_action_skip(unsigned char actionIdx);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,
 // 2 Barry), else `base`. EntityModelLoader.cpp.

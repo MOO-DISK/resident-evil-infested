@@ -63,6 +63,7 @@ static const unsigned char* g_MessagePtr;
 struct Message { int dst; short a[8]; };
 static std::vector<Message> sent;
 int zm_game_role() { return role; }
+bool zm_match_authority() { return role != ZM_NET_SURVIVOR; }
 int zm_net_self() { return self; }
 int zm_net_char(int p) { return chars[p]; }
 const char* zm_char_name(int) { return "X"; }

@@ -68,6 +68,8 @@ static unsigned int   s_waitStart = 0;     // when the shown page finished typin
 static signed char    s_evtSlot = -1;      // event slot whose SCD command is running
 static bool           s_examine[8];        // per event slot: an examine event (or a reveal)
 static bool           s_reveal[8];         // per event slot: a reveal played as a close-up
+static unsigned char  s_script[8];         // per event slot: the script it runs
+static bool           s_cut[8];            // per event slot: cut short by a hit, grab or death
 
 // Reveals: scenes that take the control, cut the camera and pose or place
 // the player to show what a puzzle changed. In the mode they play like an
@@ -115,6 +117,7 @@ static bool zm_is_reveal(int script)
 static int            s_closeSlot = -1;    // the event that cut to a close-up
 static unsigned char  s_closeCam, s_prevCam, s_closeStage, s_closeRoom;
 static bool           s_closeReleased = false;
+static bool           s_closeUp = false;   // a close-up camera is on screen, not yet cut back from
 static unsigned short s_lastId = 0xFFFF;   // the last passive message, and when it ended
 static unsigned int   s_lastEnd = 0;
 
@@ -206,6 +209,8 @@ void zombie_mode_event_init(int slot, int script)
     const bool inherit = zombie_mode_armed() && s_evtSlot >= 0 && s_evtSlot < 8 && s_reveal[s_evtSlot];
     s_reveal[slot] = inherit || (zombie_mode_armed() && zm_is_reveal(script));
     s_examine[slot] = s_reveal[slot] || (zombie_mode_armed() && zm_evt_is_examine(script));
+    s_script[slot] = (unsigned char)script;
+    s_cut[slot] = false;
     if (slot == s_closeSlot) s_closeSlot = -1;
     if (s_examine[slot]) dbg_printf("[msg] event %d (slot %d) is an %s event\n", script, slot,
                                     s_reveal[slot] ? "reveal" : "examine");
@@ -226,7 +231,18 @@ void zombie_mode_cut_closeup(unsigned char prevCam)
     if (!zm_in_examine()) return;
     // A scene cutting from one close-up to the next still returns to the
     // camera before the first.
-    if (!zm_same_close(s_closeSlot, s_evtSlot)) s_prevCam = prevCam;
+    if (!zm_same_close(s_closeSlot, s_evtSlot)) {
+        // Locked again from its own close-up, never cut back from (a scene
+        // started over while it ran): the camera to go back to is still the
+        // room's. Taking the close-up's own left the camera stuck on it.
+        if (s_closeUp && prevCam == s_closeCam && g_stageId == s_closeStage && g_roomId == s_closeRoom) {
+            g_cutId = s_prevCam;
+            dbg_printf("[msg] close-up %d locked again: back to camera %d kept\n", (int)prevCam, (int)s_prevCam);
+        } else {
+            s_prevCam = prevCam;
+        }
+    }
+    s_closeUp = true;
     s_closeSlot = s_evtSlot;
     s_closeCam = g_roomCameraId;
     s_closeStage = g_stageId;
@@ -236,6 +252,7 @@ void zombie_mode_cut_closeup(unsigned char prevCam)
 
 void zombie_mode_cut_restored(void)
 {
+    s_closeUp = false;
     if (zm_in_examine() && zm_same_close(s_closeSlot, s_evtSlot) && !s_closeReleased) s_closeSlot = -1;
 }
 
@@ -244,6 +261,7 @@ void zombie_mode_cut_restored(void)
 static void zm_close_release(void)
 {
     extern void cut_set(void);
+    s_closeUp = false;
     g_main_state_flags &= ~MSF_CAMERA_LOCK;
     if (g_RdtPointer == NULL || g_RdtPointer->cam_switch_zones == NULL) return;
     const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
@@ -261,26 +279,79 @@ static void zm_close_release(void)
 
 void zombie_mode_message_frame(void)
 {
-    if (s_closeSlot < 0) return;
-    if (!zombie_mode_armed() || g_stageId != s_closeStage || g_roomId != s_closeRoom ||
-        !zm_close_running()) {
+    if (!zombie_mode_armed()) {
         s_closeSlot = -1;
+        s_closeUp = false;
+        return;
+    }
+    // Hit, grabbed or dead: every examine or reveal still running is cut
+    // short - it plays on (a puzzle's scene still finishes) but offers no
+    // pickup afterwards (zombie_mode_event_room_action_skip), and its
+    // close-up gives the camera back below.
+    const bool attacked = g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0;
+    if (attacked) {
+        for (int i = 0; i < 8; i++) {
+            if (s_cut[i] || !s_examine[i] || g_ScdEventTable[i].active == 0) continue;
+            s_cut[i] = true;
+            dbg_printf("[msg] event %d (slot %d) cut short: survivor attacked\n", (int)s_script[i], i);
+        }
+    }
+    if (s_closeSlot < 0) return;
+    if (g_stageId != s_closeStage || g_roomId != s_closeRoom || !zm_close_running()) {
+        s_closeSlot = -1;
+        s_closeUp = false;
         return;
     }
     if (s_closeReleased) return;
     // Someone else has the camera now: not ours to give back.
     if ((g_main_state_flags & MSF_CAMERA_LOCK) == 0 || g_roomCameraId != s_closeCam) {
         s_closeSlot = -1;
+        s_closeUp = false;
         return;
     }
-    // Hit, grabbed or dead: back to the survivor at once.
-    const bool attacked = g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0;
     if (!attacked) {
         if ((g_message_flags & 0x0101) != 0x0101) return;
         if ((g_PlayerDpadHeld & (ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B)) == 0) return;
     }
     s_closeReleased = true;
     zm_close_release();
+}
+
+// An Action press while a scene is playing. The original takes the control
+// for these, so a press cannot reach them; in the mode an examine or a
+// reveal leaves it with the survivor, and each press started its scene over
+// in the same slot - the close-up locked again from itself (a stuck camera)
+// and every run asked for the pickup once more. So a press does not start an
+// examine or reveal that is still running, and while its close-up is on
+// screen no other pickup (handler 4) or scene (handler 9) starts either.
+bool zombie_mode_action_busy(const unsigned char* entry)
+{
+    if (!zombie_mode_armed() || entry == NULL) return false;
+    const unsigned char handler = entry[0];
+    if (handler != 4 && handler != 9) return false;
+    if (s_closeSlot >= 0 && s_closeUp && !s_closeReleased) {
+        dbg_printf("[msg] action (handler %d) refused: close-up still up\n", (int)handler);
+        return true;
+    }
+    if (handler != 9) return false;
+    const int slot = entry[2], script = entry[4];
+    for (int i = 0; i < 8; i++) {
+        if (g_ScdEventTable[i].active == 0 || !s_examine[i]) continue;
+        if (i != slot && s_script[i] != script) continue;
+        dbg_printf("[msg] event %d refused: slot %d still runs event %d\n", script, i, (int)s_script[i]);
+        return true;
+    }
+    return false;
+}
+
+// cmd_room_action from an event cut short by a hit: no take screen (4) or
+// item box (8) opens afterwards. The item stays where it lies.
+bool zombie_mode_event_room_action_skip(unsigned char actionIdx)
+{
+    if (!zombie_mode_armed() || s_evtSlot < 0 || s_evtSlot >= 8 || !s_cut[s_evtSlot]) return false;
+    if (actionIdx != 4 && actionIdx != 8) return false;
+    dbg_printf("[msg] event %d (slot %d): pickup dropped, cut short\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
+    return true;
 }
 
 unsigned short zombie_mode_message_pause(unsigned short msgId, unsigned short pause,

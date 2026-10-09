@@ -30,7 +30,7 @@ enum { ENEMY_HUNTER=6, ENEMY_CHIMERA=9, ENEMY_TYRANT_1=12, ENEMY_TYRANT_2=16,
        ZM_FIRST_SURVIVOR_SLOT=27, ZM_ROSTER_MAX=8, ZM_UID_EXTRA_FIRST=256 };
 struct Entity { unsigned char id; int status_flags, health; };
 static Entity g_EnemiesList[30];
-struct ZmRosterEntry { bool used, alive; unsigned short uid; unsigned char stage, room, id; };
+struct ZmRosterEntry { bool used, alive; unsigned short uid; unsigned char stage, room, id; bool departed; };
 static ZmRosterEntry s_roster[ZM_ROSTER_MAX];
 static unsigned char g_stageId=5, g_roomId=1;
 static bool s_worldOn=true, s_on=true;
@@ -104,7 +104,7 @@ def main():
         ("ZombieEconomy.cpp", ["zm_econ_monster_slots"]),
         ("ZombieWorld.cpp", ["zm_world_room_extra_count", "zm_world_room_unspawned"]),
         ("ZombieMode.cpp", ["zm_room_monster_count", "zm_room_monster_slots"]),
-        ("ZombieEconomy.cpp", ["zm_econ_can_place"]),
+        ("ZombieEconomy.cpp", ["zm_econ_room_fits", "zm_econ_can_place"]),
     ]:
         for name in names:
             source += function("src/game/mods/" + filename, name)

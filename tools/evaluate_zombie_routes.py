@@ -59,6 +59,9 @@ def adapter_source():
                         r"ZM_RANDOM_MODELS)\b", line):
                 definitions.append(line)
     definitions += ["struct ZmSpawnSpots {" + between(internal, "struct ZmSpawnSpots {", "};") + "};",
+                    "#define ZM_PLACE_SPOTS 16",
+                    "struct ZmPlaceSpot {" + between(internal, "struct ZmPlaceSpot {", "};") + "};",
+                    "struct ZmPlaceSpots {" + between(internal, "struct ZmPlaceSpots {", "};") + "};",
                     "static const signed char kScdCmdWidth[0x51] = {" +
                     between(mode, "static const signed char kScdCmdWidth[0x51] = {", "};") + "};",
                     "int zm_scd_width(unsigned char op) { return op < sizeof(kScdCmdWidth) ? kScdCmdWidth[op] : -1; }"]

@@ -484,6 +484,11 @@ unsigned short zm_world_add_extra(unsigned char stage, unsigned char room, unsig
                                   unsigned char behavior, short x, short y, short z, short angle,
                                   bool directorControlled = false, short initialHealth = 0x7FFF);
 int  zm_world_room_extra_count(unsigned char stage, unsigned char room, bool slots = false);
+int  zm_world_room_extra_ids(unsigned char stage, unsigned char room, unsigned char* ids, int max,
+                             short* xz = NULL, unsigned short* uids = NULL);   // uid 0: busy (feeding, possessed)
+unsigned short zm_world_move_extra(unsigned char stage, unsigned char room, unsigned short uid,
+                                   unsigned char toStage, unsigned char toRoom,
+                                   short x, short y, short z, short angle);
 bool zm_world_missing_extra(unsigned short* uid, unsigned char* id, unsigned char* behavior,
                             short* x, short* y, short* z, short* angle,
                             const unsigned short* skip, int skipCount);
@@ -527,6 +532,19 @@ int  zm_world_room_zombies(unsigned char stage, unsigned char room, ZmJumpTarget
 bool zm_zombie_alive(void);
 // ZM_NET_OFF / ZM_NET_ZOMBIE / ZM_NET_SURVIVOR for the current game.
 int  zm_game_role(void);
+// This copy keeps the match - the clock, the outcome, the director's points
+// and the arbitration of shared items: single player, or the host. In an AI
+// director's game the host's game role is ZM_NET_SURVIVOR (its player is a
+// survivor in seat 0) while it still arbitrates.
+bool zm_match_authority(void);
+// A survivor seat as this copy knows it: another player's last STATE, or this
+// copy's own survivor (built from its player now - the host's, in an AI
+// director's game). NULL for a free seat, the human director's, or one not in.
+const ZmNetPeerState* zm_seat_state(int player);
+// The other survivors' stand-ins: seat n in enemy slot ZM_SURVIVOR_SLOT_BASE + n
+// (seat 0 only in an AI director's game). Monsters use the slots below.
+#define ZM_SURVIVOR_SLOT_BASE  26
+#define ZM_FIRST_SURVIVOR_SLOT ZM_SURVIVOR_SLOT_BASE
 // Pose an entity from the other copy's skeleton.
 void zm_apply_net_pose(Entity* e, const ZmNetPeerState* p);
 void zm_apply_pose(Entity* e, const ZmNetPose* pose);
@@ -573,6 +591,8 @@ struct ZmSurvivorInfo {
     unsigned char stage, room;
     int           character;     // ZM_CHAR_*
     bool          dead;
+    short         health;
+    int           player;        // seat (0 the host's, in an AI director's game)
 };
 int  zm_survivor_list(ZmSurvivorInfo* out, int max);
 // Doorway reinforcements: host purchases, loaded room owner validates geometry.
@@ -599,6 +619,19 @@ struct ZmSpawnSpots {
 };
 extern const ZmSpawnSpots g_zmSpawnSpots[];
 extern const int g_zmSpawnSpotCount;
+// The AI director's finer spots (same tool): up to ZM_PLACE_SPOTS per room,
+// spread over its floor, off the steps and clear of the doorways. `open`: the
+// floor cells in the 7 x 7 cell square around the spot (1..49) - low in a
+// corridor or between furniture. `y`: the room's common floor height.
+#define ZM_PLACE_SPOTS 16
+struct ZmPlaceSpot { short x, z; unsigned char open; };
+struct ZmPlaceSpots {
+    unsigned char stage, room, count;
+    short         y;
+    ZmPlaceSpot   spot[ZM_PLACE_SPOTS];
+};
+extern const ZmPlaceSpots g_zmPlaceSpots[];
+extern const int g_zmPlaceSpotCount;
 
 // The director's points (ZombieEconomy.cpp): prices, unlock times and the
 // rooms' monster caps.
@@ -610,6 +643,7 @@ unsigned int zm_econ_unlock_ms(unsigned char id); // normal rules, without debug
 int  zm_econ_unlock_left_ms(unsigned char id);      // 0 now, -1 survivors not in yet
 int  zm_econ_room_cap(unsigned char stage, unsigned char room);
 int  zm_econ_monster_slots(unsigned char id);
+bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id);
 bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id,
                        const char* name, char* why, int whyLen);
 void zm_econ_pay(unsigned char id);
@@ -637,13 +671,21 @@ void zm_ai_draw(void);
 int  zm_ai_level(void);
 int  zm_ai_income_pct(void);
 int  zm_ai_unlock_pct(void);
-// The host's copy plays no director of its own (a lobby "AI DIRECTOR" game):
-// no body, the map open to watch, never a room's owner.
+// A lobby "AI DIRECTOR" game, on its host: the AI plays the director there
+// while the host's own player is the survivor in seat 0.
 bool zm_ai_hosted(void);
 const char* zm_ai_level_name(int level);   // "EASY" .. "NIGHTMARE"
 // ZombieMode.cpp: the map placement's rules and the placement itself.
 bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned char id);
-bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name);
+// The AI's unseen walk: may a monster `id` come into (stage, room) - the
+// placement rules less the price and unlock - and does any copy have the room
+// loaded or a player in it (then nothing may move in or out unseen)?
+bool zm_director_move_allowed(unsigned char stage, unsigned char room, unsigned char id);
+bool zm_room_watched(unsigned char stage, unsigned char room);
+// `at`: { x, y, z, angle } for a room that is not loaded (the AI's spot), or
+// NULL for the map's own choice (zm_remote_spot).
+bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name,
+                          const short* at = NULL);
 
 // The end of a match (ZombieStats.cpp): how it ended, each player's numbers
 // (kept on its own copy, sent with ZM_EV_STATS), and the screen every copy
@@ -701,6 +743,7 @@ void zm_stats_revived(void);
 void zm_spec_frame(void);                 // zombie_mode_net_frame, before the STATE send
 bool zm_spec_input(void);                 // zombie_mode_survivor_input: true while it has the pad
 bool zm_spec_away(void);                  // left its corpse's room: in no room for the others
+const ZmNetPeerState* zm_spec_corpse(void); // the watching survivor's body (stage, room, spot), else NULL
 bool zm_spec_player_frozen(void);         // no animation, collision or shadow while watching
 void zm_spec_room_exit(void);             // zombie_mode_room_exit
 bool zm_spec_jump_record(const unsigned char* record);

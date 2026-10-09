@@ -81,10 +81,10 @@ static bool pickup_same(const short* a, const short* b)
 
 void zm_pickups_frame(void)
 {
-    if (zm_game_role() != ZM_NET_ZOMBIE) return;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    if (zm_net_role() != ZM_NET_ZOMBIE) return;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         PickupClaim& c = s_claims[i];
-        if (!c.active || (zm_net_player(i) != NULL && plat_time_ms() - c.atMs < 10000u)) continue;
+        if (!c.active || (zm_seat_state(i) != NULL && plat_time_ms() - c.atMs < 10000u)) continue;
         c.active = false;
         pickup_send(i, PK_DENY, c.args);
     }
@@ -140,14 +140,17 @@ void zm_pickups_take(const short* a, int src)
     unsigned int seed = (unsigned short)a[6] | ((unsigned int)(unsigned short)a[7] << 16);
     if (!zombie_mode_armed() || seed != zm_net_seed()) return;
     if (a[2] != 0 && a[2] != 1) return;
-    if (zm_game_role() == ZM_NET_SURVIVOR) {
-        if (src != ZM_NET_DIRECTOR) return;
+    // The host's replies; on the host of an AI director's game they also come
+    // back to its own survivor's requests (src is the host either way).
+    bool reply = a[0] == PK_GRANT || a[0] == PK_DENY || a[0] == PK_TAKEN || a[0] == PK_DONE;
+    if (reply) {
+        if (zm_game_role() != ZM_NET_SURVIVOR || src != ZM_NET_DIRECTOR) return;
         if (a[0] == PK_TAKEN) pickup_taken(a);
         else if (s_waiting && s_reply != PK_DONE && pickup_same(a, s_request) &&
                  (a[0] == s_expected || a[0] == PK_DENY)) s_reply = a[0];
         return;
     }
-    if (zm_game_role() != ZM_NET_ZOMBIE || src < 1 || src >= ZM_NET_MAX_PLAYERS) return;
+    if (zm_net_role() != ZM_NET_ZOMBIE || src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0) return;
     zm_pickups_frame();
     PickupClaim& c = s_claims[src];
     unsigned short token = (unsigned short)a[1];
@@ -194,11 +197,11 @@ void zm_pickups_take(const short* a, int src)
     memset(&c, 0, sizeof(c));
     c.seen = true;
     memcpy(c.args, a, sizeof(c.args));
-    const ZmNetPeerState* peer = zm_net_player(src);
+    const ZmNetPeerState* peer = zm_seat_state(src);
     bool available = !zombie_mode_match_over() && peer != NULL && !peer->dead && pickup_available(a);
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         PickupClaim& other = s_claims[i];
-        if (other.active && zm_net_player(i) == NULL) other.active = false;
+        if (other.active && zm_seat_state(i) == NULL) other.active = false;
         if (i != src && other.active && other.args[2] == a[2] && other.args[3] == a[3]) available = false;
     }
     c.active = available;
@@ -224,7 +227,7 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
 {
     if (!zombie_mode_armed() || zm_game_role() != ZM_NET_SURVIVOR) return true;
     if (s_waiting || evt == NULL || rec == NULL || g_playerEntity.health < 0 ||
-        zombie_mode_match_over() || zm_net_status() != ZM_NET_CONNECTED) return false;
+        zombie_mode_match_over() || !zm_net_active()) return false;
     unsigned short uid = 0;
     bool drop = zm_drop_pickup_uid(rec, &uid);
     if ((zm_drop_is_pickup(rec) && !drop) ||
@@ -245,7 +248,7 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
     unsigned int sentAt = start;
     bool interrupted = false;
     while (s_reply < 0 && !interrupted && !zombie_mode_match_over() && g_playerEntity.health >= 0 &&
-           zm_net_status() == ZM_NET_CONNECTED && plat_time_ms() - start < 5000u) {
+           zm_net_active() && plat_time_ms() - start < 5000u) {
         // Keep the same live-world simulation as the pickup viewer. Network
         // latency must not give the survivor a pause/invulnerability window.
         interrupted = zombie_mode_menu_frame() || interrupted;
@@ -255,7 +258,7 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
         }
         if (s_reply < 0) Task_sleep(1);
     }
-    bool grant = s_reply == PK_GRANT && zm_net_status() == ZM_NET_CONNECTED &&
+    bool grant = s_reply == PK_GRANT && zm_net_active() &&
         !interrupted && !zombie_mode_match_over() && g_playerEntity.health >= 0 &&
         request[4] == (short)(g_stageId | (g_roomId << 8)) &&
         *(unsigned char**)(evt + 8) == rec && evt[0] != 0 && pickup_fits(rec);
@@ -271,7 +274,7 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
     sentAt = plat_time_ms();
     // Once committed, a timeout must not release the identity for another
     // award. Wait for the reliable receipt or a lost connection.
-    while (s_reply < 0 && zm_net_status() == ZM_NET_CONNECTED) {
+    while (s_reply < 0 && zm_net_active()) {
         zombie_mode_menu_frame();
         // Semantic retry also recovers a message rejected by a full outgoing
         // reliable queue. A duplicate commit only resends the host receipt.

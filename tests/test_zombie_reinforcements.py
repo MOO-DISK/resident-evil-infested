@@ -59,6 +59,9 @@ struct Event { int dst, src; short a[8]; };
 static std::vector<Event> events;
 static unsigned int plat_time_ms() { return now; }
 static int zm_game_role() { return role; }
+static int zm_net_role() { return role; }
+static int zm_net_char(int i) { return i == 0 ? -1 : 0; }   // seat 0: the human director
+#define ZM_FIRST_SURVIVOR_SLOT 26
 static int zm_net_self() { return self; }
 static bool zm_spec_away() { return false; }
 static bool zombie_mode_match_over() { return matchOver; }

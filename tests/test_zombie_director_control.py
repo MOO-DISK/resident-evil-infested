@@ -44,6 +44,7 @@ static bool s_worldOn=true,s_zombieModeArmed=true,s_iOwn=true,s_remoteGrab=false
 static bool s_slotRemote[30]={};
 static int role=ZM_NET_ZOMBIE,s_gameRole=ZM_NET_ZOMBIE,self=0,s_grabSlot=-1;
 static int zm_game_role() { return role; }
+static bool zm_match_authority() { return role != ZM_NET_SURVIVOR; }
 static int zm_net_self() { return self; }
 static int zm_room_owner_here() { return -1; }
 static bool zm_survivor_role() { return s_gameRole==ZM_NET_SURVIVOR; }

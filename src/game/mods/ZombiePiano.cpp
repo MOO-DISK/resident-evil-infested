@@ -500,7 +500,7 @@ void zm_piano_take(const short* a, int src)
         if (s_listeners == 0) piano_fade();
         break;
     case PIANO_DONE:
-        if (zm_game_role() == ZM_NET_SURVIVOR || src != player) break;
+        if (!zm_match_authority() || src != player) break;
         s_listeners &= ~(1 << player);
         if (s_alertPlayer == player) s_alertPlayer = -1;
         if (!zm_piano_open()) {

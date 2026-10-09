@@ -146,8 +146,8 @@ static bool rs_gallery_solved(void)
 static bool rs_someone_here(void)
 {
     int self = zm_net_self();
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        if (i == self) continue;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (i == self || zm_net_char(i) < 0) continue;
         const ZmNetPeerState* p = zm_net_player(i);
         if (p == NULL || !p->valid || p->dead || p->spectating) continue;
         if (p->viewStage == g_stageId && p->viewRoom == g_roomId) return true;

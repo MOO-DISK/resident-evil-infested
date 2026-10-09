@@ -138,6 +138,8 @@ void zm_spec_new_game(void)
 }
 
 bool zm_spec_away(void) { return s_away; }
+// Where this copy's dead survivor lies once it watches (its STATE says so).
+const ZmNetPeerState* zm_spec_corpse(void) { return s_started ? &s_corpse : NULL; }
 
 bool zm_spec_player_frozen(void)
 {
@@ -153,7 +155,7 @@ static bool zm_spec_death_finished(void)
 
 static const ZmNetPeerState* zm_spec_watchable(int i)
 {
-    if (i < 1 || i >= ZM_NET_MAX_PLAYERS || i == zm_net_self() || zm_net_char(i) < 0) return NULL;
+    if (i < 0 || i >= ZM_NET_MAX_PLAYERS || i == zm_net_self() || zm_net_char(i) < 0) return NULL;
     const ZmNetPeerState* p = zm_net_player(i);
     if (p == NULL || p->dead || p->spectating) return NULL;
     return p;
@@ -163,10 +165,10 @@ static const ZmNetPeerState* zm_spec_watchable(int i)
 // for -1), -1 without one.
 static int zm_spec_next(int from, int dir)
 {
-    int n = ZM_NET_MAX_PLAYERS - 1;         // the survivor seats, 1..3
-    int at = (from >= 1) ? from - 1 : (dir > 0 ? n - 1 : 0);
+    int n = ZM_NET_MAX_PLAYERS;             // every seat; zm_spec_watchable skips the director's
+    int at = (from >= 0) ? from : (dir > 0 ? n - 1 : 0);
     for (int k = 1; k <= n; k++) {
-        int i = 1 + ((at + dir * k) % n + n) % n;
+        int i = ((at + dir * k) % n + n) % n;
         if (zm_spec_watchable(i) != NULL) return i;
     }
     return -1;
@@ -289,7 +291,8 @@ void zm_spec_frame(void)
     s_camValid = false;
     if (zm_game_role() == ZM_NET_OFF || zombie_mode_match_over() || zombie_mode_pickup_waiting()) return;
     unsigned int now = zm_game_time_ms();
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (zm_net_char(i) < 0) continue;
         const ZmNetPeerState* peer = zm_net_player(i);
         bool dead = i == zm_net_self() ? g_playerEntity.health < 0 : peer != NULL && peer->dead;
         if (dead && !s_deathSeen[i]) {
@@ -481,7 +484,7 @@ void zm_revive_cancel(void)
 static bool zm_revive_eligible(int i)
 {
     const ZmNetPeerState* p = zm_net_player(i);
-    return i > 0 && i < ZM_NET_MAX_PLAYERS && p != NULL && p->dead && p->spectating &&
+    return i >= 0 && i < ZM_NET_MAX_PLAYERS && zm_net_char(i) >= 0 && p != NULL && p->dead && p->spectating &&
            !zm_shotgun_crushed(i) && s_deathSeen[i] && s_revives[i] < ZM_REVIVE_LIMIT;
 }
 
@@ -502,7 +505,7 @@ static int zm_revive_near(void)
         (g_message_flags & 0x0101) != 0x0101 || g_playerEntity.isBeingAttackedFlag != 0 || zm_revive_item() < 0)
         return -1;
     int best = -1, dist = ZM_REVIVE_RANGE * ZM_REVIVE_RANGE + 1;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (!zm_revive_eligible(i)) continue;
         const ZmNetPeerState* p = zm_net_player(i);
         if (p->stage != g_stageId || p->room != g_roomId) continue;
@@ -547,7 +550,7 @@ void zm_revive_take(const short* a, int src)
 {
     int target = a[0];
     if (zm_shotgun_crushed(target)) return;
-    if (src == ZM_NET_DIRECTOR && zm_game_role() == ZM_NET_SURVIVOR) {
+    if (src == ZM_NET_DIRECTOR && a[2] == 1 && zm_game_role() == ZM_NET_SURVIVOR) {
         // The host granted our completed hold. Consume only the winner's item
         // and commit; a refused or cancelled hold spends nothing.
         if (target != s_requestTarget) return;
@@ -565,10 +568,17 @@ void zm_revive_take(const short* a, int src)
         s_requestTarget = -1;
         s_reviveTarget = -1;
         zm_net_send_event(ZM_EV_REVIVE, a[0], a[1], 0, 0);
+        // The host reviving (an AI director's game): its commit does not come
+        // back to it, so it takes it here as it would a survivor's.
+        if (zm_net_role() == ZM_NET_ZOMBIE) {
+            short commit[8] = { a[0], a[1], 0, 0, 0, 0, 0, 0 };
+            if (zm_revive_host_claim(a[0], a[1], zm_net_self())) zm_revive_take(commit, zm_net_self());
+        }
         return;
     }
-    if (zombie_mode_match_over() || src < 1 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0 ||
-        target < 1 || target >= ZM_NET_MAX_PLAYERS || src == target || s_revives[target] >= ZM_REVIVE_LIMIT || a[1] <= 0) return;
+    if (a[2] == 1) return;          // another survivor's grant
+    if (zombie_mode_match_over() || src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0 ||
+        target < 0 || target >= ZM_NET_MAX_PLAYERS || zm_net_char(target) < 0 || src == target || s_revives[target] >= ZM_REVIVE_LIMIT || a[1] <= 0) return;
     ZmPerkInfo info;
     zm_perk_describe(zm_net_char(target), &info);
     int expected = info.health * (zm_net_char(src) == ZM_CHAR_REBECCA ? ZM_REVIVE_MEDIC_PCT : ZM_REVIVE_HEALTH_PCT) / 100;
@@ -586,7 +596,8 @@ void zm_revive_take(const short* a, int src)
 // so two requests in the same packet poll cannot both win the reservation.
 bool zm_revive_host_claim(int target, int health, int src)
 {
-    if (target < 1 || target >= ZM_NET_MAX_PLAYERS || src < 1 || src >= ZM_NET_MAX_PLAYERS || src == target)
+    if (target < 0 || target >= ZM_NET_MAX_PLAYERS || src < 0 || src >= ZM_NET_MAX_PLAYERS || src == target ||
+        zm_net_char(target) < 0 || zm_net_char(src) < 0)
         return false;
     if (health == 0) {
         if (s_claimOwner[target] == src && !s_claimDone[target]) s_claimOwner[target] = -1;
@@ -607,9 +618,9 @@ bool zm_revive_host_claim(int target, int health, int src)
     // Do not expire a live grant: its winner may already have spent the item
     // while its reliable commit is being retransmitted. Explicit cancellation
     // releases it; a disconnected requester cannot later send a commit.
-    if (s_claimOwner[target] >= 0 && zm_net_player(s_claimOwner[target]) != NULL) return false;
-    const ZmNetPeerState* body = zm_net_player(target);
-    const ZmNetPeerState* reviver = zm_net_player(src);
+    if (s_claimOwner[target] >= 0 && zm_seat_state(s_claimOwner[target]) != NULL) return false;
+    const ZmNetPeerState* body = zm_seat_state(target);
+    const ZmNetPeerState* reviver = zm_seat_state(src);
     if (body == NULL || reviver == NULL || !body->dead || !body->spectating || reviver->dead || reviver->spectating || reviver->attacked ||
         body->stage != reviver->stage || body->room != reviver->room || !s_deathSeen[target]) return false;
     ZmPerkInfo info;

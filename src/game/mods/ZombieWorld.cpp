@@ -83,10 +83,14 @@ static bool s_worldOn = false;
 bool zm_world_shotgun_clear(unsigned char stage, unsigned char room, int x, int z)
 {
     bool loaded = g_stageId == stage && g_roomId == room;
-    if (loaded) for (int i = 0; i < 27; i++) {
+    // A hidden entity (the human director's body stand-in while it is
+    // elsewhere - every survivor copy keeps one, unused in an AI director's
+    // game) and anything that is no monster are not in the way.
+    if (loaded) for (int i = 0; i < ZM_FIRST_SURVIVOR_SLOT; i++) {
         const Entity& e = g_EnemiesList[i];
-        if ((e.status_flags & ENTITY_STATUS_ACTIVE) && e.health >= 0 &&
-            zm_shotgun_monster_blocks(room, e.scaMatrixData.localMatrix.t[0],
+        if ((e.status_flags & ENTITY_STATUS_ACTIVE) == 0 || e.health < 0 || e.id >= NPC_ENTITIES_IDS) continue;
+        if (zombie_mode_hide_entity(&e)) continue;
+        if (zm_shotgun_monster_blocks(room, e.scaMatrixData.localMatrix.t[0],
                 e.scaMatrixData.localMatrix.t[2], x, z)) return false;
     }
     for (int i = 0; i < ZM_ROSTER_MAX; i++) {
@@ -107,7 +111,7 @@ bool zm_world_shotgun_clear(unsigned char stage, unsigned char room, int x, int 
 // entities follow their usual death handlers and ownership/roster capture.
 static void zm_world_shotgun_kill(unsigned char room)
 {
-    if (g_stageId == STAGE_MANSION_RETURN_1F && g_roomId == room) for (int i = 0; i < 27; i++) {
+    if (g_stageId == STAGE_MANSION_RETURN_1F && g_roomId == room) for (int i = 0; i < ZM_FIRST_SURVIVOR_SLOT; i++) {
         Entity& e = g_EnemiesList[i];
         if ((e.status_flags & ENTITY_STATUS_ACTIVE) && e.health >= 0) {
             e.health = -1;
@@ -135,7 +139,7 @@ int zm_world_reconnect_export(void* out, int capacity)
             ZmRosterEntry& r = s_roster[i];
             if (!r.used || r.departed || r.stage != g_stageId || r.room != g_roomId) continue;
             int slot = zm_world_slot_of_uid(r.uid);
-            if (slot < 0 || slot >= 27) continue;
+            if (slot < 0 || slot >= ZM_FIRST_SURVIVOR_SLOT) continue;
             const Entity& e = g_EnemiesList[slot];
             if (!(e.status_flags & ENTITY_STATUS_ACTIVE) || e.id != r.id) continue;
             r.health = e.health; r.alive = !zm_monster_dead(&e);
@@ -192,6 +196,12 @@ static ZmRosterEntry* zm_roster_find(unsigned char stage, unsigned char room,
         for (int i = 0; i < ZM_ROSTER_MAX && freeEntry == NULL; i++) {
             if (!s_roster[i].alive && !s_roster[i].departed && s_roster[i].uid >= ZM_UID_EXTRA_FIRST) freeEntry = &s_roster[i];
         }
+        // Then a departed one: the AI director's unseen walks leave one a
+        // room (zm_world_move_extra), from rooms no copy had loaded - no late
+        // capture can come back for them.
+        for (int i = 0; i < ZM_ROSTER_MAX && freeEntry == NULL; i++) {
+            if (s_roster[i].departed && s_roster[i].uid >= ZM_UID_EXTRA_FIRST) freeEntry = &s_roster[i];
+        }
         if (freeEntry == NULL) {
             dbg_printf("[world] roster full\n");
             return NULL;
@@ -233,7 +243,8 @@ void zm_world_reconnect_enemy(unsigned char stage, unsigned char room, unsigned 
 // only settled after the world is reset for a new game.
 static unsigned short zm_mint_uid(void)
 {
-    bool survivor = zm_game_role() == ZM_NET_SURVIVOR;
+    // The arbiter (the host, the AI director's too) takes the director's range.
+    bool survivor = !zm_match_authority();
     unsigned short lo = survivor ? ZM_UID_EXTRA_SURVIVOR : ZM_UID_EXTRA_FIRST;
     unsigned short hi = survivor ? ZM_UID_MAX : (unsigned short)(ZM_UID_EXTRA_SURVIVOR - 1);
     if (s_nextUid < lo || s_nextUid > hi) s_nextUid = lo;
@@ -742,6 +753,34 @@ unsigned short zm_world_add_extra(unsigned char stage, unsigned char room, unsig
     return uid;
 }
 
+// The AI director walks an idle monster of a room nobody has loaded through a
+// door, unseen: it departs there (as a body carried out does - never back
+// alive under that uid) and comes in at (toStage, toRoom) with its type,
+// behaviour and health under a new uid. Returns that uid, 0 if it cannot move.
+unsigned short zm_world_move_extra(unsigned char stage, unsigned char room, unsigned short uid,
+                                   unsigned char toStage, unsigned char toRoom,
+                                   short x, short y, short z, short angle)
+{
+    if (!s_worldOn || uid < ZM_UID_EXTRA_FIRST) return 0;
+    ZmRosterEntry* r = NULL;
+    for (int i = 0; i < ZM_ROSTER_MAX && r == NULL; i++) {
+        ZmRosterEntry* e = &s_roster[i];
+        if (e->used && e->stage == stage && e->room == room && e->uid == uid) r = e;
+    }
+    if (r == NULL || !r->alive || r->departed || r->feeding || r->directorControlled) return 0;
+    unsigned char id = r->id, behavior = r->behavior;
+    short health = r->health;
+    unsigned short moved = zm_world_add_extra(toStage, toRoom, id, behavior, x, y, z, angle, false, health);
+    if (moved == 0) return 0;
+    r->alive = 0;
+    r->departed = true;
+    if (r->health < 0) r->health = 0;        // a departure, not a kill, on the wire
+    zm_roster_send(r);
+    dbg_printf("[world] moved %04X id %02X from room %d/%02X to %d/%02X as %04X\n",
+               uid, id, stage, room, toStage, toRoom, moved);
+    return moved;
+}
+
 // Possession is attached to the persistent uid, not a slot or the current
 // room owner. ROSTER is reliable and bypasses the effects inbox; its initial
 // creation already contains this bit, so no later cue can leave an AI gap.
@@ -800,6 +839,24 @@ int zm_world_room_extra_count(unsigned char stage, unsigned char room, bool slot
         const ZmRosterEntry* r = &s_roster[i];
         if (r->used && r->alive && !r->departed && r->uid >= ZM_UID_EXTRA_FIRST && r->stage == stage && r->room == room)
             n += slots ? zm_econ_monster_slots(r->id) : 1;
+    }
+    return n;
+}
+
+// The alive extras of (stage, room) - in the mode, every monster there - by
+// type: up to `max` ids, and where each stands (`xz`, pairs) when given.
+// Returns how many were written.
+int zm_world_room_extra_ids(unsigned char stage, unsigned char room, unsigned char* ids, int max, short* xz,
+                            unsigned short* uids)
+{
+    int n = 0;
+    for (int i = 0; i < ZM_ROSTER_MAX && n < max; i++) {
+        const ZmRosterEntry* r = &s_roster[i];
+        if (!r->used || !r->alive || r->departed || r->uid < ZM_UID_EXTRA_FIRST || r->stage != stage || r->room != room)
+            continue;
+        if (xz != NULL) { xz[n * 2] = r->x; xz[n * 2 + 1] = r->z; }
+        if (uids != NULL) uids[n] = r->feeding || r->directorControlled ? 0 : r->uid;   // 0: not free to move
+        ids[n++] = r->id;
     }
     return n;
 }

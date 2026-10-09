@@ -151,15 +151,17 @@ static void lobby_draw_players(int x, int y)
     lobby_print(x, y, 0x8F, "PLAYERS");
     y += 11;
     int ai = zm_net_ai_level();
-    if (ai > 0) snprintf(line, sizeof(line), "  DIRECTOR  AI - %s%s", zm_ai_level_name(ai),
-                         zm_net_self() == 0 ? "  - YOUR COPY" : "");
+    if (ai > 0) snprintf(line, sizeof(line), "  DIRECTOR  AI - %s", zm_ai_level_name(ai));
     else snprintf(line, sizeof(line), "  DIRECTOR%s", zm_net_self() == 0 ? "  - YOU" : "");
     lobby_print(x, y, 0x7F, line);
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    // Against the AI the host plays seat 0 as a survivor too.
+    for (int i = ai > 0 ? 0 : 1; i < ZM_NET_MAX_PLAYERS; i++) {
         y += 11;
         int c = zm_net_char(i);
         if (c < 0) {
             snprintf(line, sizeof(line), "  SURVIVOR %d  EMPTY", i);
+        } else if (i == 0) {
+            snprintf(line, sizeof(line), "  HOST        %s%s", zm_char_name(c), zm_net_self() == 0 ? "  - YOU" : "");
         } else {
             const char* state = "CONNECTED";
             if (ai > 0) state = zm_net_vote(i) == ZM_VOTE_ACCEPT ? "READY" : "CHOOSING";
@@ -583,6 +585,17 @@ void zm_guide_profile(int survivor, int monster)
     ENTITY = savedEntity;
 }
 
+// Survivors ready in an AI director's lobby (the host's seat always is).
+static void lobby_ready_count(int* seated, int* readied)
+{
+    *seated = *readied = 0;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (zm_net_char(i) < 0) continue;
+        (*seated)++;
+        if (i == 0 || zm_net_vote(i) == ZM_VOTE_ACCEPT) (*readied)++;
+    }
+}
+
 // After the map is chosen (GO): the survivor picks until `deadlineMs` - and
 // waits it out either way: every survivor spawns at the deadline, which gives
 // the director its two minutes to set up. A pick can be changed until then;
@@ -590,7 +603,9 @@ void zm_guide_profile(int survivor, int monster)
 // `untilGo`: an AI director's lobby - no deadline; picking a character
 // readies the survivor (cancel unreadies, then leaves) and the screen ends
 // when the host starts the game.
-static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false)
+// `host`: that lobby's host, picking its own survivor (seat 0) - a pick or
+// cancel goes back to the lobby.
+static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false, bool host = false)
 {
     int mine = zm_net_char(zm_net_self());
     int sel = mine >= 0 ? mine : 0;
@@ -602,7 +617,7 @@ static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false
     cs_scene_begin();
     for (;;) {
         zm_net_poll();
-        if (zm_net_status() != ZM_NET_CONNECTED) break;
+        if (zm_net_status() != (host ? ZM_NET_HOSTING : ZM_NET_CONNECTED)) break;
         unsigned int now = plat_time_ms();
         if (untilGo ? zm_net_lobby_started() : (int)(deadlineMs - now) <= 0) break;
         mine = zm_net_char(zm_net_self());
@@ -623,14 +638,10 @@ static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false
             pressed = 0;
         }
         char timer[40];
-        bool ready = untilGo && zm_net_vote(zm_net_self()) == ZM_VOTE_ACCEPT;
+        bool ready = untilGo && !host && zm_net_vote(zm_net_self()) == ZM_VOTE_ACCEPT;
         if (untilGo) {
-            int seated = 0, readied = 0;
-            for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-                if (zm_net_char(i) < 0) continue;
-                seated++;
-                if (i == zm_net_self() ? ready : zm_net_vote(i) == ZM_VOTE_ACCEPT) readied++;
-            }
+            int seated, readied;
+            lobby_ready_count(&seated, &readied);
             snprintf(timer, sizeof(timer), "AI %s  READY %d OF %d", zm_ai_level_name(zm_net_ai_level()),
                      readied, seated);
         } else {
@@ -639,6 +650,7 @@ static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false
         }
         if (untilGo && !map && (pressed & PAD_CANCEL)) {
             play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            if (host) break;
             if (ready) {
                 zm_net_set_vote(ZM_VOTE_NONE);
             } else {
@@ -667,6 +679,7 @@ static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false
             if ((pressed & PAD_CONFIRM) && !other) {
                 play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
                 zm_net_set_char(sel);
+                if (host) break;
                 if (untilGo) zm_net_set_vote(ZM_VOTE_ACCEPT);
             }
             if (sel != loaded) {
@@ -675,6 +688,7 @@ static void lobby_character_screen(unsigned int deadlineMs, bool untilGo = false
             }
             cs_draw(sel, mine);
             lobby_print(8, 214, 0x7F, !untilGo ? "OPTIONS: REVIEW MAP"
+                        : host ? "ACTION: PICK  OPTIONS: MAP  CANCEL: BACK"
                         : ready ? "READY - OPTIONS: MAP  CANCEL: NOT READY"
                                 : "ACTION: PICK AND READY  OPTIONS: MAP  CANCEL: LEAVE");
             lobby_print(320 - 8 - (int)strlen(timer) * 6, 6, 0x8F, timer);
@@ -819,15 +833,19 @@ static void lobby_survivor_go(void)
 // The AI director's level for HOST - AI DIRECTOR: config's AiDirector, else normal.
 static int s_aiLevel = 0;
 
-// The host's lobby in an AI director's game: survivors ready up, then start.
-// No map review: the seed hosting drew is the map.
+// The host's lobby in an AI director's game: the host picks its own survivor,
+// the others ready up, then it starts - alone, if nobody joined. No map
+// review: the seed hosting drew is the map.
+static unsigned int s_aiStartAskedMs = 0;   // AIM with someone not ready: press again
+
 static bool lobby_ai_host_input(unsigned int pressed)
 {
-    int seated = 0, readied = 0;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        if (zm_net_char(i) < 0) continue;
-        seated++;
-        if (zm_net_vote(i) == ZM_VOTE_ACCEPT) readied++;
+    int seated, readied;
+    lobby_ready_count(&seated, &readied);
+    if (pressed & PAD_CONFIRM) {
+        play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
+        lobby_character_screen(0, true, true);
+        return false;
     }
     if (pressed & (PAD_UP | PAD_DOWN)) {
         play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
@@ -837,9 +855,17 @@ static bool lobby_ai_host_input(unsigned int pressed)
         s_aiLevel = level;
         zm_net_set_ai_level(level);
     }
-    // ENTER once everyone is ready; AIM starts with whoever is.
-    bool all = seated > 0 && readied == seated;
-    if (seated > 0 && (((pressed & PAD_CONFIRM) && all) || (pressed & PAD_AIM))) {
+    // AIM starts once everyone is ready; with someone still choosing, a
+    // second AIM within three seconds starts anyway.
+    if (pressed & PAD_AIM) {
+        unsigned int now = plat_time_ms();
+        bool again = s_aiStartAskedMs != 0 && now - s_aiStartAskedMs < 3000;
+        if (readied < seated && !again) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+            s_aiStartAskedMs = now;
+            return false;
+        }
+        s_aiStartAskedMs = 0;
         play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
         zm_random_build(zm_net_seed());
         zm_net_lobby_go();
@@ -871,7 +897,7 @@ void zombie_lobby_state(void)
         // ---- input ----
         if (hosting && zm_net_ai_level() > 0) {
             if (lobby_ai_host_input(pressed)) {
-                lobby_start_game();             // the host's copy watches the AI play
+                lobby_start_game();             // the host plays its survivor
                 return;
             }
             if (pressed & (PAD_LEFT | PAD_RIGHT)) {
@@ -1024,8 +1050,11 @@ void zombie_lobby_state(void)
                 char diff[48];
                 snprintf(diff, sizeof(diff), "AI DIRECTOR: %s  UP-DOWN: CHANGE", zm_ai_level_name(zm_net_ai_level()));
                 lobby_print(x, by + 8, 0x7F, diff);
-                lobby_print(x, by + 22, 0x7F, zm_net_survivor_count() > 0
-                            ? "ENTER: START WHEN READY  AIM: START NOW" : "WAITING FOR SURVIVORS - UP TO 3");
+                int seated, readied;
+                lobby_ready_count(&seated, &readied);
+                bool asked = s_aiStartAskedMs != 0 && plat_time_ms() - s_aiStartAskedMs < 3000;
+                lobby_print(x, by + 22, 0x7F, asked ? "NOT EVERYONE IS READY - AIM AGAIN TO START"
+                            : "ENTER: YOUR CHARACTER  AIM: START");
             } else if (hosting) {
                 lobby_print(x, by + 14, 0x7F, zm_net_survivor_count() > 0
                             ? "ENTER: GENERATE THE MAP" : "WAITING FOR SURVIVORS - UP TO 3");

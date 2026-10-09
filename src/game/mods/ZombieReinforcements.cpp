@@ -38,6 +38,14 @@ static struct {
     unsigned int until;
 } s_entry;
 
+// The buyer's notices: the director's screen only (the AI director's host
+// plays a survivor, who must not see them).
+static void rf_buyer_note(const char* text)
+{
+    if (zm_game_role() != ZM_NET_SURVIVOR) zm_reinforce_notice(text);
+    else dbg_printf("[reinforce] %s\n", text);
+}
+
 void zm_reinforce_reset(void)
 {
     memset(&s_buy, 0, sizeof(s_buy));
@@ -73,6 +81,7 @@ static bool rf_survivor(int player, unsigned char stage, unsigned char room,
         *entrance = zm_survivor_entrance_door();
         return *x >= 0 && *x <= 32767 && *z >= 0 && *z <= 32767;
     }
+    if (zm_net_char(player) < 0) return false;
     const ZmNetPeerState* p = zm_net_player(player);
     if (p == NULL || p->dead || p->spectating || p->transitioning || p->stage != stage || p->room != room) return false;
     *x = p->x; *y = p->y; *z = p->z; *entrance = p->entranceDoor;
@@ -98,7 +107,7 @@ static bool rf_clear(int x, int y, int z)
         int dx = sx - x, dz = sz - z;
         if (abs(sy - y) < 1200 && abs(dx) < 1000 && abs(dz) < 1000 && dx * dx + dz * dz < 1000 * 1000) return false;
     }
-    for (int i = 0; i < 27; i++) {
+    for (int i = 0; i < ZM_FIRST_SURVIVOR_SLOT; i++) {
         const Entity& e = g_EnemiesList[i];
         if (!(e.status_flags & ENTITY_STATUS_ACTIVE) || e.health < 0) continue;
         int dx = e.scaMatrixData.localMatrix.t[0] - x, dz = e.scaMatrixData.localMatrix.t[2] - z;
@@ -123,7 +132,7 @@ static bool rf_capacity(unsigned char id)
 {
     if (zm_shotgun_room_blocked(g_stageId, g_roomId)) return false;
     if (zm_room_monster_slots(g_stageId, g_roomId) + zm_econ_monster_slots(id) > zm_econ_room_cap(g_stageId, g_roomId)) return false;
-    for (int i = zm_room_highest_script_slot() + 1; i < 27; i++)
+    for (int i = zm_room_highest_script_slot() + 1; i < ZM_FIRST_SURVIVOR_SLOT; i++)
         if (!(g_EnemiesList[i].status_flags & ENTITY_STATUS_ACTIVE)) return true;
     return false;
 }
@@ -217,7 +226,7 @@ static bool rf_choose(ZmReinforcement* r)
 
 bool zm_reinforce_request(unsigned char stage, unsigned char room, unsigned char id, char* why, int whyLen)
 {
-    if (zm_game_role() != ZM_NET_ZOMBIE || !rf_type(id)) {
+    if (zm_net_role() != ZM_NET_ZOMBIE || !rf_type(id)) {
         snprintf(why, whyLen, "REINFORCE WITH A ZOMBIE OR HUNTER"); return false;
     }
     if (s_buy.active) { snprintf(why, whyLen, "REINFORCEMENT PENDING"); return false; }
@@ -271,14 +280,14 @@ void zm_reinforce_take(const short* a, int src)
             zm_reinforce_notice("REINFORCEMENT AT A DOOR");
             zombie_mode_room_entry_sound();
         }
-    } else if ((op == RF_READY || op == RF_REFUSED) && zm_game_role() == ZM_NET_ZOMBIE) {
+    } else if ((op == RF_READY || op == RF_REFUSED) && zm_net_role() == ZM_NET_ZOMBIE) {
         if (!s_buy.active || src != s_buy.owner || r.token != s_buy.token ||
             r.stage != s_buy.stage || r.room != s_buy.room || r.id != s_buy.id) return;
         s_buy.active = false;
         char why[64];
-        if (op == RF_REFUSED) { zm_reinforce_notice("NO SAFE REINFORCEMENT DOOR"); return; }
+        if (op == RF_REFUSED) { rf_buyer_note("NO SAFE REINFORCEMENT DOOR"); return; }
         bool occupied = false, leaf = rf_leaf(r.stage, r.room);
-        for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+        for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
             int x, y, z, entrance;
             if (rf_survivor(i, r.stage, r.room, &x, &y, &z, &entrance) && rf_entry_ok(entrance, r.door, leaf)) occupied = true;
         }
@@ -286,12 +295,12 @@ void zm_reinforce_take(const short* a, int src)
         bool ownerHere = src == zm_net_self() ?
             (g_stageId == r.stage && g_roomId == r.room && zm_room_owner_here() == src) :
             (runner && !runner->transitioning && !runner->spectating && runner->stage == r.stage && runner->room == r.room);
-        if (!occupied || !ownerHere) { zm_reinforce_notice("SURVIVORS LEFT THAT ROOM"); return; }
+        if (!occupied || !ownerHere) { rf_buyer_note("SURVIVORS LEFT THAT ROOM"); return; }
         if (!zm_econ_can_place(r.stage, r.room, r.id, r.id == ENEMY_HUNTER ? "HUNTER" : "ZOMBIE", why, sizeof(why))) {
-            zm_reinforce_notice(why); return;
+            rf_buyer_note(why); return;
         }
         unsigned short uid = zm_world_add_extra(r.stage, r.room, r.id, 0, r.x, r.y, r.z, r.angle);
-        if (!uid) { zm_reinforce_notice("THE ROSTER IS FULL"); return; }
+        if (!uid) { rf_buyer_note("THE ROSTER IS FULL"); return; }
         zm_econ_pay(r.id);
         s_readyAt = zm_game_time_ms() + ZM_REINFORCE_COOL_MS;
         r.token = uid;
@@ -299,7 +308,7 @@ void zm_reinforce_take(const short* a, int src)
         // Broadcasts do not echo to the host.
         short entry[8] = { (short)(RF_ENTRANCE | (r.id << 8)), (short)(r.stage | (r.room << 8)), (short)uid };
         zm_reinforce_take(entry, ZM_NET_DIRECTOR);
-        zm_reinforce_notice("DOOR REINFORCEMENT PURCHASED");
+        rf_buyer_note("DOOR REINFORCEMENT PURCHASED");
         dbg_printf("[reinforce] bought uid %04X id %02X room %d/%02X door %d\n", uid, r.id, r.stage, r.room, r.door);
     } else if (op == RF_ENTRANCE && src == ZM_NET_DIRECTOR) {
         s_entry.uid = r.token; s_entry.stage = r.stage; s_entry.room = r.room;
@@ -311,13 +320,13 @@ void zm_reinforce_frame(void)
 {
     if (s_buy.active && zm_game_time_ms() - s_buy.at >= ZM_REINFORCE_TIMEOUT_MS) {
         s_buy.active = false;
-        zm_reinforce_notice("REINFORCEMENT REQUEST TIMED OUT");
+        rf_buyer_note("REINFORCEMENT REQUEST TIMED OUT");
     }
     if (!s_warning.active || zm_game_time_ms() - s_warning.at < ZM_REINFORCE_WARN_MS) return;
     ZmReinforcement r = s_warning;
     s_warning.active = false;
     bool eligible = false, leaf = rf_leaf(r.stage, r.room);
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         int x, y, z, entrance;
         if (rf_survivor(i, r.stage, r.room, &x, &y, &z, &entrance) && rf_entry_ok(entrance, r.door, leaf)) eligible = true;
     }
@@ -332,5 +341,5 @@ bool zm_reinforce_hold(const Entity* e)
     if (!s_entry.uid || s_entry.stage != g_stageId || s_entry.room != g_roomId ||
         (int)(s_entry.until - zm_game_time_ms()) <= 0) return false;
     int slot = (int)(e - g_EnemiesList);
-    return slot >= 0 && slot < 27 && zm_world_uid_of_slot(slot) == s_entry.uid;
+    return slot >= 0 && slot < ZM_FIRST_SURVIVOR_SLOT && zm_world_uid_of_slot(slot) == s_entry.uid;
 }

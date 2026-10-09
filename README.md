@@ -12,9 +12,10 @@ It is switched on with `[Mods] PlayInfested=1` in `config.ini` (the default in `
 off, the game plays exactly as the original. 
 
 **HOST - AI DIRECTOR** (NEW GAME's lobby, left/right picks easy, normal, hard or
-nightmare) hosts a game the AI director plays: survivors pick their characters
-in the lobby and ready up, there is no map review or setup, and the host's copy
-watches from the director's map. The AI only buys monsters, traps and doorway
+nightmare) hosts a game the AI director plays, and the host plays a survivor
+alongside up to three others - or alone. Everyone picks a character in the
+lobby (the host with ENTER, then AIM to start), there is no map review or setup,
+and the AI runs on the host's copy. It only buys monsters, traps and doorway
 reinforcements - it never possesses one. Higher levels earn more points, unlock
 the big monsters sooner and press harder. `[Mods] AiDirector=1-4` instead turns
 the same AI on as an autopilot for a human director's copy.

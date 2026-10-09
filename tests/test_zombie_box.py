@@ -25,6 +25,8 @@ struct ZmNetPeerState { bool dead,spectating,transitioning; };
 static ZmNetPeerState peers[4];
 static bool connected[4]={false,true,true,true},armed=true,over=false;
 static int role=ZM_NET_ZOMBIE,status=ZM_NET_CONNECTED,self=0;
+static int netRole=-1;          // the host of an AI director's game: ZOMBIE with role SURVIVOR
+static bool hostPlays=false;    // ...whose seat 0 is a survivor
 static unsigned int now=100,seed=123;
 static unsigned char inventory[16];
 static unsigned char* g_ItemSlotsPointer=inventory;
@@ -33,13 +35,20 @@ static struct { short health; } g_playerEntity;
 static bool zombie_mode_armed() { return armed; }
 static bool zombie_mode_match_over() { return over; }
 static int zm_game_role() { return role; }
+static int zm_net_role() { return netRole>=0 ? netRole : role; }
+static int zm_net_self() { return self; }
 static int zm_net_status() { return status; }
 static bool zm_net_active() { return status==ZM_NET_CONNECTED || status==ZM_NET_LOST; }
-static int zm_net_char(int p) { return p==2 ? ZM_CHAR_JILL : 0; }
+static int zm_net_char(int p) { return p==0 ? (hostPlays ? 0 : -1) : p==2 ? ZM_CHAR_JILL : 0; }
 static int zombie_mode_inventory_slots(int) { return self==2 ? 8 : 6; }
 static unsigned int zm_net_seed() { return seed; }
 static unsigned int plat_time_ms() { return now; }
 static const ZmNetPeerState* zm_net_player(int p) { return connected[p] ? &peers[p] : nullptr; }
+static ZmNetPeerState hostSeat;
+static const ZmNetPeerState* zm_seat_state(int p) {
+    if (p==0) return hostPlays ? &hostSeat : nullptr;
+    return zm_net_player(p);
+}
 struct Event { int dst; short a[8]; };
 static std::vector<Event> sent;
 static void zm_net_send_event_to(int dst,int kind,short a,short b,short c,short d,short e,short f,short g,short h) {
@@ -57,6 +66,7 @@ static void reset() {
     memset(inventory,0,sizeof(inventory));memset(peers,0,sizeof(peers));sent.clear();
     for(int i=1;i<4;i++)connected[i]=true;
     role=ZM_NET_ZOMBIE;status=ZM_NET_CONNECTED;self=0;armed=true;over=false;now=100;g_playerEntity.health=140;
+    netRole=-1;hostPlays=false;memset(&hostSeat,0,sizeof(hostSeat));
     simulate=dropRequest=dropDone=false;exchanges=0;
 }
 static void request(short* a,int token,int slot,int expected,int offered,int inventorySlot=0) {
@@ -140,6 +150,15 @@ int main() {
     assert(g_itemboxSlots[0].Id==3);snapshot[0]={25,1};zm_box_snapshot_take(9,snapshot);assert(g_itemboxSlots[0].Id==3);
     zm_box_snapshot_take(10,snapshot);assert(g_itemboxSlots[0].Id==25);
     s_revision=0xFFFFFFFE;s_revisionHave=true;zm_box_snapshot_take(1,snapshot);assert(s_revision==1);
+    // The host of an AI director's game plays seat 0: its own swap is granted
+    // like a survivor's, and the host's box is never overwritten by its own
+    // update. Its reply reaches its own waiting claim.
+    reset();netRole=ZM_NET_ZOMBIE;role=ZM_NET_SURVIVOR;hostPlays=true;
+    g_itemboxSlots[0]={12,15};request(a,1,0,12|(15<<8),3|(7<<8));zm_box_take(a,0);
+    assert(sent.back().a[0]==BOX_DONE&&sent.back().dst==0&&box_item(g_itemboxSlots[0])==(3|(7<<8)));
+    for(const BoxReceipt& r:s_receipts[0])assert(!r.used);    // the host never reconnects
+    short stale[8]={BOX_UPDATE,0,0,0,25,0,(short)seed,0};zm_box_take(stale,0);assert(g_itemboxSlots[0].Id==3);
+    hostSeat.dead=true;request(a,2,0,3|(7<<8),0);zm_box_take(a,0);assert(sent.back().a[0]==BOX_DENY);
     // The ordinary single-player box needs no network approval.
     role=ZM_NET_OFF;assert(zombie_mode_box_claim(0,0,&item,&qty));
     puts("Box competition, swaps, conservation, retries, stale requests and reconnect receipt checks passed.");

@@ -579,13 +579,15 @@ void zm_survivor_start_as_player(void)
     memset(&s_survivor, 0, sizeof(s_survivor));
     memset(s_doorCache, 0, sizeof(s_doorCache));
     s_doorCacheNext = 0;
-    static const int kCorner[3][2] = {
+    static const int kCorner[4][2] = {
         {  0,    -1400 },      // nearest the front door
         { -1212,   700 },      // back left
         {  1212,   700 },      // back right
+        {  0,     2100 },      // back middle: the host's, against the AI director
     };
     int seat = zm_net_self() - 1;
-    if (seat < 0 || seat > 2) seat = 0;
+    if (seat < 0) seat = 3;
+    if (seat > 3) seat = 0;
     int x = 17000 + kCorner[seat][0];
     int z = 8500 + kCorner[seat][1];
     int backX, backZ;
