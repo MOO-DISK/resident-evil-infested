@@ -37,7 +37,8 @@ unsigned short g_zmNetPort = 27960;
 // Version 63: ink ribbons are supplies; the main hall's Beretta and the vacant
 // room's broken shotgun are taken out. Version 64: no ink ribbons among the
 // supplies.
-#define ZM_NET_VERSION    69
+// Version 70: the survivors' voice lines (ZM_EV_VOICE).
+#define ZM_NET_VERSION    70
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -905,6 +906,7 @@ static void net_take_event(const NetEvent& e, int link)
         if (!zm_revive_host_claim(e.args[0], e.args[1], link)) return;
     }
     if (e.kind == ZM_EV_ROSTER && s_role == ZM_NET_ZOMBIE && e.src != link) return;
+    if (e.kind == ZM_EV_VOICE && s_role == ZM_NET_ZOMBIE && e.src != link) return;   // speaks only as itself
     bool mine = (e.dst == ZM_NET_ALL) || (e.dst == s_self);
     if (s_role == ZM_NET_ZOMBIE && (e.dst == ZM_NET_ALL || e.dst != s_self)) {
         net_route(e, link);

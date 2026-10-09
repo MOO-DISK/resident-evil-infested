@@ -278,6 +278,10 @@ int  zombie_mode_inventory_portrait(void);
 bool zombie_mode_hold_death(void);
 // die_state: the match is over - the mode's own end screen ran, no death screen.
 bool zombie_mode_match_over(void);
+// PlayerPad_Update, after its edge detection: the raw pad bits a held
+// modifier takes for itself this frame (the survivors' voice lines,
+// ZombieVoice.cpp) - dropped before the remap. 0: the pad is left alone.
+DWORD zombie_mode_pad_filter(DWORD rawHeld, DWORD rawPressed);
 // apply_weapon_damage, after a hit (the end-of-match stats, ZombieStats.cpp).
 void zombie_mode_on_weapon_hit(const Entity* enemy, short healthBefore);
 // LoadEntityModel, after the player's EMD: a borrowed character takes Chris's

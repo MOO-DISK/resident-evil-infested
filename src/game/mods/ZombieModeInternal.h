@@ -243,6 +243,9 @@ enum {
                          //   seed, seed} / {5 answer, boss, player, seed, seed, token, yes}; host -> all
                          //   {4 ask, boss, 0, seed, seed, token, voters} / {6 go, ...token} /
                          //   {7 called off, ...token}; host -> requester {8 refused, boss, player, ...}
+    ZM_EV_VOICE = 36,    // survivor -> all: { line, take, character, stage | room << 8, x, y, z, 0 } -
+                         //   a voice line; each copy hears it in that room or through a door
+                         //   from a neighbouring one (ZombieVoice.cpp)
     ZM_EV_TYRANT_TRAIL = 24, // room owner -> all: { stage|room<<8, attacker uid, trail frames }
     ZM_EV_STATS = 20,    // anyone -> all, once the match is over: a survivor's { 0, death s
                          //   (-1 alive), hits, kills, damage taken }, the director's { 1, points
@@ -389,6 +392,10 @@ bool zm_shotgun_room_blocked(unsigned char stage, unsigned char room);
 bool zm_shotgun_hide_room(void);
 void zm_shotgun_director_crush(void);
 void zm_note(const char* text);
+// ---- The survivors' voice lines (ZombieVoice.cpp) ----
+void zm_voice_reset(void);
+void zm_voice_frame(void);
+void zm_voice_take(const short* args, int src);
 // The mod's own message text (encoded, 0x01-terminated) on the message line,
 // as a room's message: passive in the room (ZombieMessages.cpp), as it was
 // under a menu.

@@ -38,9 +38,12 @@
 static SDL_Scancode VkToScancode(int vk)
 {
     if (vk >= 'A' && vk <= 'Z')  return (SDL_Scancode)(SDL_SCANCODE_A + (vk - 'A'));
-    if (vk >= '0' && vk <= '9')  return (SDL_Scancode)(SDL_SCANCODE_1 + (vk - '0'));
+    // SDL orders the digit row 1..9, 0 (as the keys lie); '0' is the last.
+    if (vk == '0')               return SDL_SCANCODE_0;
+    if (vk >= '1' && vk <= '9')  return (SDL_Scancode)(SDL_SCANCODE_1 + (vk - '1'));
 
     switch (vk) {
+    case VK_TAB:      return SDL_SCANCODE_TAB;
     case VK_SHIFT:    return SDL_SCANCODE_LSHIFT;
     case VK_CONTROL:  return SDL_SCANCODE_LCTRL;
     case VK_RETURN:   return SDL_SCANCODE_RETURN;
