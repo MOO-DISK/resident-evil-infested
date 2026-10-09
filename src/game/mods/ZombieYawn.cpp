@@ -485,14 +485,14 @@ bool zombie_mode_boss_door_gate(const unsigned char* record)
     if (living <= 1) return false;
     if (s_askBoss >= 0) return true;                        // the question is up already
     int xz[ZM_NET_MAX_PLAYERS][2], who[ZM_NET_MAX_PLAYERS];
-    int here = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS), near = 0;
+    int here = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS), gathered = 0;
     int mx = g_playerEntity.scaMatrixData.localMatrix.t[0], mz = g_playerEntity.scaMatrixData.localMatrix.t[2];
     for (int k = 0; k < here; k++) {
         int dx = xz[k][0] - mx, dz = xz[k][1] - mz;
         if (dx >= -YW_GATHER_RADIUS && dx <= YW_GATHER_RADIUS && dz >= -YW_GATHER_RADIUS && dz <= YW_GATHER_RADIUS &&
-            dx * dx + dz * dz <= YW_GATHER_RADIUS * YW_GATHER_RADIUS) near++;
+            dx * dx + dz * dz <= YW_GATHER_RADIUS * YW_GATHER_RADIUS) gathered++;
     }
-    if (near < living) {
+    if (gathered < living) {
         zm_note("SOMETHING FEELS WRONG - GATHER YOUR TEAM");
         return true;
     }
