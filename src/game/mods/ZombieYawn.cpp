@@ -274,6 +274,9 @@ static bool yw_guarded_item(unsigned char id)
            id == ITEM_MOON_CREST || id == ITEM_STAR_CREST || id == ITEM_SUN_CREST;
 }
 
+// The fight music's sound bank (0 none): ducked under voice lines.
+int zm_yawn_music_bank(void) { return s_music; }
+
 bool zm_yawn_entity(const Entity* e)
 {
     if (!zombie_mode_armed() || e == NULL) return false;
