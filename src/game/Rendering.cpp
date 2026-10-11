@@ -1754,7 +1754,9 @@ msg_skip_char:
         if (!zombie_mode_message_prompt_end()) {
             g_message_flags = g_messageFlagsBackup;
         }
-        handle_message_post_action();
+        if (!zombie_mode_boss_prompt_answer((g_menu_choice_id & 1) == 0)) {
+            handle_message_post_action();
+        }
         return;
     }
 

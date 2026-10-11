@@ -4999,7 +4999,9 @@ static void zm_yawn_possessed(Entity* e)
         } else {
             if ((held & ZM_PAD_TURN_A) != 0) e->angle = (short)((e->angle + ZM_YAWN_TURN) & 0xFFF);
             if ((held & ZM_PAD_TURN_B) != 0) e->angle = (short)((e->angle - ZM_YAWN_TURN) & 0xFFF);
-            bool forward = (held & ZM_PAD_FORWARD) != 0;
+            // Steering a snake carries its body forward instead of pivoting
+            // the head in place. Run also speeds up a turn-only crawl.
+            bool forward = (held & (ZM_PAD_FORWARD | ZM_PAD_TURN_A | ZM_PAD_TURN_B)) != 0;
             unsigned char want = forward ? 1 : 0;
             if (e->action_behavior != want) {
                 e->action_behavior = want;
@@ -5008,8 +5010,10 @@ static void zm_yawn_possessed(Entity* e)
             *(short*)((char*)e + 0x172) = (short)(!forward ? 0 : (held & ZM_PAD_RUN) != 0 ? ZM_YAWN_RUSH : ZM_YAWN_CRAWL);
         }
     }
+    zm_yawn_bounds_begin(e);
     yawn_update();
     ENTITY = e;
+    zm_yawn_bounds_end(e);
 }
 
 static void zm_monster_update(Entity* e)

@@ -238,6 +238,7 @@ int  zombie_mode_yawn_special(void);
 // door_try_enter, an unlocked door about to be taken: true = held back (a
 // boss room's door, the whole team gathered and asked first - ZombieYawn.cpp).
 bool zombie_mode_boss_door_gate(const unsigned char* record);
+bool zombie_mode_boss_prompt_answer(bool yes);
 void zombie_mode_yawn_area_hit(const int (*points)[3], int count, int radius, int damage);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,

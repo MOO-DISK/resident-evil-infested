@@ -1,11 +1,17 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
+#include "../PrintText.h"
 #include "../entities/EntityCommon.h"
 #include "../../marni/MarniSound.h"
 #include "../../system/AssetPath.h"
 #include "../../DebugPrint.h"
 #include <cstdio>
 #include <cstring>
+
+static constexpr auto s_gatherMessage = STR("Something feels wrong...\\nI should wait for my squadmates.");
+static_assert(s_gatherMessage.bytes[24] == 0x02, "Boss-door message must use the encoded newline tag");
+static constexpr auto s_atticPrompt = STR("Will you enter the attic?\\c");
+static constexpr auto s_lessonPrompt = STR("Will you enter the lesson room?\\c");
 
 // ============================================================================
 // ZombieYawn.cpp - port-added: the two Yawn fights of the mode.
@@ -138,6 +144,123 @@ static int yw_boss_at(unsigned char stage, unsigned char room)
 static int yw_here(void)
 {
     return yw_boss_at(g_stageId, g_roomId);
+}
+
+// A possessed snake's animator moves the root as well as its body. Endpoint
+// collision alone can miss a wall crossed by a long animation step.
+extern int is_entity_in_switch_zone(VECTOR* position, void* zoneData);
+static bool s_boundSaved = false;
+static Entity* s_boundHead = NULL;
+static MATRIX s_boundMatrix;
+static JointStruct s_boundJoints[15];
+static short s_boundAngle;
+
+static bool yw_floor_point(int x, int z)
+{
+    if (g_RdtPointer == NULL || g_RdtPointer->cam_switch_zones == NULL) return false;
+    VECTOR p = { x, 0, z, 0 };
+    const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
+    for (int i = 0; i < 1024; i++, zone++) {
+        if ((unsigned short)zone->camFrom >= g_RdtPointer->cameras_count) break;
+        if (is_entity_in_switch_zone(&p, (void*)zone) != 0) return true;
+    }
+    return false;
+}
+
+static bool yw_clear_point(int x, int z)
+{
+    if (!yw_floor_point(x, z)) return false;
+    VECTOR p = { x, 0, z, 0 };
+    SVECTOR zero = { 0, 0, 0, 0 };
+    VECTOR scratch = g_playerPosScratch;
+    bool clear = room_collision_check_0047da50(&p, (VECTOR*)&zero) != 1;
+    g_playerPosScratch = scratch;
+    return clear;
+}
+
+static bool yw_clear_step(int ax, int az, int bx, int bz)
+{
+    // Room coordinates are unsigned 16-bit. Reject corrupt / escaped positions
+    // before subtracting or multiplying, keeping every calculation 32-bit.
+    if (ax < 0 || az < 0 || bx < 0 || bz < 0 ||
+        ax > 65535 || az > 65535 || bx > 65535 || bz > 65535) return false;
+    int dx = bx - ax, dz = bz - az;
+    int span = abs(dx) > abs(dz) ? abs(dx) : abs(dz);
+    int steps = span / 128 + 1;
+    for (int i = 1; i <= steps; i++) {
+        if (!yw_clear_point(ax + dx * i / steps, az + dz * i / steps)) return false;
+    }
+    return true;
+}
+
+static void yw_bounds_save(Entity* e)
+{
+    s_boundHead = e;
+    s_boundSaved = true;
+    s_boundMatrix = e->scaMatrixData.localMatrix;
+    s_boundAngle = e->angle;
+    memcpy(s_boundJoints, e->jointsStructs, sizeof(s_boundJoints));
+}
+
+static void yw_bounds_restore(Entity* e)
+{
+    dbg_printf("[yawn] bounds recovery: %d,%d -> %d,%d\n",
+               e->scaMatrixData.localMatrix.t[0], e->scaMatrixData.localMatrix.t[2],
+               s_boundMatrix.t[0], s_boundMatrix.t[2]);
+    e->scaMatrixData.localMatrix = s_boundMatrix;
+    e->angle = s_boundAngle;
+    memcpy(e->jointsStructs, s_boundJoints, sizeof(s_boundJoints));
+    e->position.x = (short)s_boundMatrix.t[0];
+    e->position.z = (short)s_boundMatrix.t[2];
+    e->action_behavior = e->action_state = 0;
+    *((unsigned char*)e + 0x85) = 0;
+    e->ignore_player_flag = 1;
+    *(short*)((char*)e + 0x172) = 0;
+    *(short*)((char*)e + 0xC2) = 0;
+    *((unsigned char*)e + 0x17C) = 0;
+}
+
+void zm_yawn_bounds_begin(Entity* e)
+{
+    if (!zombie_mode_armed() || yw_here() < 0 || e->jointsStructs == NULL || e->jointCount != 15) return;
+    if (s_boundHead != e) s_boundSaved = false;
+    // Segment collision runs after the head's update and can drag the head
+    // joints again. Check those changes before replacing the safe snapshot.
+    if (s_boundSaved) zm_yawn_bounds_end(e);
+    const int* t = e->scaMatrixData.localMatrix.t;
+    if (yw_clear_point(t[0], t[2])) {
+        yw_bounds_save(e);
+    } else if (s_boundSaved) {
+        yw_bounds_restore(e);
+    } else {
+        // Already outside when possession began: move the entire skeleton to
+        // the room's boss spawn, preserving the spacing between its joints.
+        int b = yw_here(), dx = kBoss[b].x - t[0], dz = kBoss[b].z - t[2];
+        e->scaMatrixData.localMatrix.t[0] = kBoss[b].x;
+        e->scaMatrixData.localMatrix.t[2] = kBoss[b].z;
+        for (int k = 0; k < 15; k++) {
+            e->jointsStructs[k].world.t[0] += dx;
+            e->jointsStructs[k].world.t[2] += dz;
+        }
+        yw_bounds_save(e);
+        yw_bounds_restore(e);
+    }
+}
+
+void zm_yawn_bounds_end(Entity* e)
+{
+    if (!s_boundSaved || s_boundHead != e || e->jointsStructs == NULL) return;
+    const int* t = e->scaMatrixData.localMatrix.t;
+    bool clear = yw_clear_step(s_boundMatrix.t[0], s_boundMatrix.t[2], t[0], t[2]);
+    for (int k = 0; clear && k < 15; k++) {
+        if (k == 1 || k == 2) continue; // head helpers, not body collision slots
+        const int* a = s_boundJoints[k].world.t;
+        const int* b = e->jointsStructs[k].world.t;
+        // The original pose can put a tail link in a wall before its own
+        // segment update pushes it out. Do not freeze that existing correction.
+        if (yw_clear_point(a[0], a[2])) clear = yw_clear_step(a[0], a[2], b[0], b[2]);
+    }
+    if (!clear) yw_bounds_restore(e);
 }
 
 static bool yw_beaten(int b)
@@ -284,12 +407,13 @@ static void yw_match_frame(void)
 // Going in together. A boss room's door, open, takes nobody alone while its
 // Yawn waits: every living survivor must stand by the one at the door
 // (YW_GATHER_RADIUS, in the same room), else it says so and stays shut.
-// Gathered, the host asks each of them (YW_ASK_MS to answer, Action yes, Aim
-// no, standing still); all yes, every copy walks through that door at once -
+// Gathered, the host asks each of them through the native Yes/No message
+// (YW_ASK_MS to answer, standing still); all yes, every copy walks through
+// that door at once -
 // the room's own door record, its own door animation - and the fight, and the
 // clock's hold, start with all of them in. A no, a survivor gone off or dead,
-// or the time running out calls it off. One living survivor goes straight in;
-// single player has no vote. ZM_EV_BOSS ops 3-8 (ZombieModeInternal.h).
+// or the time running out calls it off. A lone network survivor confirms too;
+// single player as director has no vote. ZM_EV_BOSS ops 3-8 (ZombieModeInternal.h).
 // ---------------------------------------------------------------------------
 #define YW_GATHER_RADIUS 3000
 #define YW_ASK_MS        15000
@@ -308,6 +432,7 @@ static int           s_askBoss = -1;
 static unsigned short s_askToken = 0;
 static bool          s_askAnswered = false;
 static bool          s_askHeld = false;             // Action / Aim still down from before the question
+static bool          s_askShown = false;
 static unsigned char s_askVoters = 0;               // everyone asked (seat bits)
 // The team's places by the door inside, in seat order among those asked: the
 // door's own arrival point, either side of it, then a step into the room -
@@ -322,6 +447,21 @@ static unsigned int  s_askEnd = 0;
 static int           s_goBoss = -1;
 static unsigned int  s_goUntil = 0;
 static unsigned char s_goRecord[0x20];
+
+static const unsigned char* yw_prompt_text(int b)
+{
+    return b == 0 ? (const unsigned char*)s_atticPrompt : (const unsigned char*)s_lessonPrompt;
+}
+
+static void yw_prompt_close(void)
+{
+    if (s_askBoss >= 0 && s_askShown &&
+        g_MessagePtr == yw_prompt_text(s_askBoss) && (g_menu_choice_id & 0x80) != 0) {
+        g_menu_choice_id &= 0x7F;
+        zombie_mode_message_prompt_end();
+    }
+    s_askShown = false;
+}
 
 static void yw_vote_reset(void)
 {
@@ -446,12 +586,14 @@ void zm_yawn_take(const short* a, int src)
         s_askBoss = b;
         s_askToken = token;
         s_askAnswered = false;
+        s_askShown = false;
         s_askHeld = true;
         s_askVoters = (unsigned char)a[6];
         s_askEnd = zm_game_time_ms() + YW_ASK_MS;
         break;
     case YW_OP_GO:
         if (s_askBoss != b || s_askToken != token) break;
+        yw_prompt_close();
         s_askBoss = -1;
         s_goBoss = b;
         s_goUntil = zm_game_time_ms() + YW_GO_MS;
@@ -460,12 +602,12 @@ void zm_yawn_take(const short* a, int src)
         break;
     case YW_OP_OFF:
         if (s_askBoss == b && s_askToken == token) {
+            yw_prompt_close();
             s_askBoss = -1;
-            zm_note("ENTRY CALLED OFF");
         }
         break;
     case YW_OP_REFUSED:
-        zm_note("SOMETHING FEELS WRONG - GATHER YOUR TEAM");
+        zm_message_show(s_gatherMessage);
         break;
     default:
         break;
@@ -483,47 +625,63 @@ bool zombie_mode_boss_door_gate(const unsigned char* record)
     int b = yw_boss_at(ds, dr);
     if (b < 0 || s_phase[b] != YW_WAITING || yw_beaten(b)) return false;
     ZmSurvivorInfo surv[ZM_NET_MAX_PLAYERS];
-    int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS), living = 0;
-    for (int i = 0; i < n; i++) if (!surv[i].dead) living++;
-    if (living <= 1) return false;
+    // The director's list omits this client's own survivor, but the room
+    // list below includes it. Count the local player once on either host
+    // or client, so a remote teammate cannot be mistaken for a solo game.
+    int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS);
+    int living = g_playerEntity.health >= 0 ? 1 : 0;
+    for (int i = 0; i < n; i++) {
+        if (surv[i].player != zm_net_self() && !surv[i].dead) living++;
+    }
     if (s_askBoss >= 0) return true;                        // the question is up already
     int xz[ZM_NET_MAX_PLAYERS][2], who[ZM_NET_MAX_PLAYERS];
-    int here = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS), near = 0;
+    int here = zm_room_survivors(xz, who, ZM_NET_MAX_PLAYERS), gathered = 0;
     int mx = g_playerEntity.scaMatrixData.localMatrix.t[0], mz = g_playerEntity.scaMatrixData.localMatrix.t[2];
     for (int k = 0; k < here; k++) {
         int dx = xz[k][0] - mx, dz = xz[k][1] - mz;
         if (dx >= -YW_GATHER_RADIUS && dx <= YW_GATHER_RADIUS && dz >= -YW_GATHER_RADIUS && dz <= YW_GATHER_RADIUS &&
-            dx * dx + dz * dz <= YW_GATHER_RADIUS * YW_GATHER_RADIUS) near++;
+            dx * dx + dz * dz <= YW_GATHER_RADIUS * YW_GATHER_RADIUS) gathered++;
     }
-    if (near < living) {
-        zm_note("SOMETHING FEELS WRONG - GATHER YOUR TEAM");
+    if (gathered < living) {
+        zm_message_show(s_gatherMessage);
         return true;
     }
-    zm_note("THE TEAM IS ASKED");
     yw_ask_host(YW_OP_REQUEST, b, 0, 0);
     return true;
 }
 
-// The question up: Action is yes, Aim is no; the survivor stands still.
+// The native message renderer owns the Yes/No cursor and confirm button.
+// Consume its answer before the original item/event post-action dispatch.
+bool zombie_mode_boss_prompt_answer(bool yes)
+{
+    if (!zombie_mode_armed() || s_askBoss < 0 || !s_askShown || s_askAnswered ||
+        g_MessagePtr != yw_prompt_text(s_askBoss)) return false;
+    s_askAnswered = true;
+    yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, yes ? 1 : 0);
+    return true;
+}
+
+// Let the native prompt read the pad; after Yes, stand still for the team.
 bool zm_yawn_prompt_input(void)
 {
     if (s_askBoss < 0) return false;
     if (g_playerEntity.health < 0 || (int)(zm_game_time_ms() - s_askEnd) >= 0) {
+        yw_prompt_close();
+        if (!s_askAnswered) yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, 0);
         s_askBoss = -1;
         return false;
     }
     // The press that took the door is no answer: both buttons up first (the
     // game's pressed word stays set while a button is held).
     if (s_askHeld && ((unsigned short)g_PlayerDpadHeld & (ZM_PAD_ACTION | ZM_PAD_AIM)) == 0) s_askHeld = false;
-    if (!s_askAnswered && !s_askHeld && (g_message_flags & 0x0101) == 0x0101 &&
-        (g_main_state_flags & MSF_MENU_ACTIVE) == 0) {
-        unsigned int pressed = (unsigned short)g_PlayerDpadPressed;
-        if ((pressed & ZM_PAD_ACTION) != 0 || (pressed & ZM_PAD_AIM) != 0) {
-            bool yes = (pressed & ZM_PAD_ACTION) != 0;
-            s_askAnswered = true;
-            yw_ask_host(YW_OP_ANSWER, s_askBoss, s_askToken, yes ? 1 : 0);
-            if (!yes) s_askBoss = -1;
+    if (!s_askAnswered) {
+        if (!s_askShown && (g_menu_choice_id & 0x80) == 0 &&
+            (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) == 0 && g_openMenuFlag == 0) {
+            zm_message_show(yw_prompt_text(s_askBoss));
+            s_askShown = g_MessagePtr == yw_prompt_text(s_askBoss) && (g_menu_choice_id & 0x80) != 0;
         }
+        if (s_askHeld) g_PlayerDpadPressed &= ~ZM_PAD_ACTION;
+        if (s_askShown) return true;
     }
     g_PlayerPadHeld = g_PlayerPadPressed = g_PlayerDpadHeld = g_PlayerDpadPressed = 0;
     return true;
@@ -961,13 +1119,6 @@ bool zm_yawn_traps_exit(unsigned char stage, unsigned char room)
 
 void zm_yawn_draw(void)
 {
-    if (zombie_mode_armed() && s_askBoss >= 0) {
-        unsigned int left = (int)(s_askEnd - zm_game_time_ms()) > 0 ? s_askEnd - zm_game_time_ms() : 0;
-        char line[48];
-        if (s_askAnswered) snprintf(line, sizeof(line), "WAITING FOR THE TEAM - %u", (left + 999) / 1000);
-        else snprintf(line, sizeof(line), "ENTER THE FIGHT? ACTION YES - AIM NO - %u", (left + 999) / 1000);
-        zm_draw_centered(line, 96, 0);
-    }
     int b = yw_here();
     if (!zombie_mode_armed() || b < 0 || s_phase[b] != YW_LOCKDOWN) return;
     unsigned int sec = (yw_lock_left(b) + 999) / 1000;
@@ -978,6 +1129,8 @@ void zm_yawn_draw(void)
 
 void zm_yawn_room_reset(void)
 {
+    s_boundSaved = false;
+    s_boundHead = NULL;
     s_thrashAt = s_slamAt = s_specialAt = 0;
     yw_music_stop();
     s_bgmHeld = false;      // the next room loads its own music

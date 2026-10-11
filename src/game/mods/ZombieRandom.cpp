@@ -1382,9 +1382,9 @@ static bool rnd_generate_once(void)
         for (int r = 0; r < RND_ROOMS * 2; r++) {
             notSafeRoom[r] = !s_roomInfo[r / RND_ROOMS][r % RND_ROOMS].safe;
             notLeaf[r] = !s_leaf[r] && notSafeRoom[r];
-            bool far = fromKitchen[r] < 0 || fromKitchen[r] >= RND_BATTERY_AWAY;
-            farLeaf[r] = notLeaf[r] && far;
-            farRoom[r] = notSafeRoom[r] && far;
+            bool distant = fromKitchen[r] < 0 || fromKitchen[r] >= RND_BATTERY_AWAY;
+            farLeaf[r] = notLeaf[r] && distant;
+            farRoom[r] = notSafeRoom[r] && distant;
         }
         const unsigned char access[2] = { ITEM_BATTERY, ITEM_ZM_PASS_NOTE };
         for (int a = 0; a < 2; a++) {
