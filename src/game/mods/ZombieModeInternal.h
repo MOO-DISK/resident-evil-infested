@@ -321,6 +321,8 @@ void zm_yawn_body_take(const ZmYawnBody& body, unsigned char stage, unsigned cha
 bool zm_yawn_pose_apply(Entity* head, const ZmNetPose& pose, int owner);
 void zm_yawn_status_apply(Entity* e, int slot);
 void zm_yawn_mark_scaled(void);
+void zm_yawn_bounds_begin(Entity* e);
+void zm_yawn_bounds_end(Entity* e);
 // While Yawn is in the loaded boss room, or its lockdown holds, its doors do
 // not let a survivor out.
 bool zm_yawn_traps_exit(unsigned char stage, unsigned char room);

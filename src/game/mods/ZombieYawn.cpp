@@ -146,6 +146,123 @@ static int yw_here(void)
     return yw_boss_at(g_stageId, g_roomId);
 }
 
+// A possessed snake's animator moves the root as well as its body. Endpoint
+// collision alone can miss a wall crossed by a long animation step.
+extern int is_entity_in_switch_zone(VECTOR* position, void* zoneData);
+static bool s_boundSaved = false;
+static Entity* s_boundHead = NULL;
+static MATRIX s_boundMatrix;
+static JointStruct s_boundJoints[15];
+static short s_boundAngle;
+
+static bool yw_floor_point(int x, int z)
+{
+    if (g_RdtPointer == NULL || g_RdtPointer->cam_switch_zones == NULL) return false;
+    VECTOR p = { x, 0, z, 0 };
+    const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
+    for (int i = 0; i < 1024; i++, zone++) {
+        if ((unsigned short)zone->camFrom >= g_RdtPointer->cameras_count) break;
+        if (is_entity_in_switch_zone(&p, (void*)zone) != 0) return true;
+    }
+    return false;
+}
+
+static bool yw_clear_point(int x, int z)
+{
+    if (!yw_floor_point(x, z)) return false;
+    VECTOR p = { x, 0, z, 0 };
+    SVECTOR zero = { 0, 0, 0, 0 };
+    VECTOR scratch = g_playerPosScratch;
+    bool clear = room_collision_check_0047da50(&p, (VECTOR*)&zero) != 1;
+    g_playerPosScratch = scratch;
+    return clear;
+}
+
+static bool yw_clear_step(int ax, int az, int bx, int bz)
+{
+    // Room coordinates are unsigned 16-bit. Reject corrupt / escaped positions
+    // before subtracting or multiplying, keeping every calculation 32-bit.
+    if (ax < 0 || az < 0 || bx < 0 || bz < 0 ||
+        ax > 65535 || az > 65535 || bx > 65535 || bz > 65535) return false;
+    int dx = bx - ax, dz = bz - az;
+    int span = abs(dx) > abs(dz) ? abs(dx) : abs(dz);
+    int steps = span / 128 + 1;
+    for (int i = 1; i <= steps; i++) {
+        if (!yw_clear_point(ax + dx * i / steps, az + dz * i / steps)) return false;
+    }
+    return true;
+}
+
+static void yw_bounds_save(Entity* e)
+{
+    s_boundHead = e;
+    s_boundSaved = true;
+    s_boundMatrix = e->scaMatrixData.localMatrix;
+    s_boundAngle = e->angle;
+    memcpy(s_boundJoints, e->jointsStructs, sizeof(s_boundJoints));
+}
+
+static void yw_bounds_restore(Entity* e)
+{
+    dbg_printf("[yawn] bounds recovery: %d,%d -> %d,%d\n",
+               e->scaMatrixData.localMatrix.t[0], e->scaMatrixData.localMatrix.t[2],
+               s_boundMatrix.t[0], s_boundMatrix.t[2]);
+    e->scaMatrixData.localMatrix = s_boundMatrix;
+    e->angle = s_boundAngle;
+    memcpy(e->jointsStructs, s_boundJoints, sizeof(s_boundJoints));
+    e->position.x = (short)s_boundMatrix.t[0];
+    e->position.z = (short)s_boundMatrix.t[2];
+    e->action_behavior = e->action_state = 0;
+    *((unsigned char*)e + 0x85) = 0;
+    e->ignore_player_flag = 1;
+    *(short*)((char*)e + 0x172) = 0;
+    *(short*)((char*)e + 0xC2) = 0;
+    *((unsigned char*)e + 0x17C) = 0;
+}
+
+void zm_yawn_bounds_begin(Entity* e)
+{
+    if (!zombie_mode_armed() || yw_here() < 0 || e->jointsStructs == NULL || e->jointCount != 15) return;
+    if (s_boundHead != e) s_boundSaved = false;
+    // Segment collision runs after the head's update and can drag the head
+    // joints again. Check those changes before replacing the safe snapshot.
+    if (s_boundSaved) zm_yawn_bounds_end(e);
+    const int* t = e->scaMatrixData.localMatrix.t;
+    if (yw_clear_point(t[0], t[2])) {
+        yw_bounds_save(e);
+    } else if (s_boundSaved) {
+        yw_bounds_restore(e);
+    } else {
+        // Already outside when possession began: move the entire skeleton to
+        // the room's boss spawn, preserving the spacing between its joints.
+        int b = yw_here(), dx = kBoss[b].x - t[0], dz = kBoss[b].z - t[2];
+        e->scaMatrixData.localMatrix.t[0] = kBoss[b].x;
+        e->scaMatrixData.localMatrix.t[2] = kBoss[b].z;
+        for (int k = 0; k < 15; k++) {
+            e->jointsStructs[k].world.t[0] += dx;
+            e->jointsStructs[k].world.t[2] += dz;
+        }
+        yw_bounds_save(e);
+        yw_bounds_restore(e);
+    }
+}
+
+void zm_yawn_bounds_end(Entity* e)
+{
+    if (!s_boundSaved || s_boundHead != e || e->jointsStructs == NULL) return;
+    const int* t = e->scaMatrixData.localMatrix.t;
+    bool clear = yw_clear_step(s_boundMatrix.t[0], s_boundMatrix.t[2], t[0], t[2]);
+    for (int k = 0; clear && k < 15; k++) {
+        if (k == 1 || k == 2) continue; // head helpers, not body collision slots
+        const int* a = s_boundJoints[k].world.t;
+        const int* b = e->jointsStructs[k].world.t;
+        // The original pose can put a tail link in a wall before its own
+        // segment update pushes it out. Do not freeze that existing correction.
+        if (yw_clear_point(a[0], a[2])) clear = yw_clear_step(a[0], a[2], b[0], b[2]);
+    }
+    if (!clear) yw_bounds_restore(e);
+}
+
 static bool yw_beaten(int b)
 {
     return Flg_ck((int)g_EnemiesFlags, kBoss[b].flag) != 0;
@@ -1009,6 +1126,8 @@ void zm_yawn_draw(void)
 
 void zm_yawn_room_reset(void)
 {
+    s_boundSaved = false;
+    s_boundHead = NULL;
     s_thrashAt = s_slamAt = s_specialAt = 0;
     yw_music_stop();
     s_bgmHeld = false;      // the next room loads its own music
