@@ -358,6 +358,33 @@ why this pair was chosen over Back+Start (options + inventory would both fire).
 
 ---
 
+## 6a. Modifier buttons (zombie mod, port addition)
+
+With `[Mods] PlayInfested` on, `ReadPadBoth` raises two new bits above the PSX
+word: `PAD_MOD1` (`0x10000`) and `PAD_MOD2` (`0x20000`, `src/game/Types.h`).
+
+| | Pad | Keyboard |
+|---|---|---|
+| `PAD_MOD1` | LB / L1 (button 5) | Shift (Linux: left Shift) |
+| `PAD_MOD2` | RB / R1 (button 6) | Tab |
+
+- They are read **past** the remap tables: LB / RB straight off the hardware
+  mask (and taken out of it, so they no longer aim - X and RT still do),
+  Shift / Tab with `plat_key_state`. No save file, `config.ini` key string or
+  `g_JoyRemapTbl` entry changes, so nothing needs migrating and they cannot be
+  rebound yet.
+- They reach the raw words (`g_RawPadHeld`, `g_button_pressed_id`,
+  `g_PlayerPadPressed`) only. `g_PlayerDpadHeld` is built from the low 16 bits,
+  so gameplay never sees them. "Any button" checks (FMV skip) do.
+- Each screen decides what they mean. The director's map: previous / next
+  monster type. A survivor in play: MOD1 + a direction says a voice line
+  (`ZombieVoice.cpp`); `zombie_mode_pad_filter`, called from
+  `PlayerPad_Update` after its edge detection, drops the directions from that
+  frame's words before the remap, so held MOD1 keeps them from gameplay.
+- With debug features on, LB + RB together still opens the F1 overlay
+  (`read_sidewinder_pad`, the raw mask).
+- Off the mod, nothing changes: LB / RB stay aim.
+
 ## 7. Files
 
 | File | Role |

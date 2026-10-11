@@ -528,6 +528,8 @@ void zm_map_toggle(void)
 //   action   go there, into its first monster (refused in a room without one)
 //   aim      place the chosen monster type there
 //   run      the monster type list: up/down pick, action or run keeps it
+//   LB / RB  (PAD_MOD1 / PAD_MOD2, keyboard Shift / Tab) the previous / next
+//            monster type, list open or not
 void zm_map_input(unsigned int rawPressed)
 {
     if (!s_open) return;
@@ -538,6 +540,8 @@ void zm_map_input(unsigned int rawPressed)
         if (rawPressed & 0x2000) map_move(1, 0);
         return;
     }
+    if (rawPressed & PAD_MOD1) s_monster = (s_monster + MAP_MONSTER_TYPES - 1) % MAP_MONSTER_TYPES;
+    if (rawPressed & PAD_MOD2) s_monster = (s_monster + 1) % MAP_MONSTER_TYPES;
     if (s_typeMenu) {
         if (rawPressed & 0x1000) s_monster = (s_monster + MAP_MONSTER_TYPES - 1) % MAP_MONSTER_TYPES;
         if (rawPressed & 0x4000) s_monster = (s_monster + 1) % MAP_MONSTER_TYPES;
@@ -911,11 +915,11 @@ void zm_map_draw(void)
     }
     if (s_typeMenu) {
         map_draw_type_menu();
-        map_text(8, 213, 0x7F, "UP-DOWN: MONSTER TYPE");
+        map_text(8, 213, 0x7F, "UP-DOWN OR LB-RB: MONSTER TYPE");
         map_text(8, 226, 0x7F, "ACTION OR RUN: DONE");
         return;
     }
-    snprintf(line, sizeof(line), "AIM: %s %s  RUN: TYPE",
+    snprintf(line, sizeof(line), "AIM: %s %s  RUN: LIST  LB-RB: TYPE",
              zm_is_trap_id(kMonsters[s_monster].id) ? "SET" : "PLACE", kMonsters[s_monster].name);
     map_text(8, 213, 0x7F, line);
     map_text(8, 226, 0x7F, "ARROWS: ROOM  ACTION: GO  OPTIONS: CLOSE");

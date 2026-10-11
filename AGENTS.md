@@ -638,9 +638,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   reliable events carry a source and a destination, and the host relays them.
   - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START.
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
-    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34. FX, SOUND, PSND, BURST, HEAL and STUN carry
+    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34, BOSS=35, VOICE=36. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 69) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 70) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
@@ -874,6 +874,28 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     `door_try_enter`; the lock stays for the survivors). A door into a stub
     room keeps its lock. A non-zombie travels as itself: it is re-spawned as a
     roster extra in the new room (`s_carriedId`), not as the zombie body.
+- **Modifier buttons** (`PAD_MOD1` / `PAD_MOD2`, docs/GAMEPAD_INPUT.md 6a):
+  in the mode LB / RB (keyboard Shift / Tab) are two new buttons, no longer
+  aim, read past the remap tables in `ReadPadBoth`. Untested by the user.
+- **Voice lines** (`ZombieVoice.cpp`, survivors): hold LB (Shift) and press
+  up HELP, down TAKE THIS, left I NEED AMMO, right I NEED HEALTH; aim (X)
+  FOLLOW ME, inventory (Y) WAIT HERE, action (A) WATCH OUT, run (B) the
+  taunt - read as the bound functions, so RT / LT and the keyboard's keys
+  say them too. While LB is held those never reach gameplay
+  (`zombie_mode_pad_filter` in PlayerPad_Update, before the remap), except a
+  face function already held when LB went down (aiming keeps the gun up).
+  Recordings per character:
+  `<exe dir>/infested/voices/<character>/<line>_<n>.wav` (chris, jill, barry,
+  rebecca, richard, enrico; help, takethis, needammo, needhealth, followme,
+  waithere, watchout, taunt; takes 1..
+  up to the first missing, max 16; .ogg too). The speaker picks the take;
+  1.5 s between two lines. VOICE=36 `{line, take, character, stage|room<<8,
+  x, y, z}`. Each copy (the director's too) hears it in the speaker's room
+  panned from the speaker, or in a room with a door to it muffled (-18 dB,
+  AudioFile_Muffle) and panned from that door; a caption ("JILL: HELP!" /
+  "JILL - NEXT ROOM: HELP!") either way. One bank per speaker, loaded on
+  play and freed after (Windows has 80 banks). `[voice]` lines. Untested by
+  the user.
 - **Director controls:**
   - START switches monster. Action attacks; Aim+Action is the second attack.
   - Aim: a white-coat zombie lies down / gets up; a naked or green zombie
@@ -886,7 +908,8 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     mansion's B1 RDTs (stage 2 rooms 0x1A-0x1C) are 4-byte stubs. On the
     map: the arrows move to the nearest room in that direction (on the drawn
     map, 1F's right edge leads to 2F), Run opens the monster-type list
-    (up/down, Action or Run to keep), Aim places one, Action jumps there,
+    (up/down, Action or Run to keep), LB / RB (Shift / Tab) step the
+    monster type list open or not, Aim places one, Action jumps there,
     OPTIONS closes.
   - Mod text goes through `zm_text_encode` before `PrintText8x14`: the 8x14
     sheet draws glyph byte - 36, so only letters, digits, `:` `;` `?` and
@@ -1025,6 +1048,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieRoomSync.cpp` | a room's pushed objects and puzzle flags, shared by the survivors in it |
 | `ZombieStatue.cpp` | the 2F dining statue falling into the 1F dining room, seen live from below |
 | `ZombieYawn.cpp` | the two Yawn fights: spawns, health, music, locked doors, lockdowns and the clock's holds, the guarded key/crest, the lesson room's hole, the body across copies |
+| `ZombieVoice.cpp` | the survivors' voice lines: LB + a direction, the recordings, who hears them (the room, muffled through a door) |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |
 | `ZombieStats.cpp` | the end of a match: each player's stats, their exchange (STATS) and the white end screen |

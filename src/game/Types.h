@@ -799,6 +799,17 @@ struct D3DRendererInfo {
 #define PAD_CROSS       0x4000
 #define PAD_SQUARE      0x8000
 
+// Port addition: the two modifier buttons of the zombie mod, above the PSX
+// word's 16 bits (the raw words g_RawPadHeld / g_button_pressed_id /
+// g_PlayerPadPressed are 32-bit; nothing original reads past bit 15, and the
+// remapped g_PlayerDpadHeld is built from the low 16 only). Raised by
+// ReadPadBoth only while [Mods] PlayInfested is on: pad LB / RB (buttons 5 / 6,
+// taken off aim), keyboard Shift / Tab. Each screen decides whether they act
+// as modifiers or as buttons of their own.
+#define PAD_MOD1        0x00010000
+#define PAD_MOD2        0x00020000
+#define PAD_MODS        (PAD_MOD1|PAD_MOD2)
+
 #define PAD_ANY         0xFFFF
 #define PAD_DPAD        (PAD_UP|PAD_DOWN|PAD_LEFT|PAD_RIGHT)
 #define PAD_SHOULDER    (PAD_L1|PAD_L2|PAD_R1|PAD_R2)

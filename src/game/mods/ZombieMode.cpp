@@ -718,6 +718,7 @@ void zombie_mode_new_game(int isNewGame)
     zm_spec_new_game();
     zm_shotgun_reset();
     zm_piano_reset();
+    zm_voice_reset();
     zm_roomsync_reset();
     zm_world_story_reset();
     if (g_bPlayAsZombie && zm_net_active() && zm_net_role() == ZM_NET_SURVIVOR) {
@@ -7453,6 +7454,9 @@ static void zm_route_events(void)
         case ZM_EV_ROOMSYNC:
             zm_roomsync_take(a, src);
             break;
+        case ZM_EV_VOICE:
+            zm_voice_take(a, src);
+            break;
         case ZM_EV_CREDIT:
             zm_econ_monster_hit();
             break;
@@ -7648,6 +7652,7 @@ void zombie_mode_net_frame(void)
     zm_clock_frame();
     zm_shotgun_frame();
     zm_piano_frame();
+    zm_voice_frame();
     zm_access_frame();
     zm_greenhouse_frame();
     zm_roomsync_frame();
