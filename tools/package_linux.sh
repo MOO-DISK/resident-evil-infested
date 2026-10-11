@@ -80,6 +80,10 @@ mkdir -p "$OUT/lib"
 
 cp "$BIN" "$OUT/residentevil"
 chmod +x "$OUT/residentevil"
+if [ -d "$REPO/infested/voices" ]; then
+    mkdir -p "$OUT/infested"
+    cp -r "$REPO/infested/voices" "$OUT/infested/"
+fi
 
 # ---------------------------------------------------------------------------
 # Library closure

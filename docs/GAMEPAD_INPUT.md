@@ -385,6 +385,35 @@ word: `PAD_MOD1` (`0x10000`) and `PAD_MOD2` (`0x20000`, `src/game/Types.h`).
   (`read_sidewinder_pad`, the raw mask).
 - Off the mod, nothing changes: LB / RB stay aim.
 
+Survivors can also hold RB and press Up (keyboard: Tab + Up) to tell a joke.
+Recordings go in `<exe dir>/infested/voices/<character>/joke_1.wav`,
+`joke_2.wav`, etc. (`.ogg` also works). Each press plays the next recording,
+wrapping to the first after the last, with the existing voice cooldown and
+room/adjacent-room playback rules. Takes must be numbered consecutively from
+1, up to 16, as with the other voice slots.
+
+Additional RB voice categories (keyboard modifier: Tab):
+
+| Binding | Category | Filenames |
+|---|---|---|
+| RB + Down | Good job | `goodjob_1.wav`, `goodjob_2.wav`, ... |
+| RB + Left | Guard me | `guardme_1.wav`, `guardme_2.wav`, ... |
+| RB + Right | Lead the way | `leadtheway_1.wav`, `leadtheway_2.wav`, ... |
+| RB + X | Run away | `runaway_1.wav`, `runaway_2.wav`, ... |
+| RB + Y | Stay here | `stayhere_1.wav`, `stayhere_2.wav`, ... |
+| RB + A | Thanks | `thanks_1.wav`, `thanks_2.wav`, ... |
+| RB + B | Use that (world interaction) | `usethat_1.wav`, `usethat_2.wav`, ... |
+| RB + Back/Select | We're screwed | `werescrewed_1.wav`, `werescrewed_2.wav`, ... |
+
+These use the same character folders and random take selection as LB lines.
+Stay here is its own category; LB + Y still uses `waithere` recordings.
+
+LB + Right selects a health subcategory using the speaker's current HP:
+full health uses `needhealth_1.wav`, etc.; any damage above the red band uses
+`hurt_1.wav`, etc.; red/Danger health (HP at or below `maxHealth >> 2`)
+uses `dying_1.wav`, etc. These have the same numbered-take and `.ogg` support
+as other categories. The overlay shows the currently selected category.
+
 ## 7. Files
 
 | File | Role |

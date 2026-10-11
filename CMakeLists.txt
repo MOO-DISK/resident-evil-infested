@@ -174,6 +174,19 @@ list(APPEND RE1_SOURCES
 add_executable(residentevil ${RE1_SOURCES})
 
 # Keep mod audio beside the executable, independently of the game asset root.
+# Run on incremental builds too, so adding recordings needs no C++ rebuild.
+# Generate the destination separately: using TARGET_FILE_DIR in the custom
+# target's command creates a circular dependency on CMake 3.16-3.18.
+# Test source existence at build time, so new recordings work without a
+# reconfigure even if the optional voices folder was initially absent.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/copy_voice_lines_$<CONFIG>.cmake"
+    CONTENT "if(EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/infested/voices\")\n  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_directory \"${CMAKE_CURRENT_SOURCE_DIR}/infested/voices\" \"$<TARGET_FILE_DIR:residentevil>/infested/voices\" RESULT_VARIABLE copy_result)\n  if(NOT copy_result EQUAL 0)\n    message(FATAL_ERROR \"Failed to copy survivor voice recordings\")\n  endif()\nendif()\n")
+add_custom_target(copy_voice_lines
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/copy_voice_lines_$<CONFIG>.cmake"
+    COMMENT "Copying survivor voice recordings"
+    VERBATIM)
+add_dependencies(residentevil copy_voice_lines)
+
 add_custom_command(TARGET residentevil POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:residentevil>/infested"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

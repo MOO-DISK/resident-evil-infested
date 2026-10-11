@@ -397,6 +397,7 @@ void zm_note(const char* text);
 // ---- The survivors' voice lines (ZombieVoice.cpp) ----
 void zm_voice_reset(void);
 void zm_voice_frame(void);
+void zm_voice_draw(void);
 void zm_voice_take(const short* args, int src);
 // The mod's own message text (encoded, 0x01-terminated) on the message line,
 // as a room's message: passive in the room (ZombieMessages.cpp), as it was

@@ -2852,6 +2852,7 @@ void zombie_mode_draw_overlay(void)
     zm_piano_draw();
     zm_access_draw();
     zm_timeout_draw();
+    zm_voice_draw();
     if (s_gameRole == ZM_NET_SURVIVOR) zm_room_name_draw();
     zm_clock_draw();
     if (s_switchNoteFrames > 0) {
