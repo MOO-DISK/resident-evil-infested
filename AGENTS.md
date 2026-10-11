@@ -878,16 +878,20 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   in the mode LB / RB (keyboard Shift / Tab) are two new buttons, no longer
   aim, read past the remap tables in `ReadPadBoth`. Untested by the user.
 - **Voice lines** (`ZombieVoice.cpp`, survivors): hold LB (Shift) and press
-  up HELP, down TAKE THIS, left I NEED AMMO, right I NEED HEALTH; aim (X)
-  FOLLOW ME, inventory (Y) WAIT HERE, action (A) WATCH OUT, run (B) the
-  taunt - read as the bound functions, so RT / LT and the keyboard's keys
-  say them too. While LB is held those never reach gameplay
+  up HELP, down WATCH OUT, left GUARD ME, right LEAD THE WAY; aim (X)
+  FOLLOW ME, inventory (Y) STAY HERE, action (A) USE THAT, run (B) RUN AWAY.
+  RB (Tab) groups supplies/social: up JOKE, down GOOD JOB, left NEED AMMO,
+  right NEED HEALTH (hurt/dying by HP), X TAKE THIS, A THANKS, B TAUNT,
+  Y WE'RE SCREWED. See docs/GAMEPAD_INPUT.md 6a.
+  Read as the bound functions, so RT / LT and keyboard keys say them too.
+  While either modifier is held those never reach gameplay
   (`zombie_mode_pad_filter` in PlayerPad_Update, before the remap), except a
   face function already held when LB went down (aiming keeps the gun up).
   Recordings per character:
   `<exe dir>/infested/voices/<character>/<line>_<n>.wav` (chris, jill, barry,
   rebecca, richard, enrico; help, takethis, needammo, needhealth, followme,
-  waithere, watchout, taunt; takes 1..
+  stayhere, watchout, guardme, leadtheway, runaway, usethat, thanks,
+  goodjob, joke, werescrewed, hurt, dying, taunt; takes 1..
   up to the first missing, max 16; .ogg too). The speaker picks the take;
   1.5 s between two lines. VOICE=36 `{line, take, character, stage|room<<8,
   x, y, z}`. Each copy (the director's too) hears it in the speaker's room

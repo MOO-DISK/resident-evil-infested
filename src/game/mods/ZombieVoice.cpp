@@ -2,13 +2,12 @@
 //
 // A survivor holds MOD1 (pad LB, keyboard Shift - PAD_MOD1, InputSystem.cpp)
 // and presses a direction or a face button:
-//   up HELP, down TAKE THIS, left I NEED AMMO, right I NEED HEALTH;
-//   aim (pad X) FOLLOW ME, inventory (Y) WAIT HERE, action (A) WATCH OUT,
-//   run (B) the taunt.
-// MOD2 (RB / Tab): up JOKE, down GOOD JOB, left GUARD ME, right LEAD THE WAY,
-// aim (X) RUN AWAY, inventory (Y) STAY HERE, action (A) THANKS,
-// run (B) USE THAT (a world interaction, separate from TAKE THIS).
-// MOD2 + options (pad Back/Select) WE'RE SCREWED.
+//   up HELP, down WATCH OUT, left GUARD ME, right LEAD THE WAY;
+//   aim (pad X) FOLLOW ME, inventory (Y) STAY HERE, action (A) USE THAT,
+//   run (B) RUN AWAY.
+// MOD2 (RB / Tab): up JOKE, down GOOD JOB, left I NEED AMMO,
+// right I NEED HEALTH (or hurt/dying), aim (X) TAKE THIS, action (A) THANKS,
+// run (B) the taunt, inventory (Y) WE'RE SCREWED.
 // Jokes cycle in order.
 // The face buttons are read as the functions they are bound to (the raw pad
 // word has no physical buttons), so the keyboard's aim / menu / action / run
@@ -19,9 +18,9 @@
 //
 // Each character has its own recordings, any number of takes a line:
 //   <exe dir>/infested/voices/<character>/<line>_<n>.wav   (n from 1; .ogg too)
-// <character> is chris, jill, barry, rebecca, richard or enrico, <line> is
-// help, takethis, needammo, needhealth, followme, waithere, watchout or
-// taunt or joke. Joke takes play in order, wrapping back to 1.
+// <character> is chris, jill, barry, rebecca, richard or enrico.
+// <line> categories are listed in kLineFile below. Joke takes play in order,
+// wrapping back to 1.
 // Takes are counted on first use
 // (1, 2, ... up to the first missing one). The speaker picks the take and
 // sends it, so every copy plays the same recording. A missing file plays
@@ -72,15 +71,16 @@
 #define VOICE_RUN       0x0040
 #define VOICE_FACE  (VOICE_AIM | VOICE_INVENTORY | VOICE_ACTION | VOICE_RUN)
 
+// Slot 5 is retired; keep the remaining network line IDs stable.
 static const char* const kLineFile[ZM_VOICE_LINES] = {
     "help", "takethis", "needammo", "needhealth",
-    "followme", "waithere", "watchout", "taunt", "joke",
+    "followme", NULL, "watchout", "taunt", "joke",
     "goodjob", "guardme", "leadtheway", "runaway", "stayhere",
     "hurt", "dying", "thanks", "usethat", "werescrewed",
 };
 static const char* const kLineText[ZM_VOICE_LINES] = {
     "HELP!", "TAKE THIS!", "I NEED AMMO!", "I NEED HEALTH!",
-    "FOLLOW ME!", "WAIT HERE!", "WATCH OUT!", "COME AND GET ME!", "JOKE",
+    "FOLLOW ME!", NULL, "WATCH OUT!", "COME AND GET ME!", "JOKE",
     "GOOD JOB!", "GUARD ME!", "LEAD THE WAY!", "RUN AWAY!", "STAY HERE!",
     "I'M HURT!", "I'M DYING!", "THANKS!", "USE THAT!", "WE'RE SCREWED!",
 };
@@ -120,6 +120,7 @@ static void voice_char_dir(int ch, char* out, int size)
 
 static bool voice_path(int ch, int line, int take, char* out, int size)
 {
+    if (line < 0 || line >= ZM_VOICE_LINES || kLineFile[line] == NULL) return false;
     char exeDir[1024], name[16];
     if (!plat_exe_dir(exeDir, sizeof(exeDir))) return false;
     voice_char_dir(ch, name, sizeof(name));
@@ -200,6 +201,7 @@ static bool voice_door_between(unsigned char stage, unsigned char room, int sx, 
 static void voice_play(int player, int ch, int line, int take, short where, int x, int y, int z)
 {
     if (player < 0 || player >= ZM_NET_MAX_PLAYERS || line < 0 || line >= ZM_VOICE_LINES) return;
+    if (kLineFile[line] == NULL) return;
     unsigned char stage = (unsigned char)(where & 0xFF), room = (unsigned char)((unsigned short)where >> 8);
     VECTOR at;
     at.x = x; at.y = y; at.z = z;
@@ -239,44 +241,40 @@ static void voice_play(int player, int ch, int line, int take, short where, int 
 DWORD zombie_mode_pad_filter(DWORD rawHeld, DWORD rawPressed)
 {
     bool mod = (rawHeld & PAD_MOD1) != 0;
-    bool jokes = (rawHeld & PAD_MOD2) != 0;
-    bool modDown = (mod || jokes) && !s_modWas;
-    s_modWas = mod || jokes;
+    bool social = (rawHeld & PAD_MOD2) != 0;
+    bool modDown = (mod || social) && !s_modWas;
+    s_modWas = mod || social;
     if (!zombie_mode_armed() || zm_game_role() != ZM_NET_SURVIVOR) return 0;
-    if (!mod && !jokes) return 0;
+    if (!mod && !social) return 0;
     // What was already held when MOD1 went down stays the game's until it
     // is let go.
     if (modDown) s_passHeld = rawHeld & VOICE_FACE;
     s_passHeld &= rawHeld;
     if (zm_map_is_open() || g_playerEntity.health < 0 || zombie_mode_match_over()) return 0;
     DWORD fresh = rawPressed & ~s_passHeld;
-    if (jokes) {
+    if (social) {
         if (s_pendingLine < 0) {
-            if ((rawPressed & VOICE_OPTIONS_BIT) != 0 &&
-                (rawHeld & (VOICE_INVENTORY | VOICE_OPTIONS_BIT)) == (VOICE_INVENTORY | VOICE_OPTIONS_BIT))
+            if ((fresh & VOICE_INVENTORY) && (rawHeld & VOICE_OPTIONS_BIT) == 0)
                 s_pendingLine = 18;
             else if (fresh & VOICE_UP) s_pendingLine = ZM_VOICE_JOKE;
             else if (fresh & VOICE_DOWN) s_pendingLine = 9;
-            else if (fresh & VOICE_LEFT) s_pendingLine = 10;
-            else if (fresh & VOICE_RIGHT) s_pendingLine = 11;
-            else if (fresh & VOICE_AIM) s_pendingLine = 12;
-            else if ((fresh & VOICE_INVENTORY) && (rawHeld & VOICE_OPTIONS_BIT) == 0) s_pendingLine = 13;
+            else if (fresh & VOICE_LEFT) s_pendingLine = 2;
+            else if (fresh & VOICE_RIGHT) s_pendingLine = 3;
+            else if (fresh & VOICE_AIM) s_pendingLine = 1;
             else if (fresh & VOICE_ACTION) s_pendingLine = 16;
-            else if (fresh & VOICE_RUN) s_pendingLine = 17;
+            else if (fresh & VOICE_RUN) s_pendingLine = 7;
         }
-        // Consume the options chord as well, so it cannot open the radio/menu.
-        return VOICE_DIRS | (VOICE_FACE & ~s_passHeld) |
-               ((rawHeld & VOICE_OPTIONS_BIT) != 0 ? VOICE_OPTIONS_BIT | VOICE_INVENTORY : 0);
+        return VOICE_DIRS | (VOICE_FACE & ~s_passHeld);
     }
     if (s_pendingLine < 0) {
         if (fresh & VOICE_UP)               s_pendingLine = 0;
-        else if (fresh & VOICE_DOWN)        s_pendingLine = 1;
-        else if (fresh & VOICE_LEFT)        s_pendingLine = 2;
-        else if (fresh & VOICE_RIGHT)       s_pendingLine = 3;
+        else if (fresh & VOICE_DOWN)        s_pendingLine = 6;
+        else if (fresh & VOICE_LEFT)        s_pendingLine = 10;
+        else if (fresh & VOICE_RIGHT)       s_pendingLine = 11;
         else if (fresh & VOICE_AIM)         s_pendingLine = 4;
-        else if ((fresh & VOICE_INVENTORY) && (rawHeld & VOICE_OPTIONS_BIT) == 0) s_pendingLine = 5;
-        else if (fresh & VOICE_ACTION)      s_pendingLine = 6;
-        else if (fresh & VOICE_RUN)         s_pendingLine = 7;
+        else if ((fresh & VOICE_INVENTORY) && (rawHeld & VOICE_OPTIONS_BIT) == 0) s_pendingLine = 13;
+        else if (fresh & VOICE_ACTION)      s_pendingLine = 17;
+        else if (fresh & VOICE_RUN)         s_pendingLine = 12;
     }
     return VOICE_DIRS | (VOICE_FACE & ~s_passHeld);
 }
@@ -357,36 +355,51 @@ static void voice_hint_button(int x, int y, const char* key, DWORD rawBit, bool 
 // buttons. Read the unfiltered pad, since voice chords are removed from play.
 void zm_voice_draw(void)
 {
-    if (!zombie_mode_armed() || zm_game_role() != ZM_NET_SURVIVOR ||
-        g_playerEntity.health < 0 || zombie_mode_match_over() || zm_map_is_open() ||
+    if (!zombie_mode_armed() ||
+        (zm_game_role() == ZM_NET_SURVIVOR && g_playerEntity.health < 0) ||
+        zombie_mode_match_over() || zm_map_is_open() ||
         (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) != 0 || g_openMenuFlag != 0) return;
     bool lb = (g_RawPadHeld & PAD_MOD1) != 0;
     bool rb = (g_RawPadHeld & PAD_MOD2) != 0;
     if (!lb && !rb) return;
 
-    voice_hint_rect(8, rb ? 32 : 52, 304, rb ? 146 : 126, 176, 40, 0x60000000u);
-    if (rb) voice_hint_text(160, 34, "BACK: WE'RE SCREWED", 0);
-    voice_hint_text(160, 54, rb ? "RB - VOICE LINES" : "LB - VOICE LINES", 0);
+    if (zm_game_role() != ZM_NET_SURVIVOR) {
+        if (!lb || g_zombieModeEntity == NULL) return;
+        voice_hint_rect(72, 52, 176, 126, 176, 40, 0x60000000u);
+        voice_hint_text(160, 54, "LB - SPAWN", 0);
+        voice_hint_text(160, 74, "ZOMBIE", 0);
+        voice_hint_text(112, 114, "HUNTER", 0);
+        voice_hint_text(208, 114, "CHIMERA", 0);
+        voice_hint_text(160, 160, "DOG", 0);
+        voice_hint_button(160, 92, "U", VOICE_UP, true);
+        voice_hint_button(112, 132, "L", VOICE_LEFT, true);
+        voice_hint_button(208, 132, "R", VOICE_RIGHT, true);
+        voice_hint_button(160, 142, "D", VOICE_DOWN, true);
+        return;
+    }
+
+    voice_hint_rect(8, 52, 304, 126, 176, 40, 0x60000000u);
+    voice_hint_text(160, 54, rb ? "RB - SUPPLIES / SOCIAL" : "LB - TEAMWORK", 0);
     unsigned char color = 0;
     voice_hint_text(80, 74, rb ? "JOKE" : "HELP", 0);
-    voice_hint_text(32, 100, rb ? "GUARD" : "NEED", color);
-    voice_hint_text(32, 114, rb ? "ME" : "AMMO", color);
+    voice_hint_text(32, 100, rb ? "NEED" : "GUARD", color);
+    voice_hint_text(32, 114, rb ? "AMMO" : "ME", color);
     int healthLine = voice_health_line();
-    voice_hint_text(128, 100, rb ? "LEAD" : healthLine == 3 ? "NEED" : "I'M", color);
-    voice_hint_text(128, 114, rb ? "THE WAY" : healthLine == ZM_VOICE_DYING ? "DYING" :
+    voice_hint_text(128, 100, !rb ? "LEAD" : healthLine == 3 ? "NEED" : "I'M", color);
+    voice_hint_text(128, 114, !rb ? "THE WAY" : healthLine == ZM_VOICE_DYING ? "DYING" :
                     healthLine == ZM_VOICE_HURT ? "HURT" : "HEALTH", color);
-    voice_hint_text(80, 160, rb ? "GOOD JOB" : "TAKE THIS", color);
+    voice_hint_text(80, 160, rb ? "GOOD JOB" : "WATCH OUT", color);
     voice_hint_button(80, 92, "U", VOICE_UP, true);
     voice_hint_button(32, 132, "L", VOICE_LEFT, true);
     voice_hint_button(128, 132, "R", VOICE_RIGHT, true);
     voice_hint_button(80, 142, "D", VOICE_DOWN, true);
 
-    voice_hint_text(240, 74, rb ? "STAY HERE" : "WAIT HERE", color);
-    voice_hint_text(192, 100, rb ? "RUN" : "FOLLOW", color);
-    voice_hint_text(192, 114, rb ? "AWAY" : "ME", color);
-    if (rb) voice_hint_text(288, 100, "USE", color);
-    voice_hint_text(288, 114, rb ? "THAT" : "TAUNT", color);
-    voice_hint_text(240, 160, rb ? "THANKS" : "WATCH OUT", color);
+    voice_hint_text(240, 74, rb ? "WE'RE SCREWED" : "STAY HERE", color);
+    voice_hint_text(192, 100, rb ? "TAKE" : "FOLLOW", color);
+    voice_hint_text(192, 114, rb ? "THIS" : "ME", color);
+    if (!rb) voice_hint_text(288, 100, "RUN", color);
+    voice_hint_text(288, 114, rb ? "TAUNT" : "AWAY", color);
+    voice_hint_text(240, 160, rb ? "THANKS" : "USE THAT", color);
     voice_hint_button(240, 92, "Y", VOICE_INVENTORY, true);
     voice_hint_button(192, 132, "X", VOICE_AIM, true);
     voice_hint_button(288, 132, "B", VOICE_RUN, true);

@@ -385,34 +385,38 @@ word: `PAD_MOD1` (`0x10000`) and `PAD_MOD2` (`0x20000`, `src/game/Types.h`).
   (`read_sidewinder_pad`, the raw mask).
 - Off the mod, nothing changes: LB / RB stay aim.
 
-Survivors can also hold RB and press Up (keyboard: Tab + Up) to tell a joke.
-Recordings go in `<exe dir>/infested/voices/<character>/joke_1.wav`,
-`joke_2.wav`, etc. (`.ogg` also works). Each press plays the next recording,
-wrapping to the first after the last, with the existing voice cooldown and
-room/adjacent-room playback rules. Takes must be numbered consecutively from
-1, up to 16, as with the other voice slots.
+The director can hold LB (Shift on keyboard) to show a monster shortcut
+D-pad: Up spawns a zombie, Down a dog (Cerberus), Left a hunter, and Right
+a chimera in the current room. Each fresh direction press requests one
+placement through the map's rules, including price, unlock, room capacity,
+and reinforcement restrictions. Directions do not move or turn the possessed
+monster while LB is held. The map keeps its existing LB/RB controls.
 
-Additional RB voice categories (keyboard modifier: Tab):
+Survivor voice lines are grouped by purpose: LB (Shift) for teamwork,
+RB (Tab) for supplies and social lines.
 
-| Binding | Category | Filenames |
+| Button | LB / Shift: teamwork | RB / Tab: supplies / social |
 |---|---|---|
-| RB + Down | Good job | `goodjob_1.wav`, `goodjob_2.wav`, ... |
-| RB + Left | Guard me | `guardme_1.wav`, `guardme_2.wav`, ... |
-| RB + Right | Lead the way | `leadtheway_1.wav`, `leadtheway_2.wav`, ... |
-| RB + X | Run away | `runaway_1.wav`, `runaway_2.wav`, ... |
-| RB + Y | Stay here | `stayhere_1.wav`, `stayhere_2.wav`, ... |
-| RB + A | Thanks | `thanks_1.wav`, `thanks_2.wav`, ... |
-| RB + B | Use that (world interaction) | `usethat_1.wav`, `usethat_2.wav`, ... |
-| RB + Back/Select | We're screwed | `werescrewed_1.wav`, `werescrewed_2.wav`, ... |
+| Up | Help | Joke |
+| Down | Watch out | Good job |
+| Left | Guard me | I need ammo |
+| Right | Lead the way | I need health / I'm hurt / I'm dying |
+| X / Aim | Follow me | Take this |
+| Y / Inventory | Stay here | We're screwed |
+| A / Action | Use that (world interaction) | Thanks |
+| B / Run | Run away | Taunt |
 
-These use the same character folders and random take selection as LB lines.
-Stay here is its own category; LB + Y still uses `waithere` recordings.
+The duplicate Wait here category is removed; use `stayhere` recordings.
+Existing filenames remain unchanged. Recordings go in
+`<exe dir>/infested/voices/<character>/<category>_<n>.wav` (or `.ogg`),
+numbered consecutively from 1 through at most 16. Jokes cycle in order;
+other categories pick a random take. The 1.5-second cooldown and
+room/adjacent-room playback rules still apply.
 
-LB + Right selects a health subcategory using the speaker's current HP:
-full health uses `needhealth_1.wav`, etc.; any damage above the red band uses
-`hurt_1.wav`, etc.; red/Danger health (HP at or below `maxHealth >> 2`)
-uses `dying_1.wav`, etc. These have the same numbered-take and `.ogg` support
-as other categories. The overlay shows the currently selected category.
+RB + Right selects a health subcategory using the speaker's current HP:
+full health uses `needhealth`; damage above the red band uses `hurt`;
+red/Danger health (HP at or below `maxHealth >> 2`) uses `dying`.
+The overlay shows the currently selected category.
 
 ## 7. Files
 

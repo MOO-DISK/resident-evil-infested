@@ -4614,6 +4614,20 @@ static bool zm_director_input(Entity* e, bool busy, unsigned int* heldOut, unsig
     } else if (gates) {
         zm_map_input(rawEdge);
     }
+    // LB + a fresh direction buys one monster in the loaded room. Use the
+    // map's placement path so prices, caps and reinforcements stay identical.
+    if (gates && !zm_map_is_open() && !mapWasOpen && !s_jumpPending &&
+        (raw & PAD_MOD1) != 0) {
+        if ((rawEdge & 0xF000) != 0 && zm_yawn_director_closed(g_stageId, g_roomId))
+            zm_note("NOTHING CAN BE PLACED IN A BOSS ROOM");
+        else if (rawEdge & 0x1000) zm_director_place(g_stageId, g_roomId, 0x00, "ZOMBIE");
+        else if (rawEdge & 0x4000) zm_director_place(g_stageId, g_roomId, 0x02, "CERBERUS");
+        else if (rawEdge & 0x8000) zm_director_place(g_stageId, g_roomId, 0x06, "HUNTER");
+        else if (rawEdge & 0x2000) zm_director_place(g_stageId, g_roomId, 0x09, "CHIMERA");
+        ENTITY = e;     // a live spawn uses the engine's entity scratch pointer
+        held &= ~(ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B);
+        pressed &= ~(ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B);
+    }
     // Placed a monster from the map.
     unsigned char placeStage, placeRoom, placeId;
     const char* placeName;
