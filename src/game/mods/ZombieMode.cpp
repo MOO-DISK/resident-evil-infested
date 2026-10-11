@@ -7648,13 +7648,13 @@ void zombie_mode_net_frame(void)
     zm_clock_frame();
     zm_shotgun_frame();
     zm_piano_frame();
-    zm_voice_frame();
     zm_access_frame();
     zm_greenhouse_frame();
     zm_roomsync_frame();
     zm_statue_frame();
     zm_yawn_frame();
     zm_end_frame();
+    zm_voice_frame();      // after the music's owners: its duck is the last volume set
     if (zm_match_authority() && !s_winShown) zm_ai_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;

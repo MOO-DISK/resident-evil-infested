@@ -30,6 +30,11 @@
 //   - anywhere else: nothing.
 // The director's copy hears by the same rule - it can listen in.
 //
+// The music ducks under a line this copy hears (10 dB in the room, 5 dB
+// through a door) - the cutscenes, which the voices were recorded for, play
+// with little or no music. The room's (g_BgmSoundBank, g_SndBank[0..2]), the
+// Yawn fight's and the piano's; voice_duck_frame below.
+//
 // One sound bank per speaker, loaded when its line starts and freed when it
 // ends or the next one cuts it: the Windows backend has 80 banks for the
 // whole game, so the recordings are never preloaded.
@@ -48,7 +53,15 @@
 #define ZM_VOICE_LINES       8
 #define ZM_VOICE_MAX_TAKES   16
 #define ZM_VOICE_COOLDOWN_MS 1500     // between two lines of one survivor
-#define ZM_VOICE_MUFFLE_DB   1800     // hundredths of a dB off through a door
+// Through a door the low-pass already takes most of the voice's energy;
+// 18 dB on top of it (the shotgun trap's figure) left the line inaudible.
+#define ZM_VOICE_MUFFLE_DB   600      // hundredths of a dB off through a door
+#define ZM_VOICE_DUCK        1000     // the music under a line in the room
+#define ZM_VOICE_DUCK_MUFFLED 800     // ... and under one through a door
+#define ZM_VOICE_DUCK_DOWN   250      // a frame: down in 4 frames
+#define ZM_VOICE_DUCK_UP     70       // a frame: back up in about half a second
+#define ZM_VOICE_DUCK_BANKS  6
+#define ZM_VOICE_UNSET       0x7FFFFFFF
 // The raw pad word's directions (g_button_pressed_id), as the lobby reads them.
 #define VOICE_UP    0x1000
 #define VOICE_DOWN  0x4000
@@ -75,6 +88,13 @@ static const char* const kLineText[ZM_VOICE_LINES] = {
 static signed char s_takes[ZM_CHAR_COUNT][ZM_VOICE_LINES];   // -1: not counted yet
 static int          s_bank[ZM_NET_MAX_PLAYERS];              // the speaker's playing line
 static unsigned int s_bankStart[ZM_NET_MAX_PLAYERS];
+static bool         s_bankMuffled[ZM_NET_MAX_PLAYERS];
+// A music bank under the duck: the volume its owner wants (`base`) and the
+// one this file last set (`written`). A volume that is not ours is the
+// owner's new one - a fade, a new track - and becomes the base.
+struct VoiceDuck { int handle, base, written; };
+static VoiceDuck    s_duck[ZM_VOICE_DUCK_BANKS];
+static int          s_duckNow;                               // hundredths of a dB
 static int          s_pendingLine = -1;                      // pressed, not yet said
 static unsigned int s_lastSaid;
 static bool         s_saidOnce;
@@ -130,6 +150,14 @@ void zm_voice_reset(void)
     for (int p = 0; p < ZM_NET_MAX_PLAYERS; p++) voice_stop(p);
     s_pendingLine = -1;
     s_saidOnce = false;
+    for (int i = 0; i < ZM_VOICE_DUCK_BANKS; i++) {
+        VoiceDuck& d = s_duck[i];
+        if (d.handle != 0 && d.written != ZM_VOICE_UNSET && getSndVol(d.handle) == d.written)
+            set_volume(d.handle, d.base);
+        d.handle = 0;
+        d.written = ZM_VOICE_UNSET;
+    }
+    s_duckNow = 0;
 }
 
 // The door of this copy's room that leads to (stage, room), nearest the
@@ -178,8 +206,14 @@ static void voice_play(int player, int ch, int line, int take, short where, int 
     bool here = stage == g_stageId && room == g_roomId;
     bool muffled = false;
     if (!here) {
-        if (!voice_door_between(stage, room, x, z, &at)) return;
+        if (!voice_door_between(stage, room, x, z, &at)) {
+            dbg_printf("[voice] p%d in %d:%02X not heard here (%d:%02X): no door between\n",
+                       player, stage + 1, room, g_stageId + 1, g_roomId);
+            return;
+        }
         muffled = true;
+        dbg_printf("[voice] p%d in %d:%02X heard through the door at (%d, %d)\n",
+                   player, stage + 1, room, (int)at.x, (int)at.z);
     }
     char caption[64];
     snprintf(caption, sizeof(caption), muffled ? "%s - NEXT ROOM: %s" : "%s: %s",
@@ -202,6 +236,52 @@ static void voice_play(int player, int ch, int line, int take, short where, int 
     SetSndSlot(bank, 0);
     s_bank[player] = bank;
     s_bankStart[player] = zm_game_time_ms();
+    s_bankMuffled[player] = muffled;
+}
+
+// Every frame, after the music's owners set theirs: ease the duck toward
+// what the lines playing want and put it on every music bank.
+static void voice_duck_frame(void)
+{
+    int target = 0;
+    for (int p = 0; p < ZM_NET_MAX_PLAYERS; p++) {
+        if (s_bank[p] == 0) continue;
+        int want = s_bankMuffled[p] ? ZM_VOICE_DUCK_MUFFLED : ZM_VOICE_DUCK;
+        if (want > target) target = want;
+    }
+    if (s_duckNow < target) {
+        s_duckNow += ZM_VOICE_DUCK_DOWN;
+        if (s_duckNow > target) s_duckNow = target;
+    } else if (s_duckNow > target) {
+        s_duckNow -= ZM_VOICE_DUCK_UP;
+        if (s_duckNow < target) s_duckNow = target;
+    }
+    int handles[ZM_VOICE_DUCK_BANKS] = {
+        g_BgmSoundBank, g_SndBank[0].handle, g_SndBank[1].handle, g_SndBank[2].handle,
+        zm_yawn_music_bank(), zm_piano_music_bank(),
+    };
+    for (int i = 0; i < ZM_VOICE_DUCK_BANKS; i++) {
+        VoiceDuck& d = s_duck[i];
+        int h = handles[i];
+        for (int j = 0; j < i; j++) if (handles[j] == h) h = 0;    // one bank, one duck
+        if (h != d.handle) {                    // another bank there now: its volume is its own
+            d.handle = h;
+            d.written = ZM_VOICE_UNSET;
+        }
+        if (h == 0) continue;
+        int v = getSndVol(h);
+        if (v > 0) continue;                    // 2000: no volume set yet (apply_vol_delta)
+        if (v != d.written) d.base = v;
+        if (s_duckNow == 0) {
+            if (d.written != ZM_VOICE_UNSET) {
+                if (v == d.written) set_volume(h, d.base);
+                d.written = ZM_VOICE_UNSET;     // left alone until the next line
+            }
+            continue;
+        }
+        set_volume(h, d.base - s_duckNow);
+        d.written = getSndVol(h);               // as the backend keeps it (clamped)
+    }
 }
 
 // PlayerPad_Update, after its edge detection (InputSystem.cpp): while MOD1 is
@@ -241,6 +321,7 @@ void zm_voice_frame(void)
     for (int p = 0; p < ZM_NET_MAX_PLAYERS; p++) {
         if (s_bank[p] != 0 && now - s_bankStart[p] > 300 && getSndStat(s_bank[p]) != 1) voice_stop(p);
     }
+    voice_duck_frame();
     int line = s_pendingLine;
     s_pendingLine = -1;
     if (line < 0) return;

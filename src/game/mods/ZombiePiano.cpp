@@ -134,6 +134,9 @@ static bool         s_wallDown;           // this room load has the wall down (o
 static int          s_alertPlayer = -1;   // the director's copy: who is playing
 static unsigned int s_alertStart;
 
+// The tune's sound bank while loaded (0 none): ducked under voice lines.
+int zm_piano_music_bank(void) { return s_musicBank; }
+
 bool zm_piano_open(void)
 {
     return Flg_ck((int)g_ScenarioFlags2, ZM_PIANO_OPEN_FLAG) != 0;

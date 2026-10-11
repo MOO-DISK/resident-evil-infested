@@ -891,9 +891,11 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   up to the first missing, max 16; .ogg too). The speaker picks the take;
   1.5 s between two lines. VOICE=36 `{line, take, character, stage|room<<8,
   x, y, z}`. Each copy (the director's too) hears it in the speaker's room
-  panned from the speaker, or in a room with a door to it muffled (-18 dB,
+  panned from the speaker, or in a room with a door to it muffled (-6 dB,
   AudioFile_Muffle) and panned from that door; a caption ("JILL: HELP!" /
-  "JILL - NEXT ROOM: HELP!") either way. One bank per speaker, loaded on
+  "JILL - NEXT ROOM: HELP!") either way. The music ducks under a line this
+  copy hears (-10 dB, -8 dB through a door; the room's banks, the Yawn fight's,
+  the piano's), easing back after it; an owner's fade is taken as its new base. One bank per speaker, loaded on
   play and freed after (Windows has 80 banks). `[voice]` lines. Untested by
   the user.
 - **Director controls:**

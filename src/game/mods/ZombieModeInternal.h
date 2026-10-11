@@ -306,6 +306,7 @@ void zm_yawn_after_update(Entity* e);
 void zm_yawn_room_reset(void);
 void zm_yawn_room(void);
 void zm_yawn_frame(void);
+int  zm_yawn_music_bank(void);
 // The randomizer's item_model_set hook: before its patch (`op` as the room
 // has it) and after it.
 void zm_yawn_item_before(const unsigned char* op);
@@ -371,6 +372,7 @@ void zm_piano_frame(void);
 void zm_piano_take(const short* args, int src);
 void zm_piano_draw(void);
 bool zm_piano_open(void);
+int  zm_piano_music_bank(void);
 void zm_shotgun_room(void);
 void zm_shotgun_frame(void);
 void zm_shotgun_take(const short* args, int src);
