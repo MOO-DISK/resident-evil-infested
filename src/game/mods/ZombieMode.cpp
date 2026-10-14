@@ -674,6 +674,7 @@ static void zm_stun_after_update(void);
 
 void zombie_mode_new_game(int isNewGame)
 {
+    zm_bumpers_reset();
     s_zombieModeArmed = isNewGame && g_bPlayAsZombie;
     s_hunterLeapUsed = false;
     s_hunterAimWasDown = false;
@@ -2916,6 +2917,7 @@ static void zm_match_end(int reason, int player, unsigned int elapsedMs)
     s_winPlayer = player;
     s_winReason = reason;
     zm_stats_match_over(reason, player, elapsedMs);
+    zm_bumpers_match_end(reason);
     dbg_printf("[zombie] the match is over: %s\n",
                reason == ZM_END_ESCAPE ? "a survivor escaped" :
                reason == ZM_END_UNSOLVABLE ? "required items lost; escape is impossible" :
@@ -7672,7 +7674,7 @@ bool zombie_mode_menu_frame(void)
     g_message_flags = messages;
     g_PlayerDpadHeld = held; g_PlayerDpadPressed = pressed;
     g_PlayerPadHeld = rawHeld; g_button_pressed_id = rawPressed;
-    return attacked;
+    return attacked || s_winShown; // leave inventory so the ending bumper can run
 }
 
 // game_loop, after the player's turn: pump the link, route what came in, and
@@ -7795,4 +7797,15 @@ static void zm_shot_audit(void)
                    (int)s_snapHave[i], (int)s_ownerOf[i], dx, dz,
                    (int)(e->scaMatrixData.localMatrix.t[1] - g_playerEntity.scaMatrixData.localMatrix.t[1]));
     }
+}
+
+void zm_bumper_intro_clock_release(void)
+{
+    if (!s_zombieModeArmed || zm_net_rejoining()) return;
+    s_gameStartMs = zm_game_time_ms();
+    s_allSpawnedMs = 0;
+}
+void zm_bumper_end_clock_release(void)
+{
+    s_winAtMs = zm_game_time_ms(); // results timings begin after the cinematic
 }

@@ -520,6 +520,7 @@ void FrameRateGovernor(void)
                 }
             }
 
+            zombie_mode_bumper_draw();
             if (!g_DisablePad) {
                 MarniPresent();
             }

@@ -118,3 +118,6 @@ void zm_net_rejoin_ready(void);
 // (or `timeoutMs`) and then releases everyone. False if this copy ends up
 // alone (the game then runs single player).
 bool zm_net_start_game(unsigned int timeoutMs);
+
+// Intro barrier: local 0 entered, 1 loaded, 2 finished; host 0 wait, 1 load, 2 play, 3 release.
+int zm_net_bumper_phase(int progress);

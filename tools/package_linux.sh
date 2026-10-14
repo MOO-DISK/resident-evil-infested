@@ -80,6 +80,15 @@ mkdir -p "$OUT/lib"
 
 cp "$BIN" "$OUT/residentevil"
 chmod +x "$OUT/residentevil"
+# Optional silent match bumpers and their shared intro sound.
+if [ -d "$REPO/infested/video" ]; then
+    mkdir -p "$OUT/infested"
+    cp -r "$REPO/infested/video" "$OUT/infested/"
+fi
+if [ -f "$REPO/infested/audio/intro.wav" ]; then
+    mkdir -p "$OUT/infested/audio"
+    cp "$REPO/infested/audio/intro.wav" "$OUT/infested/audio/"
+fi
 if [ -d "$REPO/infested/voices" ]; then
     mkdir -p "$OUT/infested"
     cp -r "$REPO/infested/voices" "$OUT/infested/"

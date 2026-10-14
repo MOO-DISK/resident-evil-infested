@@ -209,6 +209,7 @@
     <ClCompile Include="src\game\mods\ZombieSpectate.cpp" />
     <ClCompile Include="src\game\mods\ZombieShotgun.cpp" />
     <ClCompile Include="src\game\mods\ZombiePiano.cpp" />
+    <ClCompile Include="src\game\mods\ZombieBumpers.cpp" />
     <ClCompile Include="src\game\mods\ZombieVoice.cpp" />
     <ClCompile Include="src\game\mods\ZombieTimeout.cpp" />
     <ClCompile Include="src\game\mods\ZombieKeypad.cpp" />
@@ -254,6 +255,8 @@
     <ClInclude Include="src\game\TmdRenderer.h" />
     <ClInclude Include="src\game\entities\EntityCommon.h" />
     <ClInclude Include="src\game\entities\Zombie.h" />
+    <ClInclude Include="src\game\mods\ZombieBumpers.h" />
+    <ClInclude Include="src\game\mods\ZombieBumperBarrier.h" />
     <ClInclude Include="src\game\mods\ZombieMode.h" />
     <ClInclude Include="src\game\mods\ZombieModeInternal.h" />
     <ClInclude Include="src\game\mods\ZombieNet.h" />
@@ -261,6 +264,15 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyInfestedAudio" AfterTargets="Build">
+    <ItemGroup>
+      <InfestedBumperVideos Include="$(ProjectDir)infested\video\**\*.mp4" />
+      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\intro.wav" Condition="Exists('$(ProjectDir)infested\audio\intro.wav')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(InfestedBumperVideos)"
+          DestinationFiles="@(InfestedBumperVideos->'$(TargetDir)infested\video\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" Condition="'@(InfestedBumperVideos)' != ''" />
+    <Copy SourceFiles="@(InfestedBumperAudio)" DestinationFolder="$(TargetDir)infested\audio"
+          SkipUnchangedFiles="true" Condition="'@(InfestedBumperAudio)' != ''" />
     <MakeDir Directories="$(TargetDir)infested" />
     <Copy SourceFiles="$(ProjectDir)infested\audio\infested.wav"
           DestinationFiles="$(TargetDir)infested\infested.wav"

@@ -55,6 +55,8 @@ int game_loop(void)
         Task_sleep(1);
     }
 
+    zombie_mode_bumper_intro();
+
     // 0x00480b53: Mark gameplay active
     g_main_state_flags |= MSF_GAMEPLAY_ACTIVE;
 
@@ -110,6 +112,7 @@ int game_loop(void)
 LAB_00480c33:
         do {
             zombie_mode_reconnect_wait();
+            if (zombie_mode_bumper_end_wait()) zm_bumper_end_clock_release();
             // 0x00480c33-0x00480c4a: Per-frame random seed and reset
             g_RandSeed = (short)rand();
             // Per-frame item-use flag bank: room logic re-arms it this frame

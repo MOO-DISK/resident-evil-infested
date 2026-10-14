@@ -1,5 +1,6 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
+#include "ZombieBumperBarrier.h"
 #include "ZombieReconnect.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
@@ -38,7 +39,7 @@ unsigned short g_zmNetPort = 27960;
 // room's broken shotgun are taken out. Version 64: no ink ribbons among the
 // supplies.
 // Version 70: the survivors' voice lines (ZM_EV_VOICE).
-#define ZM_NET_VERSION    70
+#define ZM_NET_VERSION    71 // silent match bumpers and start barrier
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -61,6 +62,7 @@ enum {
     PKT_RECOVERY_CHUNK = 13,
     PKT_RECOVERY_READY = 14,
     PKT_REJECT = 15,
+    PKT_BUMPER = 17,           // intro readiness / host phase + frozen roster
     PKT_VERSION_REJECT = 16,    // diagnostic only; decoded before the full header
 };
 
@@ -240,6 +242,9 @@ static ZmNetPeerState s_states[ZM_NET_MAX_PLAYERS];
 // The game-start barrier.
 static bool           s_ready[ZM_NET_MAX_PLAYERS];
 static bool           s_started = false;
+static signed char s_bumperReady[ZM_NET_MAX_PLAYERS] = { -1, -1, -1, -1 };
+static unsigned char s_bumperPhase = 0;
+static unsigned int s_bumperSent = 0;
 static bool s_rejoining = false, s_downloaded = false;
 static bool s_rejoinLoadReady = false;
 static unsigned int s_downloadOffset, s_downloadTotal, s_lastDownloadMs;
@@ -1141,6 +1146,19 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
     int origin = (s_role == ZM_NET_ZOMBIE) ? link : h->origin;
 
     switch (h->type) {
+    case PKT_BUMPER:
+        if (s_role == ZM_NET_ZOMBIE && bodyLen == 1 && body[0] <= 2) {
+            if (s_bumperReady[link] < (int)body[0]) s_bumperReady[link] = (signed char)body[0];
+            s_bumperSent = 0; // repeat phase promptly, including after a lost reply
+            unsigned char reply[5] = { s_bumperPhase, s_chars[0], s_chars[1], s_chars[2], s_chars[3] };
+            net_send_link(link, PKT_BUMPER, (unsigned char)s_self, reply, sizeof(reply));
+        } else if (s_role == ZM_NET_SURVIVOR && link == 0 && bodyLen == 5 && body[0] <= 3) {
+            if (body[0] >= s_bumperPhase) {
+                s_bumperPhase = body[0];
+                for (int i = 0; i < ZM_NET_MAX_PLAYERS; ++i) s_chars[i] = body[i+1];
+            }
+        }
+        break;
     case PKT_HELLO:
         if (s_role == ZM_NET_ZOMBIE && bodyLen >= (int)sizeof(NetHelloBody)) {
             const NetHelloBody& hello = *(const NetHelloBody*)body;
@@ -1439,6 +1457,8 @@ static void net_reset(void)
     memset(s_links, 0, sizeof(s_links));
     memset(s_states, 0, sizeof(s_states));
     memset(s_ready, 0, sizeof(s_ready));
+    memset(s_bumperReady, -1, sizeof(s_bumperReady));
+    s_bumperPhase = 0; s_bumperSent = 0;
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) s_chars[i] = ZM_SEAT_FREE;
     s_inboxCount = 0;
     s_self = -1;
@@ -1689,4 +1709,35 @@ bool zm_net_start_game(unsigned int timeoutMs)
     dbg_printf("[net] game started; %d survivors seated\n", n);
     // Against the AI director the host is a survivor too: it may play alone.
     return n > 0 || zm_net_ai_level() > 0;
+}
+
+// Repeated UDP readiness/phase exchange: no gameplay begins until all copies
+// have finished their intro. A reconnect does not replay the original barrier.
+int zm_net_bumper_phase(int progress)
+{
+    if (!zm_net_active()) return 3;
+    unsigned int now = plat_time_ms();
+    if (s_role == ZM_NET_ZOMBIE) {
+        s_bumperReady[0] = (signed char)progress;
+        signed char ready[ZM_NET_MAX_PLAYERS];
+        memcpy(ready, s_bumperReady, sizeof(ready));
+        unsigned int seats = 1u; // the host participates even as the director
+        for (int i = 1; i < ZM_NET_MAX_PLAYERS; ++i) {
+            if (!s_links[i].used || s_links[i].lost) continue;
+            seats |= 1u << i;
+            if (s_chars[i] >= ZM_CHAR_COUNT) ready[i] = -1;
+        }
+        unsigned char phase = zm_bumper_barrier_phase(s_bumperPhase, ready, seats);
+        if (phase != s_bumperPhase) { s_bumperPhase = phase; s_bumperSent = 0; }
+        if (!s_bumperSent || now - s_bumperSent >= 100) {
+            unsigned char body[5] = { s_bumperPhase, s_chars[0], s_chars[1], s_chars[2], s_chars[3] };
+            net_send_all(PKT_BUMPER, (unsigned char)s_self, body, sizeof(body), -1);
+            s_bumperSent = now ? now : 1;
+        }
+    } else if (!s_bumperSent || now - s_bumperSent >= 100) {
+        unsigned char body = (unsigned char)progress;
+        net_send_link(0, PKT_BUMPER, (unsigned char)s_self, &body, 1);
+        s_bumperSent = now ? now : 1;
+    }
+    return s_bumperPhase;
 }

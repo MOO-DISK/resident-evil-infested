@@ -7,6 +7,7 @@
 // Visual-only cue; called when a Tyrant arms its claw ribbon.
 void zombie_mode_tyrant_trail_started(const struct Entity* e, unsigned short frames);
 #include "../../Globals.h"
+#include "ZombieBumpers.h"
 
 // ============================================================================
 // ZombieMode.h - port-added "play as a zombie" mod ([Mods] PlayInfested=1)
@@ -399,3 +400,7 @@ bool zombie_mode_grab_mash(char* reduce);
 
 // zombie_attack_withdraw: a surviving victim pushes nearby zombies back too.
 void zombie_mode_grab_push_off(void);
+
+// Cinematic completion: start the match/results clocks after playback.
+void zm_bumper_intro_clock_release(void);
+void zm_bumper_end_clock_release(void);
