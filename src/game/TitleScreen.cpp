@@ -6,6 +6,7 @@
 #include "FileLoader.h"
 #include "SpriteRenderer.h"
 #include "InfestedTitleImage.h"
+#include "GuideTitleImage.h"
 #include "SFXIds.h"
 #include <cstdio>
 #include <cstdlib>
@@ -345,38 +346,11 @@ static void title_guide_update(void)
     guide_text(8, 232 - 14, 0x7F, s_guidePage < 0 ? "UP/DOWN: SELECT ACTION: OPEN RUN: BACK" : "ACTION: NEXT  RUN / ESC: BACK");
 }
 
-// A small serif bitmap, generated at title initialization, with a shaded
-// silver face like the original title lettering. No new asset is required.
+// Generated artwork matches the original menu sheet's bold capitals.
+// Embedded TIM keeps both platform builds independent of loose image files.
 static void title_build_guide_label(void)
 {
-    static const unsigned char glyphs[5][11] = {
-        {30,33,64,64,64,79,65,65,33,30,0}, // G
-        {119,34,34,34,34,34,34,34,34,28,0}, // U
-        {62,8,8,8,8,8,8,8,8,62,0},        // I
-        {124,34,33,33,33,33,33,33,34,124,0}, // D
-        {127,33,32,32,36,60,36,32,33,127,0} // E
-    };
-    alignas(4) unsigned char tim[64 + 128 * 16] = {};
-    unsigned int* header = (unsigned int*)tim;
-    header[0] = 0x10; header[1] = 8; header[2] = 44;
-    unsigned short* clutHeader = (unsigned short*)(tim + 12);
-    clutHeader[0] = 0; clutHeader[1] = 0x1E0;
-    clutHeader[2] = 16; clutHeader[3] = 1;
-    unsigned short* palette = (unsigned short*)(tim + 20);
-    for (int i = 1; i < 16; ++i) {
-        int shade = 10 + i;
-        palette[i] = (unsigned short)(shade | shade << 5 | shade << 10);
-    }
-    *(unsigned int*)(tim + 52) = 12 + 128 * 16;
-    unsigned short* image = (unsigned short*)(tim + 56);
-    image[2] = 64; image[3] = 16;
-    for (int g = 0; g < 5; ++g) for (int y = 0; y < 11; ++y)
-        for (int x = 0; x < 7; ++x) if (glyphs[g][y] & (64 >> x)) {
-            int px = 109 + g * 8 + x;
-            unsigned char& pixel = tim[64 + y * 128 + px / 2];
-            pixel |= (unsigned char)((15 - y / 2) << ((px & 1) * 4));
-        }
-    LoadTexturePage(tim, 10, 0, 14, 0, 0, 0, 0);
+    LoadTexturePage(kGuideTitleTim, 10, 0, 14, 0, 0, 0, 0);
 }
 
 // Archived INFESTATION alternative (the previous renderer and placement).

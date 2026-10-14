@@ -1472,9 +1472,14 @@ unsigned char Effect_CreateBillboard(
         unsigned int* dst = (unsigned int*)&eff->animId;
         for (int i = 0; i < 6; i++) dst[i] = src[i];
 
+        // Use the padding byte as a local rendering tag. The spawn parameter
+        // also travels with network effect replay, so every copy gets green FX.
+        bool slamCloud = zombie_mode_armed() && type == 9 &&
+                         (unsigned char)lightFactor == EFFECT_ZM_SLAM_CLOUD;
+        eff->pad_42 = slamCloud ? EFFECT_ZM_SLAM_CLOUD : 0;
         // Set light factor if provided
         if (lightFactor != 0) {
-            eff->lightFactor = lightFactor;
+            eff->lightFactor = slamCloud ? 36 : lightFactor;
         }
 
         // Decrement frame count, apply yaw, mark active

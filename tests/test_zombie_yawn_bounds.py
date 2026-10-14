@@ -14,6 +14,7 @@ guard = source.split("// A possessed snake's animator", 1)[1].split(
     "static bool yw_beaten", 1)[0]
 guard = "// A possessed snake's animator" + guard
 fixture = r'''
+#include <initializer_list>
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
@@ -27,7 +28,7 @@ struct Entity {
  JointStruct* jointsStructs;
  short angle;
  struct { short x,y,z; } position;
- unsigned char action_behavior,action_state,ignore_player_flag,jointCount;
+ unsigned char action_behavior,action_state,ignore_player_flag,jointCount,state;
  unsigned char padding[512];
 };
 struct CAM_SWITCH_ZONE { short camFrom; };
@@ -63,24 +64,52 @@ int main() {
  wall=true; e.scaMatrixData.localMatrix.t[0]=3000; e.action_behavior=9;
  joints[4].world.t[0]=3000;
  zm_yawn_bounds_end(&e);
- assert(e.scaMatrixData.localMatrix.t[0]==1100 && joints[4].world.t[0]==1000);
- assert(e.action_behavior==0 && e.ignore_player_flag==1);
+ assert(e.scaMatrixData.localMatrix.t[0]>1100 && e.scaMatrixData.localMatrix.t[0]<1950);
+ assert(joints[4].world.t[0]>1000 && joints[4].world.t[0]<1950);
+ assert(e.action_behavior==9);
+ // All attacks retain their state and animation while sliding along the wall.
+ for (int attack : {2,9,10}) {
+   zm_yawn_bounds_begin(&e);
+   int oldZ=e.scaMatrixData.localMatrix.t[2];
+   e.action_behavior=attack; e.action_state=3; e.angle=123;
+   e.scaMatrixData.localMatrix.t[0]+=500;
+   e.scaMatrixData.localMatrix.t[2]+=500;
+   zm_yawn_bounds_end(&e);
+   assert(e.scaMatrixData.localMatrix.t[0]<1950);
+   assert(e.scaMatrixData.localMatrix.t[2]==oldZ+500);
+   assert(e.action_behavior==attack && e.action_state==3 && e.angle==123);
+ }
  assert(g_playerPosScratch.x==7 && g_playerPosScratch.z==9);
  // The head cannot leave coverage while the root remains in the room.
  wall=false; zm_yawn_bounds_begin(&e); joints[0].world.t[2]=12000;
- zm_yawn_bounds_end(&e); assert(joints[0].world.t[2]==1000);
+ zm_yawn_bounds_end(&e); assert(joints[0].world.t[2]<=10000);
  // A later segment update cannot overwrite the safe snapshot with an escape.
  joints[3].world.t[2]=12000;
- zm_yawn_bounds_begin(&e); assert(joints[3].world.t[2]==1000);
+ zm_yawn_bounds_begin(&e); assert(joints[3].world.t[2]<=10000);
  // Escaping between updates restores the saved pose.
  e.scaMatrixData.localMatrix.t[0]=-500;
- zm_yawn_bounds_begin(&e); assert(e.scaMatrixData.localMatrix.t[0]==1100);
+ zm_yawn_bounds_begin(&e); assert(e.scaMatrixData.localMatrix.t[0]>=0 && e.scaMatrixData.localMatrix.t[0]<=10000);
  // With no saved pose, recover to the boss's spawn and carry the body too.
  s_boundSaved=false; s_boundHead=nullptr;
  e.scaMatrixData.localMatrix.t[0]=12000;
  for(auto& j:joints) j.world.t[0]=12000;
  zm_yawn_bounds_begin(&e);
  assert(e.scaMatrixData.localMatrix.t[0]==1000 && joints[14].world.t[0]==1000);
+ // Slam poses cross walls without clipping or replacing a movement snapshot.
+ e.state=1; e.action_behavior=10;
+ zm_yawn_bounds_begin(&e);
+ e.scaMatrixData.localMatrix.t[0]=12000; joints[4].world.t[0]=12000;
+ zm_yawn_bounds_end(&e);
+ assert(e.scaMatrixData.localMatrix.t[0]==12000 && joints[4].world.t[0]==12000);
+ assert(!s_boundSaved);
+ // Recovery restores the origin; ordinary bounds resume from that position.
+ e.scaMatrixData.localMatrix.t[0]=1000;
+ for(auto& j:joints) { j.world.t[0]=1000; j.world.t[2]=1000; }
+ e.action_behavior=1;
+ zm_yawn_bounds_begin(&e);
+ e.scaMatrixData.localMatrix.t[0]=12000;
+ zm_yawn_bounds_end(&e);
+ assert(e.scaMatrixData.localMatrix.t[0]<=10000);
  puts("Possessed Yawn boundary checks OK");
 }
 '''

@@ -2737,6 +2737,11 @@ static void effect_submit_sprite(Effect* eff, short screenX, short screenY,
         }
     }
 
+    // Infested slam: tint the shared smoke art green on every network copy.
+    static const unsigned char kSlamGreen[3] = { 35, 220, 65 };
+    if (zombie_mode_armed() && eff->pad_42 == EFFECT_ZM_SLAM_CLOUD)
+        color = kSlamGreen;
+
     int submitted = SubmitEffectSprite(&g_TextureDesc, (int)depthArg, texSlot,
                                        color[0], color[1], color[2],
                                        scaleXadd, scaleYadd, (int)blendMode, (short)brightness);

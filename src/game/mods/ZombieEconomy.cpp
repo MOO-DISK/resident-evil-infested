@@ -85,7 +85,7 @@ void zm_econ_new_game(bool on)
 {
     s_on = on;
     int survivors = zm_net_role() == ZM_NET_OFF ? 1 : zm_net_survivor_count();
-    s_startPoints = survivors >= 3 ? 1000 : survivors == 2 ? 800 : 500;
+    s_startPoints = survivors >= 3 ? 1200 : survivors == 2 ? 900 : 500;
     s_startPoints = s_startPoints * zm_ai_income_pct() / 100;   // the AI director's difficulty
 #ifdef QUICK_DEBUG
     s_startPoints = 20000;

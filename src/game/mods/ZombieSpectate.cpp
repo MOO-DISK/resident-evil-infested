@@ -65,6 +65,7 @@ static int s_requestTarget = -1;
 static short s_requestHealth = 0;
 static unsigned char s_reconnectSpentMask;
 static short s_committedHealth[ZM_NET_MAX_PLAYERS];
+static bool s_committedFree[ZM_NET_MAX_PLAYERS];
 
 unsigned char zm_spec_reconnect_spent(void) { return s_reconnectSpentMask; }
 void zm_spec_reconnect_restore_spent(unsigned char mask) { s_reconnectSpentMask = mask; }
@@ -74,7 +75,7 @@ void zm_spec_reconnect_reconcile(int player, ZmReconnectPlayer* p)
         p->health = s_committedHealth[player]; p->healthFlags = 0; p->stats[3] = -1;
     }
     for (int target = 1; target < 4; target++) {
-        if (!s_claimDone[target] || s_claimOwner[target] != player || s_revives[target] <= p->revives[target] ||
+        if (!s_claimDone[target] || s_committedFree[target] || s_claimOwner[target] != player || s_revives[target] <= p->revives[target] ||
             (p->reviveSpentMask & (1 << target))) continue;
         for (int i = 0; i < p->card.totalHeldItems; i++) {
             int id = p->inventory[i * 2];
@@ -116,6 +117,7 @@ void zm_spec_new_game(void)
 {
     s_reconnectSpentMask = 0;
     memset(s_committedHealth, 0, sizeof(s_committedHealth));
+    memset(s_committedFree, 0, sizeof(s_committedFree));
     memset(s_deathSeen, 0, sizeof(s_deathSeen));
     memset(s_revives, 0, sizeof(s_revives));
     s_reviveTarget = -1;
@@ -474,12 +476,12 @@ bool zm_spec_draw(void)
     return true;
 }
 
-// A corpse in a boss room during its lockdown (ZombieYawn.cpp): revived there
+// A corpse left by the boss fight during its lockdown (ZombieYawn.cpp): revived there
 // without a healing item, however often it has been.
 static bool zm_revive_free(int target)
 {
     const ZmNetPeerState* p = zm_seat_state(target);
-    return p != NULL && zm_yawn_free_revive(p->stage, p->room);
+    return p != NULL && zm_yawn_free_revive(target, p->stage, p->room);
 }
 
 // A boss's lockdown over: every survivor's revives are counted afresh - those
@@ -610,7 +612,9 @@ void zm_revive_take(const short* a, int src)
     zm_perk_describe(zm_net_char(target), &info);
     int expected = info.health * (zm_net_char(src) == ZM_CHAR_REBECCA ? ZM_REVIVE_MEDIC_PCT : ZM_REVIVE_HEALTH_PCT) / 100;
     if (a[1] != expected) return;
+    s_committedFree[target] = zm_revive_free(target);
     s_revives[target]++;
+    zm_yawn_revived(target);
     dbg_printf("[revive] survivor %d revived %d: health %d\n", src, target, (int)a[1]);
     if (target == zm_net_self() && zm_game_role() == ZM_NET_SURVIVOR && s_dead) {
         s_reviveHealth = a[1];
@@ -630,8 +634,8 @@ bool zm_revive_host_claim(int target, int health, int src)
         if (s_claimOwner[target] == src && !s_claimDone[target]) s_claimOwner[target] = -1;
         return false;
     }
-    // A boss room's lockdown: revived again however often - a body that died
-    // after its last revive takes a new claim.
+    // A corpse left by a boss fight gets a fresh claim even if this survivor
+    // already used its ordinary revive before dying in the fight.
     bool free = zm_revive_free(target);
     if (free && health < 0 && s_claimDone[target]) {
         s_claimDone[target] = false;

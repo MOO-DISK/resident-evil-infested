@@ -1687,6 +1687,7 @@ void zombie_attack(void)
         if (g_playerEntity.attackTimer != 0) {
             ATTACK_TIMER = 30;
         }
+        ATTACK_TIMER = (unsigned char)zombie_mode_player_zombie_grab_time(ATTACK_TIMER);
         break;
 
     case 3:

@@ -1369,10 +1369,16 @@ static int menu_item_use_heal(unsigned char slot)
                     g_playerEntity.healthStatusFlags = g_playerEntity.healthStatusFlags & 0xdf;
                 }
             } else {
-                if (((bVar1 & 0xf0) != 0x20) || ((g_playerEntity.healthStatusFlags & 2) == 0)) {
+                // Infested: blue herbs (including blue mixtures) cure Yawn's
+                // serum-only poison as well as ordinary poison. Keep the
+                // original cure rules outside the mode.
+                unsigned char poisonMask = zombie_mode_armed() ? 0x22 : 0x02;
+                if (((bVar1 & 0xf0) != 0x20) || ((g_playerEntity.healthStatusFlags & poisonMask) == 0)) {
                     goto heal_done;
                 }
-                g_playerEntity.healthStatusFlags = g_playerEntity.healthStatusFlags & 0xfd;
+                if ((poisonMask & g_playerEntity.healthStatusFlags & 0x20) != 0)
+                    FUN_00473f10((int*)g_ScenarioFlags2, SCENARIO2_FLAG_YAWN_POISONED);
+                g_playerEntity.healthStatusFlags &= (unsigned char)~poisonMask;
             }
             DAT_00ae9f13 = DAT_00ae9f13 | 0x10;
             used = 1;

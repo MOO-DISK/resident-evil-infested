@@ -33,13 +33,15 @@ static constexpr auto s_lessonPrompt = STR("Will you enter the lesson room?\\c")
 // health drops under 0x0AF0 (yawn_action_flee); Yawn 2 (behaviour 6, the
 // scripted selector, which never flees - its flee path is the attic's) dies.
 // Either raises its death flag. The original's Yawn 1 has 250 to take before
-// the flee; the mode gives each 250 per living survivor before it is beaten.
+// the flee; the mode gives each 500 damage budget, doubled for each extra
+// living survivor (500 / 1000 / 2000 / 4000).
 //
 // The fight: the snake hunts from the moment the room loads, its music plays
 // (Bgm_08 - the return rooms have none of their own), and a survivor cannot
 // leave the room while it is there. Beaten, the room stays shut for
-// YW_LOCKDOWN_MS - the survivors regroup: a revive in the room needs no
-// healing item and ignores the revive limit (ZombieSpectate.cpp) - then the
+// YW_LOCKDOWN_MS - the survivors regroup: each corpse left by the fight gets
+// one revive without a healing item, ignoring the revive limit
+// (ZombieSpectate.cpp) - then the
 // doors open, every survivor's revives are counted afresh and the game clock
 // gets YW_CLOCK_BONUS_MS. The clock does not run while every living survivor
 // is in a boss room with its snake, nor during the lockdown. The director
@@ -75,10 +77,10 @@ extern void MovePlayerXZ(int angle, SVECTOR* offset, SVECTOR* out);     // Weapo
 
 #define YW_BOSSES           2
 #define YW_FLEE_HEALTH      0x0AF0      // yawn_pick_action_normal flees below this
-#define YW_BUDGET           250         // the original's 0x0BEA - 0x0AF0, per survivor
+#define YW_BUDGET           500         // solo budget; doubles per extra living survivor
 #define YW_ITEM_OP_LEN      0x1A        // an item_model_set command
 #define YW_HELD_MAX         4
-#define YW_LOCKDOWN_MS      30000
+#define YW_LOCKDOWN_MS      60000
 #define YW_CLOCK_BONUS_MS   (5 * 60000)
 // A survivor's copy that sees a death flag up but no word from the host (a
 // rejoin after the lockdown): the room counts as done after this long.
@@ -104,6 +106,7 @@ static const YwBoss kBoss[YW_BOSSES] = {
 // The match's: each boss's phase (the host's word on a survivor's copy).
 enum { YW_WAITING, YW_LOCKDOWN, YW_DONE };
 static unsigned char s_phase[YW_BOSSES];
+static unsigned char s_freeRevives[YW_BOSSES]; // corpses left by this fight, consumed on revive
 static unsigned int  s_lockEnd[YW_BOSSES];      // game ms the lockdown ends
 static unsigned int  s_pendingAt[YW_BOSSES];    // a survivor's: the flag first seen up, 0 not yet
 
@@ -153,7 +156,6 @@ static bool s_boundSaved = false;
 static Entity* s_boundHead = NULL;
 static MATRIX s_boundMatrix;
 static JointStruct s_boundJoints[15];
-static short s_boundAngle;
 
 static bool yw_floor_point(int x, int z)
 {
@@ -178,19 +180,27 @@ static bool yw_clear_point(int x, int z)
     return clear;
 }
 
-static bool yw_clear_step(int ax, int az, int bx, int bz)
+// Sweep in short steps, retaining the tangential component at a wall.
+// Each link is constrained independently; a tail collision must never cancel
+// the head's animation or reset an attack.
+static void yw_slide(int ax, int az, int* bx, int* bz)
 {
-    // Room coordinates are unsigned 16-bit. Reject corrupt / escaped positions
-    // before subtracting or multiplying, keeping every calculation 32-bit.
-    if (ax < 0 || az < 0 || bx < 0 || bz < 0 ||
-        ax > 65535 || az > 65535 || bx > 65535 || bz > 65535) return false;
-    int dx = bx - ax, dz = bz - az;
+    int dx = *bx - ax, dz = *bz - az;
+    if (abs(dx) > 65535 || abs(dz) > 65535) { *bx = ax; *bz = az; return; }
     int span = abs(dx) > abs(dz) ? abs(dx) : abs(dz);
-    int steps = span / 128 + 1;
+    int steps = span / 64 + 1;
+    int x = ax, z = az, prevX = 0, prevZ = 0;
     for (int i = 1; i <= steps; i++) {
-        if (!yw_clear_point(ax + dx * i / steps, az + dz * i / steps)) return false;
+        int nextX = dx * i / steps, nextZ = dz * i / steps;
+        int sx = nextX - prevX, sz = nextZ - prevZ;
+        prevX = nextX; prevZ = nextZ;
+        if (yw_clear_point(x + sx, z + sz)) { x += sx; z += sz; }
+        else {
+            if (yw_clear_point(x + sx, z)) x += sx;
+            if (yw_clear_point(x, z + sz)) z += sz;
+        }
     }
-    return true;
+    *bx = x; *bz = z;
 }
 
 static void yw_bounds_save(Entity* e)
@@ -198,30 +208,32 @@ static void yw_bounds_save(Entity* e)
     s_boundHead = e;
     s_boundSaved = true;
     s_boundMatrix = e->scaMatrixData.localMatrix;
-    s_boundAngle = e->angle;
     memcpy(s_boundJoints, e->jointsStructs, sizeof(s_boundJoints));
 }
 
 static void yw_bounds_restore(Entity* e)
 {
-    dbg_printf("[yawn] bounds recovery: %d,%d -> %d,%d\n",
-               e->scaMatrixData.localMatrix.t[0], e->scaMatrixData.localMatrix.t[2],
-               s_boundMatrix.t[0], s_boundMatrix.t[2]);
-    e->scaMatrixData.localMatrix = s_boundMatrix;
-    e->angle = s_boundAngle;
-    memcpy(e->jointsStructs, s_boundJoints, sizeof(s_boundJoints));
-    e->position.x = (short)s_boundMatrix.t[0];
-    e->position.z = (short)s_boundMatrix.t[2];
-    e->action_behavior = e->action_state = 0;
-    *((unsigned char*)e + 0x85) = 0;
-    e->ignore_player_flag = 1;
-    *(short*)((char*)e + 0x172) = 0;
-    *(short*)((char*)e + 0xC2) = 0;
-    *((unsigned char*)e + 0x17C) = 0;
+    // Recover translation only. Animation, steering and attack state continue.
+    int* t = e->scaMatrixData.localMatrix.t;
+    int dx = s_boundMatrix.t[0] - t[0], dz = s_boundMatrix.t[2] - t[2];
+    t[0] += dx; t[2] += dz;
+    for (int k = 0; k < 15; k++) {
+        e->jointsStructs[k].world.t[0] += dx;
+        e->jointsStructs[k].world.t[2] += dz;
+    }
+    e->position.x = (short)t[0];
+    e->position.z = (short)t[2];
 }
 
 void zm_yawn_bounds_begin(Entity* e)
 {
+    // The slam returns to its captured pose. Its temporary head/neck pose
+    // may pass through a wall; do not clip it or save it as a movement origin.
+    if (e->state == 1 && e->action_behavior == 10) {
+        s_boundSaved = false;
+        s_boundHead = NULL;
+        return;
+    }
     if (!zombie_mode_armed() || yw_here() < 0 || e->jointsStructs == NULL || e->jointCount != 15) return;
     if (s_boundHead != e) s_boundSaved = false;
     // Segment collision runs after the head's update and can drag the head
@@ -249,18 +261,19 @@ void zm_yawn_bounds_begin(Entity* e)
 
 void zm_yawn_bounds_end(Entity* e)
 {
+    if (e->state == 1 && e->action_behavior == 10) return;
     if (!s_boundSaved || s_boundHead != e || e->jointsStructs == NULL) return;
-    const int* t = e->scaMatrixData.localMatrix.t;
-    bool clear = yw_clear_step(s_boundMatrix.t[0], s_boundMatrix.t[2], t[0], t[2]);
-    for (int k = 0; clear && k < 15; k++) {
-        if (k == 1 || k == 2) continue; // head helpers, not body collision slots
+    int* t = e->scaMatrixData.localMatrix.t;
+    yw_slide(s_boundMatrix.t[0], s_boundMatrix.t[2], &t[0], &t[2]);
+    for (int k = 0; k < 15; k++) {
+        if (k == 1 || k == 2) continue; // animator's head helpers
         const int* a = s_boundJoints[k].world.t;
-        const int* b = e->jointsStructs[k].world.t;
-        // The original pose can put a tail link in a wall before its own
-        // segment update pushes it out. Do not freeze that existing correction.
-        if (yw_clear_point(a[0], a[2])) clear = yw_clear_step(a[0], a[2], b[0], b[2]);
+        int* b = e->jointsStructs[k].world.t;
+        // Existing embedded links are left to the original segment collision.
+        if (yw_clear_point(a[0], a[2])) yw_slide(a[0], a[2], &b[0], &b[2]);
     }
-    if (!clear) yw_bounds_restore(e);
+    e->position.x = (short)t[0];
+    e->position.z = (short)t[2];
 }
 
 static bool yw_beaten(int b)
@@ -323,6 +336,15 @@ void zm_yawn_mark_scaled(void)
     s_scaled = true;
 }
 
+// Bound the roster before shifting; even a four-survivor AI-hosted game
+// remains comfortably inside the original signed 16-bit health field.
+static int yw_health_budget(int alive)
+{
+    if (alive < 1) alive = 1;
+    if (alive > 4) alive = 4;
+    return YW_BUDGET << (alive - 1);
+}
+
 // After the head's update on the copy that runs it.
 void zm_yawn_after_update(Entity* e)
 {
@@ -345,7 +367,7 @@ void zm_yawn_after_update(Entity* e)
     for (int i = 0; i < n; i++) if (!surv[i].dead) alive++;
     if (alive < 1) alive = 1;
     bool flees = e->id == ENEMY_YAWN_1;
-    e->health = (short)((flees ? YW_FLEE_HEALTH : 0) + YW_BUDGET * alive);
+    e->health = (short)((flees ? YW_FLEE_HEALTH : 0) + yw_health_budget(alive));
     s_scaled = true;
     dbg_printf("[yawn] health %d (%d survivors), %s under %d\n", (int)e->health, alive,
                flees ? "flees" : "dies", flees ? YW_FLEE_HEALTH : 0);
@@ -360,6 +382,7 @@ void zm_yawn_new_game(void)
 {
     yw_vote_reset();
     memset(s_phase, YW_WAITING, sizeof(s_phase));
+    memset(s_freeRevives, 0, sizeof(s_freeRevives));
     memset(s_lockEnd, 0, sizeof(s_lockEnd));
     memset(s_pendingAt, 0, sizeof(s_pendingAt));
 }
@@ -368,7 +391,7 @@ static void yw_send(int op, int b, int tenths)
 {
     if (zm_net_role() != ZM_NET_ZOMBIE) return;
     unsigned int seed = zm_net_seed();
-    zm_net_send_event8(ZM_EV_BOSS, (short)op, (short)b, (short)tenths, (short)seed, (short)(seed >> 16), 0, 0, 0);
+    zm_net_send_event8(ZM_EV_BOSS, (short)op, (short)b, (short)tenths, (short)seed, (short)(seed >> 16), s_freeRevives[b], 0, 0);
 }
 
 static void yw_lockdown(int b, unsigned int ms)
@@ -381,6 +404,7 @@ static void yw_lockdown(int b, unsigned int ms)
 static void yw_done(int b)
 {
     s_phase[b] = YW_DONE;
+    s_freeRevives[b] = 0;
     zm_revive_reset_counts();
     dbg_printf("[yawn] %s: lockdown over, the doors open\n", kBoss[b].name);
 }
@@ -393,6 +417,14 @@ static void yw_match_frame(void)
     unsigned int now = zm_game_time_ms();
     for (int b = 0; b < YW_BOSSES; b++) {
         if (s_phase[b] == YW_WAITING && yw_beaten(b)) {
+            // Freeze eligibility at the end of the fight. Later deaths in this
+            // room (including after a free revive) must pay the normal cost.
+            ZmSurvivorInfo surv[ZM_NET_MAX_PLAYERS];
+            int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS);
+            for (int i = 0; i < n; i++) {
+                if (surv[i].dead && surv[i].stage == kBoss[b].stage && surv[i].room == kBoss[b].room)
+                    s_freeRevives[b] |= (unsigned char)(1u << surv[i].player);
+            }
             yw_lockdown(b, YW_LOCKDOWN_MS);
             yw_send(1, b, YW_LOCKDOWN_MS / 100);
         } else if (s_phase[b] == YW_LOCKDOWN && (int)(now - s_lockEnd[b]) >= 0) {
@@ -576,7 +608,10 @@ void zm_yawn_take(const short* a, int src)
     if (src != ZM_NET_DIRECTOR) return;
     switch (op) {
     case YW_OP_LOCKDOWN:
-        if (!zm_match_authority() && s_phase[b] == YW_WAITING) yw_lockdown(b, (unsigned int)(unsigned short)a[2] * 100u);
+        if (!zm_match_authority() && s_phase[b] == YW_WAITING) {
+            s_freeRevives[b] = (unsigned char)a[5];
+            yw_lockdown(b, (unsigned int)(unsigned short)a[2] * 100u);
+        }
         break;
     case YW_OP_DONE:
         if (!zm_match_authority() && s_phase[b] != YW_DONE) yw_done(b);
@@ -910,10 +945,17 @@ bool zm_yawn_force_jump(const Entity* e, unsigned char* stage, unsigned char* ro
     return true;
 }
 
-bool zm_yawn_free_revive(unsigned char stage, unsigned char room)
+bool zm_yawn_free_revive(int player, unsigned char stage, unsigned char room)
 {
     int b = yw_boss_at(stage, room);
-    return zombie_mode_armed() && b >= 0 && s_phase[b] == YW_LOCKDOWN;
+    return zombie_mode_armed() && b >= 0 && player >= 0 && player < ZM_NET_MAX_PLAYERS &&
+           s_phase[b] == YW_LOCKDOWN && (s_freeRevives[b] & (1u << player)) != 0;
+}
+
+void zm_yawn_revived(int player)
+{
+    if (player < 0 || player >= ZM_NET_MAX_PLAYERS) return;
+    for (int b = 0; b < YW_BOSSES; b++) s_freeRevives[b] &= (unsigned char)~(1u << player);
 }
 
 // ---------------------------------------------------------------------------

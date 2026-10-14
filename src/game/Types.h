@@ -680,6 +680,8 @@ struct Effect {
 static_assert(sizeof(Effect) == 0x84, "Effect size mismatch");
 
 #define MAX_EFFECTS 64
+// Infested: network-preserved spawn marker for green slam smoke.
+#define EFFECT_ZM_SLAM_CLOUD 0x7E
 
 // ============================================================================
 // Item Slot structure (each inventory entry: Id + quantity)

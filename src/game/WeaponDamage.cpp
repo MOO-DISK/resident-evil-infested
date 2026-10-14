@@ -356,6 +356,7 @@ static unsigned char weapon_apply_hit(Entity* enemy, unsigned char weaponAdj, un
         damage = g_weaponHitRecordsSecondRun[tableIdx].dmg;    // second-playthrough damage @ +0
     }
 
+    damage = (short)zombie_mode_player_weapon_damage((unsigned char)(weaponAdj + 1), damage);
     enemy->health -= damage;
 
     if ((g_playerEntityPointer.flags & 0xE0) != 0x20) {

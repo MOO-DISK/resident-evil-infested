@@ -671,6 +671,50 @@ void yawn_pose_init(void)
     }
 }
 
+// Infested thrash: ripple sideways along the captured body arc. Neighboring
+// links define each local tangent, so a curled snake stays curled. Every frame
+// starts from the same pose; displacement cannot accumulate into a pivot.
+#define YT_WAVE_AMPLITUDE 360
+#define YT_WAVE_PERIOD 10
+#define YT_WAVE_LENGTH 4.0
+static JointStruct s_thrashBody[15];
+static void yawn_thrash_body_wave(int tick)
+{
+    JointStruct* j = ENTITY->jointsStructs;
+    if (tick == 0) memcpy(s_thrashBody, j, sizeof(s_thrashBody));
+    double envelope = std::sin(3.141592653589793 * tick / 40.0);
+    for (int k = 3; k <= 14; k++) {
+        int prev = k == 3 ? 2 : k - 1;
+        int next = k == 14 ? 14 : k + 1;
+        double dx = s_thrashBody[next].world.t[0] - s_thrashBody[prev].world.t[0];
+        double dz = s_thrashBody[next].world.t[2] - s_thrashBody[prev].world.t[2];
+        double length = std::sqrt(dx * dx + dz * dz);
+        double taper = k == 3 ? 0.35 : k == 4 ? 0.7 : 1.0;
+        double phase = 6.283185307179586 * ((k - 3) / YT_WAVE_LENGTH - (double)tick / YT_WAVE_PERIOD);
+        double offset = YT_WAVE_AMPLITUDE * taper * envelope * std::sin(phase);
+        j[k].world = s_thrashBody[k].world;
+        j[k].rotation = s_thrashBody[k].rotation;
+        if (length > 1.0) {
+            j[k].world.t[0] += (int)(dz / length * offset);
+            j[k].world.t[2] -= (int)(dx / length * offset);
+        }
+    }
+    // Follow the displaced curve with the mesh, retaining the original pitch
+    // and roll. Compute all positions first so neighbor queries are symmetric.
+    for (int k = 3; k <= 14; k++) {
+        int prev = k == 3 ? 2 : k - 1;
+        int next = k == 14 ? 14 : k + 1;
+        double ax = s_thrashBody[next].world.t[0] - s_thrashBody[prev].world.t[0];
+        double az = s_thrashBody[next].world.t[2] - s_thrashBody[prev].world.t[2];
+        double bx = j[next].world.t[0] - j[prev].world.t[0];
+        double bz = j[next].world.t[2] - j[prev].world.t[2];
+        double delta = std::atan2(bx * az - bz * ax, bx * ax + bz * az);
+        j[k].rotation.y = (short)((s_thrashBody[k].rotation.y +
+            (int)(delta * 4096.0 / 6.283185307179586)) & 0xFFF);
+        RotMatrix(&j[k].rotation, &j[k].world);
+    }
+}
+
 // ============================================================================
 // yawn_post_move @ 0x004096f0
 // End-of-frame work for the HEAD: player collision (skipped for the three
@@ -683,6 +727,10 @@ void yawn_pose_init(void)
 // ============================================================================
 void yawn_post_move(short angleStep)
 {
+    if (zombie_mode_armed() && eub(ENTITY, 0x86) == 9 && eub(ENTITY, 0x87) == 3) {
+        yawn_thrash_body_wave(ew(ENTITY, 0xc4));
+        return;
+    }
     JointStruct* j = ENTITY->jointsStructs;
 
     unsigned char behavior = eub(ENTITY, 0x86);
@@ -1627,19 +1675,12 @@ void yawn_action_reposition(void)
 #define YT_WARN_FRAMES   24     // the thrash's hiss before it
 #define YT_WHIP_FRAMES   40     // two swings each way
 #define YT_WHIP_PERIOD   20
-#define YT_WHIP_SWING    0x280  // the head's swing each way (4096 a turn)
-#define YT_WHIP_REACH    1300   // the body's radius (Sca 800) and a survivor's
+#define YT_WHIP_REACH    2200   // the body's radius (Sca 800) and a survivor's
 #define YT_WHIP_DAMAGE   20
-#define YS_SWAY_FRAMES   45     // the slam's reared weave before the crash
-#define YS_REACH         2000
+#define YS_REACH         1875   // damage radius increased 25%
+#define YS_CLOUD_RADIUS  1500   // keep the current graphic size
 #define YS_DAMAGE        30
 #define YS_RECOVER       24
-
-static int yawn_whip_offset(int t)
-{
-    if (t <= 0 || t >= YT_WHIP_FRAMES) return 0;
-    return (int)(YT_WHIP_SWING * std::sin(6.283185307179586 * (double)t / YT_WHIP_PERIOD));
-}
 
 // The head and the twelve body joints, as they stand now.
 static int yawn_body_points(int (*pts)[3], int first, int last)
@@ -1657,9 +1698,8 @@ static int yawn_body_points(int (*pts)[3], int first, int last)
 }
 
 // Action behaviour 9 - the thrash. A hiss (animation 5) as the warning, then
-// the head's whip (animation 6, the death's) with the head swung hard side to
-// side - the body, dragged after it with a long step (yawn_post_move), whips
-// into an S - striking everyone along the body at each swing's end.
+// a moderate, fast travelling ripple along the existing body arc, striking
+// everyone along the waved body throughout the attack.
 void yawn_action_thrash(void)
 {
     short angleStep = 0x30;
@@ -1690,23 +1730,17 @@ void yawn_action_thrash(void)
         eub(ENTITY, 0xbd) = 6;
         eub(ENTITY, 0x8c) = 7;
         ew(ENTITY, 0xc4) = 0;
-        euw(ENTITY, 0xc2) = 0xa0;           // the whole body follows (yawn_post_move)
+        euw(ENTITY, 0xc2) = 0;
+        yawn_thrash_body_wave(0);           // preserve the current body arc
         Snd_em(2);
         // fall through
     case 3: {
         short t = ew(ENTITY, 0xc4);
         ew(ENTITY, 0xc4) = (short)(t + 1);
-        ENTITY->angle = (short)((ENTITY->angle + yawn_whip_offset(t + 1) - yawn_whip_offset(t)) & 0xFFF);
-        yawn_anim_advance(0, 0x200);
-        angleStep = 0x80;
-        if (t + 1 == YT_WHIP_PERIOD / 4 || t + 1 == YT_WHIP_PERIOD * 3 / 4 ||
-            t + 1 == YT_WHIP_PERIOD * 5 / 4 || t + 1 == YT_WHIP_PERIOD * 7 / 4) {
-            int pts[13][3];
-            int n = yawn_body_points(pts, 3, 14);
-            zombie_mode_yawn_area_hit(pts, n, YT_WHIP_REACH, YT_WHIP_DAMAGE);
-            Snd_em(3);
-        }
+        // The ripple is posed in yawn_post_move; no root rotation or death
+        // animation here, which would swing the entire body around its anchor.
         if (t + 1 >= YT_WHIP_FRAMES) {
+            yawn_thrash_body_wave(YT_WHIP_FRAMES);
             euw(ENTITY, 0xc2) = 0;
             eub(ENTITY, 0x17c) = 0;
             eub(ENTITY, 0x85) = 0;
@@ -1720,73 +1754,238 @@ void yawn_action_thrash(void)
     }
     Add_speedXZ(0);
     yawn_post_move(angleStep);
+    // Sample the actual waved pose after movement. Frequent checks catch a
+    // survivor beside the tail between swing peaks; hurt immunity still
+    // prevents damage from landing on every check.
+    if (eub(ENTITY, 0x87) == 3 && ew(ENTITY, 0xc4) % 5 == 0) {
+        int pts[13][3];
+        int n = yawn_body_points(pts, 3, 14);
+        zombie_mode_yawn_area_hit(pts, n, YT_WHIP_REACH, YT_WHIP_DAMAGE);
+        Snd_em(3);
+    }
 }
 
-// Action behaviour 10 - the slam. The reared weave no other scene plays
-// (animation 12) turned toward its target as the warning, then the rear-up
-// backwards at double speed - the head and front body crash down - striking
-// everyone near them, in a cloud of dust.
+// Action behaviour 10: rear up, then drive the captured head and neck down
+// over eight frames. Keep the rest of the snake's curve where it was.
+#define YS_DROP_FRAMES 8
+static JointStruct s_slamBody[15];
+static MATRIX s_slamRoot;
+static short s_slamHeading;
+static double s_slamFlatAngle, s_slamRaiseAngle;
+#define YS_LIFT_FRAMES 24
+#define YS_MAX_RISE 1800 // bounded head height above the grounded neck hinge
+static double yawn_slam_raise_angle(double flatAngle, double dx, double dy, double dz)
+{
+    double radius = std::sqrt(dx * dx + dy * dy + dz * dz);
+    double rise = radius > YS_MAX_RISE ? YS_MAX_RISE / radius : 1.0;
+    // A long front section must not rise several thousand units just to
+    // reach a fixed angle. Cap its vertical height, not its rotation.
+    return flatAngle - std::asin(rise);
+}
+
+// Convert a composed matrix back to the angles sent in network poses.
+// RotMatrix uses Rx(-x) * Ry(y) * Rz(-z).
+static void yawn_slam_angles(const MATRIX& matrix, SVECTOR* out)
+{
+    double y = matrix.m[0][2] / 4096.0;
+    if (y < -1.0) y = -1.0;
+    if (y > 1.0) y = 1.0;
+    double units = 4096.0 / 6.283185307179586;
+    out->y = (short)((int)(std::asin(y) * units) & 0xFFF);
+    if (std::abs(y) < 0.9999) {
+        out->x = (short)((int)(std::atan2((double)matrix.m[1][2], (double)matrix.m[2][2]) * units) & 0xFFF);
+        out->z = (short)((int)(std::atan2((double)matrix.m[0][1], (double)matrix.m[0][0]) * units) & 0xFFF);
+    } else {
+        out->x = 0;
+        out->z = (short)((int)(std::atan2(-(double)matrix.m[1][0], (double)matrix.m[1][1]) * units) & 0xFFF);
+    }
+}
+
+// Limit one coherent hinge rotation, rather than moving individual links to
+// the floor independently (which would detach the mesh at its seams).
+static bool yawn_slam_angle_clear(double angle, double ux, double uz)
+{
+    const int* pivot = s_slamBody[7].world.t;
+    for (int k = 0; k <= 6; k++) {
+        double along = ux * (s_slamBody[k].world.t[0] - pivot[0]) +
+                       uz * (s_slamBody[k].world.t[2] - pivot[2]);
+        double baseY = s_slamBody[k].world.t[1] - pivot[1];
+        double y = std::sin(angle) * along + std::cos(angle) * baseY;
+        // Respect a baseline already slightly above/below the hinge, without
+        // allowing the custom motion to push it farther below the floor.
+        double floor = baseY > 0 ? baseY : 0;
+        double ceiling = baseY < -YS_MAX_RISE ? baseY : -YS_MAX_RISE;
+        if (y > floor + 1 || y < ceiling - 1) return false;
+    }
+    return true;
+}
+
+static void yawn_slam_pose(double angle)
+{
+    JointStruct* j = ENTITY->jointsStructs;
+    // Segment collision and rendering run between head updates. Rebuild the
+    // whole reference pose so neither the grounded tail nor matrix errors can
+    // become the input to the next custom frame.
+    memcpy(j, s_slamBody, sizeof(s_slamBody));
+    ENTITY->angle = s_slamHeading;
+    ENTITY->scaMatrixData.localMatrix = s_slamRoot;
+    const int* pivot = s_slamBody[7].world.t;
+    double ux = s_slamBody[0].world.t[0] - pivot[0];
+    double uz = s_slamBody[0].world.t[2] - pivot[2];
+    double reach = std::sqrt(ux * ux + uz * uz);
+    if (reach < 1.0) {
+        ux = s_slamBody[0].world.m[0][0] / 4096.0;
+        uz = s_slamBody[0].world.m[2][0] / 4096.0;
+        double length = std::sqrt(ux * ux + uz * uz);
+        if (length < 0.001) { ux = 1; uz = 0; }
+        else { ux /= length; uz /= length; }
+    } else { ux /= reach; uz /= reach; }
+    if (!yawn_slam_angle_clear(angle, ux, uz)) {
+        double lo = 0, hi = 1;
+        for (int i = 0; i < 16; i++) {
+            double mid = (lo + hi) * 0.5;
+            if (yawn_slam_angle_clear(angle * mid, ux, uz)) lo = mid;
+            else hi = mid;
+        }
+        angle *= lo;
+    }
+    double c = std::cos(angle), sn = std::sin(angle);
+    double q[3][3] = {
+        {1+(c-1)*ux*ux, -sn*ux, (c-1)*ux*uz},
+        {sn*ux, c, sn*uz},
+        {(c-1)*uz*ux, -sn*uz, 1+(c-1)*uz*uz}
+    };
+    // Rotate the entire connected front around the grounded neck hinge.
+    // A rigid transform preserves every link length and attachment.
+    for (int k = 0; k <= 6; k++) {
+        j[k] = s_slamBody[k];
+        for (int row = 0; row < 3; row++) {
+            double position = pivot[row];
+            for (int col = 0; col < 3; col++)
+                position += q[row][col] * (s_slamBody[k].world.t[col] - pivot[col]);
+            j[k].world.t[row] = (int)position;
+            for (int col = 0; col < 3; col++) {
+                double value = 0;
+                for (int n = 0; n < 3; n++) value += q[row][n] * s_slamBody[k].world.m[n][col];
+                j[k].world.m[row][col] = (short)value;
+            }
+        }
+        if (k >= 3) yawn_slam_angles(j[k].world, &j[k].rotation);
+    }
+    // Body joints are world-space during this pose. Never let the generic
+    // hierarchy pass recompose them from the old animation's local matrices.
+    for (int k = 3; k <= 14; k++) j[k].flags = (j[k].flags & ~2) | 0x50;
+
+    // The renderer and remote pose receiver rebuild joints 0-2 from local
+    // transforms. Update that source, not just their temporary world matrices.
+    const MATRIX& root = ENTITY->scaMatrixData.localMatrix;
+    for (int row = 0; row < 3; row++) {
+        double norm = 0;
+        for (int n = 0; n < 3; n++) norm += (double)root.m[n][row] * root.m[n][row];
+        if (norm < 1.0) norm = 1.0;
+        double position = 0;
+        for (int n = 0; n < 3; n++)
+            position += root.m[n][row] * (j[0].world.t[n] - root.t[n]);
+        j[0].transform.t[row] = (int)(position * 4096.0 / norm);
+        for (int col = 0; col < 3; col++) {
+            double value = 0;
+            for (int n = 0; n < 3; n++) value += (double)root.m[n][row] * j[0].world.m[n][col];
+            j[0].transform.m[row][col] = (short)(value * 4096.0 / norm);
+        }
+    }
+    yawn_slam_angles(j[0].transform, &j[0].rotation);
+}
+
+static void yawn_slam_impact(int* point)
+{
+    const MATRIX& head = ENTITY->jointsStructs[0].world;
+    // The original bite probes 1000 units along the head's local X axis:
+    // this is the mouth, rather than the joint pivot at the neck attachment.
+    for (int axis = 0; axis < 3; axis++)
+        point[axis] = head.t[axis] + head.m[axis][0] * 1000 / 4096;
+}
+
+static void yawn_slam_cloud(const int* head)
+{
+    // A center puff and two rings define one circle, matching the damage
+    // center/radius. This is an impact cue, not a lingering poison hazard.
+    for (int ring = 0; ring < 3; ring++) {
+        int count = ring == 0 ? 1 : ring == 1 ? 8 : 12;
+        int radius = ring == 0 ? 0 : ring == 1 ? YS_CLOUD_RADIUS / 2 : YS_CLOUD_RADIUS;
+        for (int i = 0; i < count; i++) {
+            double angle = 6.283185307179586 * i / count;
+            VECTOR pos = { head[0] + (int)(radius * std::cos(angle)), -200,
+                           head[2] + (int)(radius * std::sin(angle)), 0 };
+            Effect_CreateBillboard(9, 0x11, 0, NULL, &pos, EFFECT_ZM_SLAM_CLOUD);
+        }
+    }
+}
+
 void yawn_action_slam(void)
 {
     switch (eub(ENTITY, 0x87)) {
-    case 0:
+    case 0: {
+        // One reference pose for the whole attack; do not switch between the
+        // original animator's root space and a custom body in world space.
+        memcpy(s_slamBody, ENTITY->jointsStructs, sizeof(s_slamBody));
+        s_slamRoot = ENTITY->scaMatrixData.localMatrix;
+        s_slamHeading = ENTITY->angle;
+        double dx = s_slamBody[0].world.t[0] - s_slamBody[7].world.t[0];
+        double dz = s_slamBody[0].world.t[2] - s_slamBody[7].world.t[2];
+        double dy = s_slamBody[0].world.t[1] - s_slamBody[7].world.t[1];
+        s_slamFlatAngle = -std::atan2(dy, std::sqrt(dx * dx + dz * dz));
+        s_slamRaiseAngle = yawn_slam_raise_angle(s_slamFlatAngle, dx, dy, dz);
         eub(ENTITY, 0x87) = 1;
-        eub(ENTITY, 0xbe) = 0;
-        eub(ENTITY, 0xbf) = 0;
-        eub(ENTITY, 0xbd) = 12;
-        eub(ENTITY, 0x8c) = 7;
+        ew(ENTITY, 0xc4) = 0;
         ew(ENTITY, 0x172) = 0;
         euw(ENTITY, 0xc2) = 0;
         eub(ENTITY, 0x17c) = 1;
         Snd_em(1);
         // fall through
-    case 1:
-        entity_rotate_toward_target(player_pos_vec(), 0x30);
-        if (yawn_anim_advance(0, 0x200) != 0 || eub(ENTITY, 0xbe) >= YS_SWAY_FRAMES) eub(ENTITY, 0x87) = 2;
-        break;
-    case 2:
-        eub(ENTITY, 0x87) = 3;
-        eub(ENTITY, 0xbe) = 0;
-        eub(ENTITY, 0xbf) = 0;
-        eub(ENTITY, 0xbd) = 4;
-        eub(ENTITY, 0x8c) = 4;
-        // fall through
+    }
+    case 1: {
+        double t = (double)++ew(ENTITY, 0xc4) / YS_LIFT_FRAMES;
+        t = t * t * (3.0 - 2.0 * t);
+        yawn_slam_pose(s_slamRaiseAngle * t);
+        if (ew(ENTITY, 0xc4) >= YS_LIFT_FRAMES) {
+            eub(ENTITY, 0x87) = 3;
+            ew(ENTITY, 0xc4) = 0;
+        }
+        return;
+    }
     case 3: {
-        unsigned char done = yawn_anim_advance(1, 0x200);
-        if (!done) done = yawn_anim_advance(1, 0x200);
-        if (done) {
-            int pts[5][3];
-            int n = yawn_body_points(pts, 3, 6);
-            zombie_mode_yawn_area_hit(pts, n, YS_REACH, YS_DAMAGE);
+        int tick = ++ew(ENTITY, 0xc4);
+        double t = (double)tick / YS_DROP_FRAMES;
+        yawn_slam_pose(s_slamRaiseAngle + (s_slamFlatAngle - s_slamRaiseAngle) * t * t);
+        if (tick >= YS_DROP_FRAMES) {
+            int pts[1][3];
+            yawn_slam_impact(pts[0]);
+            // One circle around the impact, rather than overlapping circles
+            // along the neck. PHURT supplies the survivor's hit-stun reaction.
+            zombie_mode_yawn_area_hit(pts, 1, YS_REACH, YS_DAMAGE);
+            yawn_slam_cloud(pts[0]);
             Snd_em(3);
-            for (int i = 0; i < 4; i++) yawn_spawn_dust(i & 1);
-            const int* head = ENTITY->jointsStructs[0].world.t;
-            for (int i = 0; i < 8; i++) {
-                g_playerPosScratch.x = head[0] + (int)((unsigned int)rand() & 0x7ff) - 0x400;
-                g_playerPosScratch.y = -(int)((unsigned int)rand() & 0x1ff);
-                g_playerPosScratch.z = head[2] + (int)((unsigned int)rand() & 0x7ff) - 0x400;
-                Effect_CreateBillboard(9, 0x11, 0, (void*)g_deadMoveValue, &g_playerPosScratch, 0);
-            }
             eub(ENTITY, 0x87) = 4;
-            eub(ENTITY, 0xbe) = 0;
-            eub(ENTITY, 0xbf) = 0;
-            eub(ENTITY, 0xbd) = 1;
-            eub(ENTITY, 0x8c) = 7;
             ew(ENTITY, 0xc4) = YS_RECOVER;
         }
-        break;
+        return; // do not re-pose the slammed head through yawn_post_move
     }
     case 4: {
-        yawn_anim_advance(0, 0x200);
-        short ticks = ew(ENTITY, 0xc4);
-        ew(ENTITY, 0xc4) = (short)(ticks - 1);
-        if (ticks <= 0) {
+        int remaining = --ew(ENTITY, 0xc4);
+        double t = (double)remaining / YS_RECOVER;
+        t = t * t * (3.0 - 2.0 * t);
+        yawn_slam_pose(s_slamFlatAngle * t);
+        if (remaining <= 0) {
+            // Restore rotations AND the animator's relative-angle history.
+            memcpy(ENTITY->jointsStructs, s_slamBody, sizeof(s_slamBody));
+            ENTITY->scaMatrixData.localMatrix = s_slamRoot;
+            ENTITY->angle = s_slamHeading;
             eub(ENTITY, 0x17c) = 0;
             eub(ENTITY, 0x85) = 0;
             eub(ENTITY, 0x8a) = 0;
             set_action(1, 0);
         }
-        break;
+        return;
     }
     default:
         break;
@@ -2527,8 +2726,9 @@ void yawn_update(void)
             // Reaction phase 0x40 / 0x50 = a heavy hit: 0x41 damage.
             if ((eub(ENTITY, 0x8a) & 0x78) == 0x40 || (eub(ENTITY, 0x8a) & 0x78) == 0x50) {
                 g_EnemiesList[0].health = (short)(g_EnemiesList[0].health - 0x41);
-                g_EnemiesList[0].angle = (short)(g_EnemiesList[0].angle
-                        + (short)turn_toward_target(player_pos_vec(), 0x10));
+                if (!zombie_mode_armed() || g_EnemiesList[0].action_behavior != 10)
+                    g_EnemiesList[0].angle = (short)(g_EnemiesList[0].angle
+                            + (short)turn_toward_target(player_pos_vec(), 0x10));
                 if (g_EnemiesList[0].health < 0) {
                     g_EnemiesList[0].state             = 3;
                     g_EnemiesList[0].ignore_player_flag = 0;
@@ -2549,8 +2749,9 @@ void yawn_update(void)
                 if (hit->index < 10 && Flg_ck((int)&g_ScenarioFlags, SCENARIO_FLAG_SECOND_PLAYTHROUGH) != 0) {
                     g_EnemiesList[0].health = (short)(g_EnemiesList[0].health - 0xf);
                 }
-                g_EnemiesList[0].angle = (short)(g_EnemiesList[0].angle
-                        + (short)turn_toward_target(player_pos_vec(), 0x10));
+                if (!zombie_mode_armed() || g_EnemiesList[0].action_behavior != 10)
+                    g_EnemiesList[0].angle = (short)(g_EnemiesList[0].angle
+                            + (short)turn_toward_target(player_pos_vec(), 0x10));
                 if (g_EnemiesList[0].health < 0) {
                     g_EnemiesList[0].state             = 3;
                     g_EnemiesList[0].ignore_player_flag = 0;
@@ -2562,7 +2763,13 @@ void yawn_update(void)
         }
     }
 
-    g_playerDisplacement = check_room_collision(entity_pos(),
+    // The custom slam owns a fixed rear and a connected front. Original
+    // segment pushes drag the chain after that pose and corrupt its anchor.
+    // Keep damage processing above; the possessed head still has the mod's
+    // room-boundary sweep around its update.
+    bool customSlam = zombie_mode_armed() && g_EnemiesList[0].state == 1 &&
+                      g_EnemiesList[0].action_behavior == 10;
+    g_playerDisplacement = customSlam ? 0 : check_room_collision(entity_pos(),
                                                 *(short*)(ENTITY->Sca_info + 10));
 
     if (ENTITY->behavior_flags == 1 && g_playerDisplacement != 0) {

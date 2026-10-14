@@ -6,7 +6,7 @@
 // loaded guns, all four crests in the main hall and every locked door (key
 // doors, the crest door, the elevator's power, the keypad) open. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -339,7 +339,8 @@ bool zm_yawn_prompt_input(void);
 bool zm_spot_free(int x, int z);
 bool zm_yawn_clock_hold(void);                  // the game clock stands still
 bool zm_yawn_director_closed(unsigned char stage, unsigned char room);
-bool zm_yawn_free_revive(unsigned char stage, unsigned char room);
+bool zm_yawn_free_revive(int player, unsigned char stage, unsigned char room);
+void zm_yawn_revived(int player);
 // A boss room the director may jump into: its Yawn's id while that is alive
 // (its fight not done), else 0 - and where the mode places it.
 unsigned char zm_yawn_jump_room(unsigned char stage, unsigned char room);
@@ -746,8 +747,8 @@ struct ZmEconStats {
 };
 void zm_econ_stats(ZmEconStats* out);
 
-// The AI director (ZombieDirectorAI.cpp): [Mods] AiDirector drives the
-// director's copy - spending only; the possessed body is left to the player.
+// The AI director (ZombieDirectorAI.cpp) runs only in AI DIRECTOR matches.
+// [Mods] AiDirector sets the lobby's default difficulty.
 // _level: 0 off for this copy, else 1 easy .. 4 nightmare. The economy scales
 // the income and starting points (_income_pct) and unlock times
 // (_unlock_pct) by it.

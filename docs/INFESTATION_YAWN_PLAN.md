@@ -88,7 +88,7 @@ start → key 1 → pillar passage door (lock 0x0D, from C passage 2F 0x04)
   fight. Dead survivors elsewhere don't count.
 - Each Yawn kill adds **5:00**.
 - Assumption (user didn't answer explicitly — confirm): the clock also stays
-  paused during the 30-second post-fight lockdown.
+  paused during the 60-second post-fight lockdown.
 - Pause mechanics already exist: the survivors' timeout pauses everything via
   `zm_timeout_active` → `net_has_pause` → `zm_game_time_ms`
   (`ZombieTimeout.cpp`, `ZombieNet.cpp`). The boss pause should stop only the
@@ -101,11 +101,11 @@ start → key 1 → pillar passage door (lock 0x0D, from C passage 2F 0x04)
 2. Boss room doors are **one-way** while Yawn lives: survivors can enter, not
    leave. (The shotgun trap already blocks doors per survivor:
    `zm_shotgun_door`, `zombie_mode_door_trapped` — reuse that pattern.)
-3. **On the kill — 30-second lockdown:**
+3. **On the kill — 60-second lockdown:**
    - doors stay locked;
    - the director can only observe that room: no placing, reinforcements,
      traps or possession there;
-   - survivors inside may revive dead teammates who are also inside **without
+   - survivors inside may revive teammates left dead by the fight once **without
      a healing item, even past the revive limit**;
    - the drop appears (key 3 / the crest).
 4. **When the doors unlock:** every survivor's revive count resets — including
@@ -175,7 +175,7 @@ host-arbitrated; the host may itself be a survivor (see below).
 2. Yawn 1 in the attic under engine AI: spawn, fight, death drop (key 3),
    synced across copies. Then Yawn 2 in the lesson room with the crest drop.
 3. Boss room rules: one-way doors, clock pause (all living survivors inside),
-   30 s lockdown, free revives inside, revive-count reset on unlock, no
+   60 s lockdown, free revives inside, revive-count reset on unlock, no
    director actions in the room, +5:00.
 4. Generator: fixed key roles, key 3 from the attic, crest from Yawn 2, the
    hole closed until Yawn 2, lesson room out of the random key-item rooms;

@@ -384,6 +384,9 @@ void zombie_mode_drop_label(short x, short y);
 bool zombie_mode_shots_penetrate(void);
 // Add_speedXZ on the player: Enrico moves 10% further.
 int  zombie_mode_player_move_speed(int speed);
+// Enrico: double knife damage, and half the zombie's bite-loop timer.
+int zombie_mode_player_weapon_damage(unsigned char weaponId, int damage);
+int zombie_mode_player_zombie_grab_time(int frames);
 // game_loop, before its menu check: Richard's radio (OPTIONS opens the map).
 void zombie_mode_survivor_input(void);
 // menu_item_use_heal's result: Rebecca's spray heals the survivors near her

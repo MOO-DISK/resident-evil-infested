@@ -4849,12 +4849,14 @@ static bool zm_possession_busy(const Entity* e)
 {
     // A dead body must still allow the existing automatic death handoff.
     if (e->health < 0) return false;
+    // Room jumps take the freshly spawned body before its first update.
+    // Yawn must be reserved here too: its controller runs the init next frame.
+    if (e->state == 0) return false;
     // Yawn: its attacks (bite, rear, swallow, thrash, slam) and its reactions.
     if (zm_yawn_head(e)) return e->state != 1 || e->action_behavior >= 2;
     int slot = (int)(e - g_EnemiesList);
     if (slot >= 0 && slot < 30 && zm_shared_slot_busy(slot)) return true;
     if (e == g_zombieModeEntity && (s_remoteGrab || s_biteVictim != NULL || s_riding)) return true;
-    if (e->state == 0) return false;
     if (zombie_mode_feeding_target(e)) return false;
     if (e->state != 1) return true;
     return !zm_is_zombie_id(e->id) && !zm_monster_attack_over(e);
@@ -6502,13 +6504,14 @@ static void zm_area_resolve(void)
         short facing = (short)((((facingAngle - s_areaHit.angle) + 0x400) & 0xFFF) < 0x800 ? 1 : 0);
         short a[8] = { s_areaHit.damage, (short)(facing + 1), 2, (short)(0x66 + facing), 0x7FFF, 0,
                        (short)s_areaHit.id, (short)(g_stageId | (g_roomId << 8)) };
+        int hurtSlot = who[k] < 0 ? 0 : who[k];
+        if ((int)(s_hurtUntilMs[hurtSlot] - now) > 0) continue;
         if (local) {
             zm_take_hurt(a);
         } else {
-            if ((int)(s_hurtUntilMs[who[k]] - now) > 0) continue;
             zm_net_send_event_to(who[k], ZM_EV_PHURT, a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
-            s_hurtUntilMs[who[k]] = now + 700;
         }
+        s_hurtUntilMs[hurtSlot] = now + 700;
         dbg_printf("[yawn] area strike on survivor %d for %d\n", who[k], (int)s_areaHit.damage);
     }
 }

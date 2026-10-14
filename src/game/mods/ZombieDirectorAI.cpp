@@ -14,8 +14,7 @@ extern unsigned int Flg_ck(int baseAddr, unsigned int bitIndex);    // 0x00473f4
 //
 // Spends the director's points on the copy that keeps the match: the host of
 // an "AI DIRECTOR" game (ZombieLobby.cpp), whose own player is a survivor in
-// seat 0, or the director's copy / single player's with [Mods] AiDirector as
-// an autopilot beside a human director -
+// seat 0. A human director never shares control with the AI -
 // through exactly the calls the map makes (zm_director_place_ai, the doorway
 // reinforcement, the LOCK DOORS trap), so every placement rule, price, cap
 // and the roster sync apply unchanged. It never takes a monster over.
@@ -332,14 +331,13 @@ static AiMarch s_march[AI_MARCHES];
 static int          s_threatTarget = 0;
 static char         s_lastAction[40];
 
-// A game hosted as "AI DIRECTOR" takes the lobby's level; otherwise
-// [Mods] AiDirector is an autopilot for the human director's copy.
+// Only an explicit "AI DIRECTOR" match runs the AI. The config value is
+// the lobby's default difficulty, never an autopilot for a human director.
 int zm_ai_level(void)
 {
     if (!g_bPlayAsZombie || !zombie_mode_armed() || !zm_match_authority()) return 0;
     if (zm_ai_hosted()) return zm_net_ai_level();
-    if (zm_game_role() == ZM_NET_SURVIVOR) return 0;
-    return (g_zmAiDirector > 0 && g_zmAiDirector <= 4) ? g_zmAiDirector : 0;
+    return 0;
 }
 
 bool zm_ai_hosted(void)

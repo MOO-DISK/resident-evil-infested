@@ -24,7 +24,8 @@
 //   Barry       his gun shots go through every enemy in the line of fire
 //   Rebecca     her first aid spray heals the survivors around her too;
 //               revives in 2 seconds with spray or green herb, at 50% health
-//   Enrico      runs and walks 10% faster
+//   Enrico      runs and walks 10% faster, double knife damage,
+//               zombie bite holds last half as long
 //   Richard     his radio: the survivors' map (OPTIONS) also shows which
 //               rooms have monsters in them
 // ============================================================================
@@ -185,7 +186,7 @@ void zm_perk_describe(int ch, ZmPerkInfo* out)
     default:
         out->fullName = "ENRICO MARINI";
         out->description = "S.T.A.R.S. BRAVO TEAM CAPTAIN. A SEASONED LEADER, QUICK ON HIS FEET.";
-        out->perk = "QUICK: RUNS AND WALKS 10 PERCENT FASTER.";
+        out->perk = "QUICK: MOVES 10 PERCENT FASTER. DOUBLE KNIFE DAMAGE. ZOMBIE GRABS LAST HALF AS LONG.";
         break;
     }
     out->toughness = zm_perk_toughness(ch);
@@ -243,6 +244,22 @@ int zombie_mode_player_move_speed(int speed)
 {
     if (zm_perk_char() != ZM_CHAR_ENRICO) return speed;
     return speed + speed / 10;
+}
+
+// Weapon damage is chosen from the original enemy/difficulty table first.
+int zombie_mode_player_weapon_damage(unsigned char weaponId, int damage)
+{
+    if (zm_perk_char() == ZM_CHAR_ENRICO && weaponId == ITEM_KNIFE)
+        return damage * 2;
+    return damage;
+}
+
+// Zombie grabs run on the victim's copy, including network puppet grabs.
+// Keep bite damage per tick intact; the shorter hold delivers fewer bites.
+int zombie_mode_player_zombie_grab_time(int frames)
+{
+    if (zm_perk_char() == ZM_CHAR_ENRICO) return frames / 2;
+    return frames;
 }
 
 // ---------------------------------------------------------------------------
