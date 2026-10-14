@@ -425,15 +425,39 @@ static void voice_hint_rect(int x, int y, int w, int h, unsigned char level, int
     draw_rect(&r, depth, 0);
 }
 
-static void voice_hint_button(int x, int y, const char* key, DWORD rawBit, bool enabled)
+static void voice_hint_round_rect(int x, int y, int w, int h, unsigned char level,
+                                  int depth, unsigned int texture = 0)
 {
-    bool held = enabled && (g_RawPadHeld & rawBit) != 0;
-    voice_hint_rect(x - 10, y - 1, 20, 16, held ? 160 : 48, 36);
-    voice_hint_text(x, y, key, enabled ? (held ? 4 : 0) : 3);
+    // Small rounded corners built from the same native rectangles as the HUD.
+    voice_hint_rect(x + 4, y, w - 8, 1, level, depth, texture);
+    voice_hint_rect(x + 2, y + 1, w - 4, 2, level, depth, texture);
+    voice_hint_rect(x + 1, y + 3, w - 2, 1, level, depth, texture);
+    voice_hint_rect(x, y + 4, w, h - 8, level, depth, texture);
+    voice_hint_rect(x + 1, y + h - 4, w - 2, 1, level, depth, texture);
+    voice_hint_rect(x + 2, y + h - 3, w - 4, 2, level, depth, texture);
+    voice_hint_rect(x + 4, y + h - 1, w - 8, 1, level, depth, texture);
 }
 
-// Native font and primitives: two diamonds laid out like the D-pad and face
-// buttons. Read the unfiltered pad, since voice chords are removed from play.
+static bool voice_hint_held(DWORD rawBit)
+{
+    // OPTIONS includes the inventory bit (0x0900). It is not the Y shortcut.
+    if (rawBit == VOICE_INVENTORY && (g_RawPadHeld & VOICE_OPTIONS_BIT) != 0)
+        return false;
+    return (g_RawPadHeld & rawBit) != 0;
+}
+
+static void voice_hint_card(int x, int y, int width, const char* key,
+                            DWORD rawBit, const char* label)
+{
+    bool held = voice_hint_held(rawBit);
+    voice_hint_round_rect(x, y, width, 24, held ? 64 : 32, 38);
+    voice_hint_round_rect(x + 4, y + 3, 24, 18, held ? 160 : 64, 36);
+    voice_hint_text(x + 16, y + 5, key, held ? 4 : 0);
+    voice_hint_text(x + 30 + (width - 30) / 2, y + 5, label, 0);
+}
+
+// Native font and primitives: evenly spaced rows with rounded key badges.
+// Read the unfiltered pad, since voice chords are removed from play.
 void zm_voice_draw(void)
 {
     if (!zombie_mode_armed() ||
@@ -446,43 +470,26 @@ void zm_voice_draw(void)
 
     if (zm_game_role() != ZM_NET_SURVIVOR) {
         if (!lb || g_zombieModeEntity == NULL) return;
-        voice_hint_rect(72, 52, 176, 126, 176, 40, 0x60000000u);
-        voice_hint_text(160, 54, "LB - SPAWN", 0);
-        voice_hint_text(160, 74, "ZOMBIE", 0);
-        voice_hint_text(112, 114, "HUNTER", 0);
-        voice_hint_text(208, 114, "CHIMERA", 0);
-        voice_hint_text(160, 160, "DOG", 0);
-        voice_hint_button(160, 92, "U", VOICE_UP, true);
-        voice_hint_button(112, 132, "L", VOICE_LEFT, true);
-        voice_hint_button(208, 132, "R", VOICE_RIGHT, true);
-        voice_hint_button(160, 142, "D", VOICE_DOWN, true);
+        voice_hint_round_rect(48, 44, 224, 144, 176, 40, 0x60000000u);
+        voice_hint_text(160, 50, "LB - SPAWN", 0);
+        voice_hint_card(56, 70, 208, "U", VOICE_UP, "ZOMBIE");
+        voice_hint_card(56, 98, 208, "L", VOICE_LEFT, "HUNTER");
+        voice_hint_card(56, 126, 208, "R", VOICE_RIGHT, "CHIMERA");
+        voice_hint_card(56, 154, 208, "D", VOICE_DOWN, "DOG");
         return;
     }
 
-    voice_hint_rect(8, 52, 304, 126, 176, 40, 0x60000000u);
-    voice_hint_text(160, 54, rb ? "RB - SUPPLIES / SOCIAL" : "LB - TEAMWORK", 0);
-    unsigned char color = 0;
-    voice_hint_text(80, 74, rb ? "JOKE" : "HELP", 0);
-    voice_hint_text(32, 100, rb ? "NEED" : "GUARD", color);
-    voice_hint_text(32, 114, rb ? "AMMO" : "ME", color);
+    voice_hint_round_rect(8, 44, 304, 144, 176, 40, 0x60000000u);
+    voice_hint_text(160, 50, rb ? "RB - SUPPLIES / SOCIAL" : "LB - TEAMWORK", 0);
     int healthLine = voice_health_line();
-    voice_hint_text(128, 100, !rb ? "LEAD" : healthLine == 3 ? "NEED" : "I'M", color);
-    voice_hint_text(128, 114, !rb ? "THE WAY" : healthLine == ZM_VOICE_DYING ? "DYING" :
-                    healthLine == ZM_VOICE_HURT ? "HURT" : "HEALTH", color);
-    voice_hint_text(80, 160, rb ? "GOOD JOB" : "WATCH OUT", color);
-    voice_hint_button(80, 92, "U", VOICE_UP, true);
-    voice_hint_button(32, 132, "L", VOICE_LEFT, true);
-    voice_hint_button(128, 132, "R", VOICE_RIGHT, true);
-    voice_hint_button(80, 142, "D", VOICE_DOWN, true);
-
-    voice_hint_text(240, 74, rb ? "WE'RE SCREWED" : "STAY HERE", color);
-    voice_hint_text(192, 100, rb ? "TAKE" : "FOLLOW", color);
-    voice_hint_text(192, 114, rb ? "THIS" : "ME", color);
-    if (!rb) voice_hint_text(288, 100, "RUN", color);
-    voice_hint_text(288, 114, rb ? "TAUNT" : "AWAY", color);
-    voice_hint_text(240, 160, rb ? "THANKS" : "USE THAT", color);
-    voice_hint_button(240, 92, "Y", VOICE_INVENTORY, true);
-    voice_hint_button(192, 132, "X", VOICE_AIM, true);
-    voice_hint_button(288, 132, "B", VOICE_RUN, true);
-    voice_hint_button(240, 142, "A", VOICE_ACTION, true);
+    const char* health = healthLine == ZM_VOICE_DYING ? "I'M DYING" :
+                         healthLine == ZM_VOICE_HURT ? "I'M HURT" : "NEED HEALTH";
+    voice_hint_card(16, 70, 140, "U", VOICE_UP, rb ? "JOKE" : "HELP");
+    voice_hint_card(16, 98, 140, "L", VOICE_LEFT, rb ? "NEED AMMO" : "GUARD ME");
+    voice_hint_card(16, 126, 140, "R", VOICE_RIGHT, rb ? health : "LEAD THE WAY");
+    voice_hint_card(16, 154, 140, "D", VOICE_DOWN, rb ? "GOOD JOB" : "WATCH OUT");
+    voice_hint_card(164, 70, 140, "Y", VOICE_INVENTORY, rb ? "WE'RE SCREWED" : "STAY HERE");
+    voice_hint_card(164, 98, 140, "X", VOICE_AIM, rb ? "TAKE THIS" : "FOLLOW ME");
+    voice_hint_card(164, 126, 140, "B", VOICE_RUN, rb ? "TAUNT" : "RUN AWAY");
+    voice_hint_card(164, 154, 140, "A", VOICE_ACTION, rb ? "THANKS" : "USE THAT");
 }
