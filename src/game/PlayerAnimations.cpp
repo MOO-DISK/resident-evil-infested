@@ -2554,6 +2554,15 @@ int check_action_object(void)
     g_playerPosScratch.x = g_svecScratch.x + g_playerEntity.scaMatrixData.localMatrix.t[0];
     g_playerPosScratch.z = g_svecScratch.z + g_playerEntity.scaMatrixData.localMatrix.t[2];
 
+    if (zombie_mode_armed() && g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_LESSON_ROOM) {
+        const unsigned short* hole = *(const unsigned short* const*)(&g_RoomActionTable[2 * 12 + 8]);
+        dbg_printf("[yawn hole] Action at (%d,%d), probe (%d,%d), handler %d flags %02X, in zone %d\n",
+                   g_playerEntity.scaMatrixData.localMatrix.t[0], g_playerEntity.scaMatrixData.localMatrix.t[2],
+                   g_playerPosScratch.x, g_playerPosScratch.z,
+                   (int)g_RoomActionTable[24], (unsigned)g_RoomActionTable[25],
+                   hole != NULL ? is_point_in_action_zone(&g_playerPosScratch, (unsigned short*)hole) : 0);
+    }
+
     unsigned char* entry = g_RoomActionTable;
     if ((unsigned char*)g_RoomActionTable - 1 < (unsigned char*)g_RoomActionTail) {
         char index = 0;
@@ -6815,9 +6824,8 @@ int door_try_enter(unsigned char* entry)
     unsigned char  lock   = record[0xc];
 
     // Port-added mod: a door the zombie mode's director has trapped shut
-    // (mods/ZombieTraps.cpp) - the lock click, as for a locked door.
+    // (mods/ZombieTraps.cpp). The refusal handles its sound and message.
     if (zombie_mode_door_trapped(record)) {
-        play_sfx(2, 0x14, 0);
         return 0;
     }
 

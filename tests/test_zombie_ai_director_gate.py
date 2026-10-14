@@ -23,12 +23,12 @@ bool zm_ai_hosted(void);
 '''
 checks = r'''
 int main() {
- for(int config=0;config<=4;config++) {
+ for(int config=0;config<=5;config++) {
    g_zmAiDirector=config;
    role=0; level=0; assert(zm_ai_level()==0); // solo human director
    role=1; assert(zm_ai_level()==0); // human director host
    role=2; assert(zm_ai_level()==0); // survivor client
-   for(int difficulty=1;difficulty<=4;difficulty++) {
+   for(int difficulty=1;difficulty<=5;difficulty++) {
      role=1; level=difficulty; assert(zm_ai_level()==difficulty);
      authority=false; assert(zm_ai_level()==0); authority=true;
      role=2; assert(zm_ai_level()==0);

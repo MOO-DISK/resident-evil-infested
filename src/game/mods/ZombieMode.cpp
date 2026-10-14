@@ -3,6 +3,7 @@
 #include "ZombieReconnect.h"
 #include "../entities/Zombie.h"
 #include "../FileLoader.h"
+#include "../PrintText.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
 #include "../../DebugPrint.h"
@@ -42,6 +43,10 @@ extern void update_zombie_action(void);                                // 0x0043
 
 bool    g_bPlayAsZombie = false;
 Entity* g_zombieModeEntity = NULL;
+
+static constexpr auto s_bossDoorClosed = STR("The door won't open.");
+static constexpr auto s_bossDoorBlocked = STR("The door is blocked.");
+static constexpr auto s_holeRegroup = STR("We should regroup and\\ncatch our breath.");
 
 // Armed for the session by a new game with the key on; a continued game or an
 // attract demo leaves it off, so neither ever spawns a possessed zombie.
@@ -596,12 +601,12 @@ int zm_survivors_in_ms(void)
 
 void zm_note(const char* text);
 
-// Safe rooms (an item box, ZombieRandom.cpp) are closed to the director for
-// the whole game: no entering, no placing.
+// Safe rooms (an item box, ZombieRandom.cpp) and the elevator car are closed
+// to the director for the whole game: no entering, no placing.
 static bool zm_director_safe_room(unsigned char stage, unsigned char room)
 {
     return s_zombieModeArmed && zm_match_authority() &&
-        (zm_random_room_safe(stage, room) || zm_shotgun_room_blocked(stage, room) ||
+        (zm_access_room_elevator(stage, room) || zm_random_room_safe(stage, room) || zm_shotgun_room_blocked(stage, room) ||
          zm_yawn_director_closed(stage, room));     // a boss room until it is done (ZombieYawn.cpp)
 }
 
@@ -3055,27 +3060,40 @@ void zm_reconnect_failed(void)
 }
 
 // door_try_enter: a survivor's door the director's LOCK DOORS trap holds
-// shut (ZombieTraps.cpp). The caller plays the lock click.
+// shut (ZombieTraps.cpp). Each refusal plays its door sound here.
 bool zombie_mode_door_trapped(const unsigned char* record)
 {
     if (!s_zombieModeArmed) return false;
-    if (zm_shotgun_door(record)) return true;
+    if (zm_shotgun_door(record)) {
+        play_sfx(2, 0x14, 0);
+        return true;
+    }
     if (s_gameRole != ZM_NET_SURVIVOR) return false;
     // No way out of a boss room while its Yawn is there or its lockdown
     // holds, and the lesson room's door for good once Yawn 2 is beaten
     // (ZombieYawn.cpp).
     if (zm_yawn_traps_exit(g_stageId, g_roomId) && (record[0x0B] & 0x80) == 0) {
-        zm_note("THE DOOR WON'T OPEN");
+        if (zm_yawn_hole_door(record)) {
+            zm_message_show(s_holeRegroup);
+            return true;
+        }
+        zm_yawn_blocked_sound();
+        zm_message_show(s_bossDoorClosed);
         return true;
     }
     if (zm_yawn_lesson_sealed(g_stageId, g_roomId, record[0x0D]) && (record[0x0B] & 0x80) == 0) {
-        zm_note("THE DOOR IS BLOCKED");
+        zm_yawn_blocked_sound();
+        zm_message_show(s_bossDoorBlocked);
         return true;
     }
     // The small elevator before the battery is in (ZombieKeypad.cpp).
-    if (zm_access_door_refused(record)) return true;
+    if (zm_access_door_refused(record)) {
+        play_sfx(2, 0x14, 0);
+        return true;
+    }
     unsigned int left = 0;
     if (!zm_trap_door_locked(g_stageId, g_roomId, record[0x0D], record[0x0B], &left)) return false;
+    play_sfx(2, 0x14, 0);
     char line[48];
     snprintf(line, sizeof(line), "THE DOOR IS JAMMED - %u S", (left + 999) / 1000);
     zm_note(line);
@@ -7482,7 +7500,7 @@ static void zm_route_events(void)
             zm_box_take(a, src);
             break;
         case ZM_EV_TRAP:
-            if (zm_trap_take(a) && s_gameRole == ZM_NET_SURVIVOR) zm_note("THE DOORS SLAM SHUT");
+            if (zm_trap_take(a) && s_gameRole == ZM_NET_SURVIVOR) play_sfx(2, 0x14, 0);
             break;
         case ZM_EV_GRAB: {
             zm_revive_cancel();

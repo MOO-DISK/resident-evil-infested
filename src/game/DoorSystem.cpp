@@ -1125,15 +1125,16 @@ static void DoorComposeChain(ScaMatrixData* node, MATRIX* out)
 // DoorAnimLoop (0x00444540) - the animation main loop
 // ============================================================================
 // Port-added mod: script ticks per displayed frame once loading is done.
-// Doors play at 5x; the stair files (kai01..kai04, table 0x16..0x19) have no
+// Doors play at 5x; stairs and ladders (kai01..kai04 / lad00..lad01,
+// table 0x16..0x1B) have no
 // approach to skip and look rushed at that speed, so they play at 2x. The
 // stair cut is stretched by the same ratio, so the same part of the climb
 // is shown.
 #define DOOR_MOD_TICKS          5
 #define DOOR_MOD_STAIR_TICKS    2
-static bool DoorIsStairs(void)
+static bool DoorIsClimb(void)
 {
-    return DOOR_BYTEVAR2 >= 0x16 && DOOR_BYTEVAR2 <= 0x19;
+    return DOOR_BYTEVAR2 >= 0x16 && DOOR_BYTEVAR2 <= 0x1B;
 }
 
 static void DoorAnimLoop(void)
@@ -1163,9 +1164,9 @@ static void DoorAnimLoop(void)
         // Keep the loading phases at normal speed so asynchronous texture/model
         // creation can finish. The mod skips the approach in DoorSkipApproach
         // and plays the remaining handle/opening scripts at 5x speed (stairs
-        // 2x, DoorIsStairs).
+        // and ladders 2x, DoorIsClimb).
         // The cutoff still counts displayed frames.
-        int modTicks = DoorIsStairs() ? DOOR_MOD_STAIR_TICKS : DOOR_MOD_TICKS;
+        int modTicks = DoorIsClimb() ? DOOR_MOD_STAIR_TICKS : DOOR_MOD_TICKS;
         int scriptTicks = zombie_mode_door_frames() >= 0 && g_doorPhase > 2 ? modTicks : 1;
         for (int tick = 0; tick < scriptTicks && (g_doorState & 1) != 0; tick++) {
             DoorPhaseCheck();
@@ -1243,7 +1244,7 @@ static void DoorAnimLoop(void)
         // would otherwise eat into the opening that is shown. The second limit
         // keeps a gate that never opens from holding the door.
         int doorCut = zombie_mode_door_frames();
-        if (doorCut >= 0 && DoorIsStairs()) {
+        if (doorCut >= 0 && DoorIsClimb()) {
             doorCut = doorCut * DOOR_MOD_TICKS / DOOR_MOD_STAIR_TICKS;
         }
         bool doorCutDone = gateFrame >= 0 ? g_doorFrameCount - gateFrame >= doorCut

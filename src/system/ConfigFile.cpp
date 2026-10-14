@@ -405,7 +405,7 @@ void ConfigFile_EnsureExists(void)
         "; left/right turn, run speeds the walk up, action attacks or opens a\n"
         "; door, aim lies down / gets up (forward crawls while down).\n"
         "PlayInfested=%d\n"
-        "; Default AI DIRECTOR difficulty: 1-4 = easy, normal, hard, nightmare.\n"
+        "; Default AI DIRECTOR difficulty: 1-5 = easy, normal, hard, nightmare, hell on earth.\n"
         "; 0 uses normal. Human director matches never run the AI.\n"
         "AiDirector=0\n"
         "\n"
@@ -533,7 +533,7 @@ BOOL ConfigFile_Load(void)
     // Port-added mod (src/game/mods/ZombieMode.cpp). Off unless the key is set.
     g_bPlayAsZombie = ReadInt(path, "Mods", "PlayInfested", 0) != 0;
     g_zmAiDirector = ReadInt(path, "Mods", "AiDirector", 0);
-    if (g_zmAiDirector < 0 || g_zmAiDirector > 4) g_zmAiDirector = 0;
+    if (g_zmAiDirector < 0 || g_zmAiDirector > 5) g_zmAiDirector = 0;
     g_bRunInBackgroundConfig = ReadInt(path, "Game", "RunInBackground", 0) != 0;
     g_bRunInBackground = g_bRunInBackgroundConfig;
     {

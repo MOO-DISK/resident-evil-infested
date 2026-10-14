@@ -6,7 +6,7 @@
 // loaded guns, all four crests in the main hall and every locked door (key
 // doors, the crest door, the elevator's power, the keypad) open. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-//#define QUICK_DEBUG
+#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -360,6 +360,9 @@ void zm_revive_reset_counts(void);
 // The lesson room <-> B1 passage 1 hole: open once Yawn 2 is beaten. Shut, a
 // door record of either room through it (`dest` from `stage`/`room`) is no way.
 bool zm_yawn_hole_open(void);
+void zm_yawn_hole_action(void);
+bool zm_yawn_hole_door(const unsigned char* record);
+void zm_yawn_blocked_sound(void);
 bool zm_yawn_hole_shut(unsigned char stage, unsigned char room, unsigned char dest);
 // Yawn 2 beaten: the lesson room <-> front lesson room door, shut for good.
 bool zm_yawn_lesson_sealed(unsigned char stage, unsigned char room, unsigned char dest);
@@ -514,6 +517,8 @@ unsigned char zm_drops_flag_mask(int byteIndex);
 bool zm_random_room_stub(unsigned char stage, unsigned char room);
 // A safe room (its scripts set an item box): the director may not go in or place there.
 bool zm_random_room_safe(unsigned char stage, unsigned char room);
+// Elevator car: no director entry, placement, marching or reinforcement.
+bool zm_access_room_elevator(unsigned char stage, unsigned char room);
 // Room hooks: the room's new item spots go in after its init script
 // (zombie_mode_room_spawn); the per-room model cache is dropped on reset.
 void zm_random_room_loaded(void);
@@ -749,7 +754,7 @@ void zm_econ_stats(ZmEconStats* out);
 
 // The AI director (ZombieDirectorAI.cpp) runs only in AI DIRECTOR matches.
 // [Mods] AiDirector sets the lobby's default difficulty.
-// _level: 0 off for this copy, else 1 easy .. 4 nightmare. The economy scales
+// _level: 0 off for this copy, else 1 easy .. 5 hell on earth. The economy scales
 // the income and starting points (_income_pct) and unlock times
 // (_unlock_pct) by it.
 void zm_ai_new_game(void);
@@ -761,7 +766,7 @@ int  zm_ai_unlock_pct(void);
 // A lobby "AI DIRECTOR" game, on its host: the AI plays the director there
 // while the host's own player is the survivor in seat 0.
 bool zm_ai_hosted(void);
-const char* zm_ai_level_name(int level);   // "EASY" .. "NIGHTMARE"
+const char* zm_ai_level_name(int level);   // "EASY" .. "HELL ON EARTH"
 // ZombieMode.cpp: the map placement's rules and the placement itself.
 bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned char id);
 // The AI's unseen walk: may a monster `id` come into (stage, room) - the

@@ -1616,7 +1616,7 @@ void zm_net_set_ai_level(int level)
 {
     if (s_role != ZM_NET_ZOMBIE || s_lobbyGo) return;
     if (level < 0) level = 0;
-    if (level > 4) level = 4;
+    if (level > 5) level = 5;
     s_lobbyOptions = (unsigned char)((s_lobbyOptions & ~ZM_LOBBY_OPT_AI_MASK) | (level << ZM_LOBBY_OPT_AI_SHIFT));
     // Seat 0: the host's survivor against the AI, else the human director.
     if (level == 0) s_chars[0] = ZM_SEAT_DIRECTOR;

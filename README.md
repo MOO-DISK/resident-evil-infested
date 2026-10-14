@@ -11,14 +11,16 @@ the director against an AI survivor and is mostly meant for familiarizitng yours
 It is switched on with `[Mods] PlayInfested=1` in `config.ini` (the default in `config.ini.template`); with it
 off, the game plays exactly as the original. 
 
-**HOST - AI DIRECTOR** (NEW GAME's lobby, left/right picks easy, normal, hard or
-nightmare) hosts a game the AI director plays, and the host plays a survivor
+**HOST - AI DIRECTOR** (NEW GAME's lobby, left/right picks easy, normal, hard,
+nightmare or hell on earth) hosts a game the AI director plays, and the host plays a survivor
 alongside up to three others - or alone. Everyone picks a character in the
 lobby (the host with ENTER, then AIM to start), there is no map review or setup,
 and the AI runs on the host's copy. It only buys monsters, traps and doorway
 reinforcements - it never possesses one. Higher levels earn more points, unlock
-the big monsters sooner and press harder. `[Mods] AiDirector=1-4` sets
+the big monsters sooner and press harder. `[Mods] AiDirector=1-5` sets
 the default AI DIRECTOR difficulty; human director matches never run the AI.
+Nightmare earns and starts with 2.2x Normal points; Hell on Earth uses the same
+aggression as Nightmare with 3x Normal income and starting points.
 
 **Survivors** may find some key differences from the old mansion
 - Most weapons are locked behind the progression puzzles, the piano, gallery, armor room, plant room, etc.

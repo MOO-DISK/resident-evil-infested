@@ -191,6 +191,7 @@ static void zm_econ_mmss(char* out, int len, int ms)
 // the cap; a Tyrant always fits an empty room)?
 bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id)
 {
+    if (zombie_mode_armed() && zm_access_room_elevator(stage, room)) return false;
     int cap = zm_econ_room_cap(stage, room);
     int n = zm_room_monster_slots(stage, room);
     bool emptyTyrant = n == 0 && (id == ENEMY_TYRANT_1 || id == ENEMY_TYRANT_2);
@@ -203,6 +204,10 @@ bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id
                        const char* name, char* why, int whyLen)
 {
     if (!s_on) return true;
+    if (zm_access_room_elevator(stage, room)) {
+        snprintf(why, whyLen, "MONSTERS CANNOT ENTER THE ELEVATOR");
+        return false;
+    }
     int left = zm_econ_unlock_left_ms(id);
     if (left < 0) {
         snprintf(why, whyLen, "%s: WAIT FOR THE SURVIVORS", name);

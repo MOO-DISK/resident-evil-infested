@@ -89,8 +89,6 @@ extern void MovePlayerXZ(int angle, SVECTOR* offset, SVECTOR* out);     // Weapo
 // lesson room, group 0x12 channel 1) - Bgm_08, looped (g_BgmLoopTable 1).
 // The return rooms' own music is held off under it.
 #define YW_MUSIC_WAV        GAME_DATA_ROOT "sound\\bgm_08.wav"
-#define YW_MUSIC_FADE_MS    3000
-#define YW_MUSIC_FADE_TO    (-4000)     // set_volume's attenuation at the end of the fade
 
 struct YwBoss {
     unsigned char stage, room, flag, id, behavior;
@@ -114,7 +112,7 @@ static unsigned int  s_pendingAt[YW_BOSSES];    // a survivor's: the flag first 
 static bool s_scaled = false;           // this room's Yawn has its mode health
 static bool s_here = false;             // Yawn was placed in this visit's room
 static int  s_music = 0;                // Bgm_08's sound bank, 0 none
-static unsigned int s_musicFadeAt = 0;  // the fade-out's start, 0 none
+static int  s_blockedDoorSound = 0;     // heavier metal-door rattle, room lifetime
 static bool s_bgmHeld = false;          // the room's own music is held off
 
 // The room's guarded pickups, held back this visit.
@@ -289,6 +287,19 @@ static bool yw_guarded_item(unsigned char id)
 
 // The fight music's sound bank (0 none): ducked under voice lines.
 int zm_yawn_music_bank(void) { return s_music; }
+
+void zm_yawn_blocked_sound(void)
+{
+    if (s_blockedDoorSound == 0)
+        s_blockedDoorSound = loadSndBankFromWav(GAME_DATA_ROOT "sound\\DM_gacha.wav");
+    if (s_blockedDoorSound == 0) {
+        play_sfx(2, 0x14, 0);
+        return;
+    }
+    pan_set(s_blockedDoorSound, 0);
+    set_volume(s_blockedDoorSound, g_SfxVolume);
+    SetSndSlot(s_blockedDoorSound, 0);
+}
 
 bool zm_yawn_entity(const Entity* e)
 {
@@ -1015,13 +1026,48 @@ static bool yw_zones_meet(const short* a, const short* b)
 // The lesson room's hole down to B1 passage 1: a way into the lesson room
 // round its locked door, so it stays shut until Yawn 2 there is beaten (its
 // death flag). The generator counts it shut all game (ZombieRandom.cpp,
-// kDoorGates). Shut, the lesson room loads with its floor whole and no way
-// down (zombie_mode_room_prepare), and neither B1 passage 1's climb-up prompt
+// kDoorGates). The broken floor and moved shelf are present on arrival
+// (zombie_mode_room_prepare), but neither B1 passage 1's climb-up prompt
 // (slot 2, event 0) nor the lesson room's way down (slot 7, event 12) starts.
 // ---------------------------------------------------------------------------
 bool zm_yawn_hole_open(void)
 {
     return yw_beaten(1);
+}
+
+// The native slot 2 zone lies inside the fireplace/fall scenery, beyond
+// the standing player's reach. Cover the accessible south/east rim too,
+// and use an action-press door to the native B1 destination. No original
+// fall/rope event is needed. The normal door gate still enforces regroup.
+static unsigned char s_mainHoleDoor[24];
+bool zm_yawn_hole_door(const unsigned char* record)
+{
+    if (!zombie_mode_armed() || g_stageId != STAGE_MANSION_RETURN_2F ||
+        g_roomId != ROOM_LESSON_ROOM || record == NULL) return false;
+    const unsigned char* basement = *(const unsigned char* const*)(&g_RoomActionTable[12 + 8]);
+    return record == s_mainHoleDoor || record == basement;
+}
+
+void zm_yawn_hole_action(void)
+{
+    if (!zombie_mode_armed() || g_stageId != STAGE_MANSION_RETURN_2F ||
+        g_roomId != ROOM_LESSON_ROOM) return;
+    g_RoomActionTable[4 * 12] = 0;
+    g_RoomActionTable[4 * 12 + 1] = 0;
+    unsigned char* entry = &g_RoomActionTable[2 * 12];
+    const unsigned char* basement = *(const unsigned char* const*)(&g_RoomActionTable[12 + 8]);
+    entry[0] = 0;
+    if (basement != NULL && zm_yawn_hole_open()) {
+        memcpy(s_mainHoleDoor, basement, sizeof(s_mainHoleDoor));
+        const unsigned short rim[4] = { 1200, 1400, 4200, 4900 };
+        memcpy(s_mainHoleDoor, rim, sizeof(rim));
+        entry[0] = 1;                     // door_try_enter, on Action only
+        entry[1] = 0x81;
+        *(unsigned short*)(entry + 2) = 1; // native basement door number
+        *(const unsigned char**)(entry + 8) = s_mainHoleDoor;
+    }
+    g_RoomActionTable[7 * 12] = zm_yawn_hole_open() ? 9 : 0;
+    g_RoomActionTable[7 * 12 + 1] = zm_yawn_hole_open() ? 0x81 : 0;
 }
 
 // Yawn 2 beaten, the lesson room's door to the front lesson room stays shut
@@ -1037,19 +1083,6 @@ bool zm_yawn_lesson_sealed(unsigned char stage, unsigned char room, unsigned cha
                            (room == ROOM_FRONT_LESSON_ROOM && dr == ROOM_LESSON_ROOM));
 }
 
-// Beaten while the lesson room is loaded: the way down opens here at once -
-// ROOM70C0 event 6 slides the shelf off the hole (object 0, as the room's
-// init places it once ScenarioFlags 0x28 is up), arms the way-down prompt
-// (slot 7, event 12) and sets 0x28; 0x27 (the floor broken) is set with it.
-// Later loads take both from zombie_mode_room_prepare.
-#define YW_SHELF_EVENT 6
-static void yw_open_hole_here(void)
-{
-    Flg_on((int)&g_ScenarioFlags, 0x27);
-    ScdEventEntry_Create(9, YW_SHELF_EVENT);    // a slot past 7: the first free one
-    dbg_printf("[yawn] the lesson room's shelf slides off the hole\n");
-}
-
 bool zm_yawn_hole_shut(unsigned char stage, unsigned char room, unsigned char dest)
 {
     if (!zombie_mode_armed() || stage != STAGE_MANSION_RETURN_2F || zm_yawn_hole_open()) return false;
@@ -1062,6 +1095,11 @@ bool zm_yawn_hole_shut(unsigned char stage, unsigned char room, unsigned char de
 bool zombie_mode_yawn_guards(const unsigned char* entry, unsigned char handler)
 {
     if (entry == NULL || !zombie_mode_armed()) return false;
+    // ROOM70C0 slot 3 / event 0 is the piano's snake entrance scene.
+    // Its frame script re-arms it until Yawn dies, so refuse the action
+    // even after init. The mode places its own Yawn and prepares the hole.
+    if (handler == 9 && g_stageId == STAGE_MANSION_RETURN_2F &&
+        g_roomId == ROOM_LESSON_ROOM && entry[4] == 0) return true;
     // B1 passage 1's climb-up prompt (event 0) and the lesson room's way down
     // (event 12, on slot 7 over the hole: a message, then door slot 1).
     if (handler == 9 && g_stageId == STAGE_MANSION_RETURN_2F && !zm_yawn_hole_open() &&
@@ -1111,7 +1149,6 @@ static void yw_music_stop(void)
         destroySndBank(s_music);
     }
     s_music = 0;
-    s_musicFadeAt = 0;
 }
 
 static void yw_music_frame(int b)
@@ -1131,21 +1168,18 @@ static void yw_music_frame(int b)
         SetSndSlot(s_music, 1);             // looped
         return;
     }
-    if (s_music == 0) return;
-    unsigned int now = zm_game_time_ms();
-    if (s_musicFadeAt == 0) {
-        s_musicFadeAt = now != 0 ? now : 1;
-        return;
-    }
-    unsigned int gone = now - s_musicFadeAt;
-    if (gone >= YW_MUSIC_FADE_MS) {
-        yw_music_stop();
-        if (s_bgmHeld) ResumePausedSounds();
+    yw_music_stop();
+    // The native lesson-room track is Bgm_08 too. Resuming the paused
+    // room banks here would start the boss music again after the kill.
+    if (s_bgmHeld) {
+        if (g_BgmSoundBank != 0) setSndStop(g_BgmSoundBank);
+        g_BgmPaused = 0;
+        for (int i = 0; i < 3; i++) {
+            if (g_SndBank[i].handle != 0) setSndStop(g_SndBank[i].handle);
+            g_SndBank[i].paused = 0;
+        }
         s_bgmHeld = false;
-        return;
     }
-    int from = g_bgmDefaultVolume;
-    set_volume(s_music, from + (int)((long long)(YW_MUSIC_FADE_TO - from) * (int)gone / YW_MUSIC_FADE_MS));
 }
 
 bool zm_yawn_traps_exit(unsigned char stage, unsigned char room)
@@ -1171,6 +1205,11 @@ void zm_yawn_draw(void)
 
 void zm_yawn_room_reset(void)
 {
+    if (s_blockedDoorSound != 0) {
+        setSndStop(s_blockedDoorSound);
+        destroySndBank(s_blockedDoorSound);
+        s_blockedDoorSound = 0;
+    }
     s_boundSaved = false;
     s_boundHead = NULL;
     s_thrashAt = s_slamAt = s_specialAt = 0;
@@ -1218,6 +1257,7 @@ void zm_yawn_room(void)
     s_fledSeen = yw_beaten(b);
     yw_spawn(b);
     yw_hide_held();
+    zm_yawn_hole_action();
 }
 
 void zm_yawn_frame(void)
@@ -1229,12 +1269,21 @@ void zm_yawn_frame(void)
     yw_go_frame();
     int b = yw_here();
     if (b < 0) return;
+    // Puppets receive the owner's dying/fleeing state without running the
+    // original action's first step, which raises the death flag. Release
+    // the guarded pickup and stop the music on those copies as well.
+    const Entity* head = &g_EnemiesList[0];
+    if (s_here && zm_yawn_head(head) &&
+        (head->state == 3 || (kBoss[b].flees && head->state == 1 && head->action_behavior == 7)))
+        Flg_on((int)g_EnemiesFlags, kBoss[b].flag);
     yw_music_frame(b);
     bool beaten = yw_beaten(b);
+    zm_yawn_hole_action();
     if (beaten && !s_fledSeen) {
         s_fledSeen = true;
         dbg_printf("[yawn] %s beaten (death flag %02X)\n", kBoss[b].name, (unsigned)kBoss[b].flag);
-        if (b == 1) yw_open_hole_here();
+        // The shelf is already aside; the death flag releases the hole's
+        // travel guards without replaying the native shelf-moving scene.
     }
     if (s_heldCount == 0) return;
     if (!beaten) {
@@ -1248,7 +1297,12 @@ void zm_yawn_frame(void)
     for (int i = 0; i < s_heldCount; i++) {
         memcpy(s_shown[i], s_held[i].op, YW_ITEM_OP_LEN);
         yw_run_item(s_shown[i]);
-        dbg_printf("[yawn] %s: flag %02X item out\n", kBoss[b].name, (unsigned)s_held[i].flag);
+        dbg_printf("[yawn] %s: flag %02X item out at (%d,%d,%d), slot %d model %d\n",
+                   kBoss[b].name, (unsigned)s_held[i].flag,
+                   (int)*(const short*)(s_shown[i] + 0x0E),
+                   (int)*(const short*)(s_shown[i] + 0x10),
+                   (int)*(const short*)(s_shown[i] + 0x12),
+                   (int)s_held[i].slot, (int)s_held[i].model);
     }
     if (ext) zm_ext_end();
     s_heldCount = 0;

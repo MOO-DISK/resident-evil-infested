@@ -850,8 +850,8 @@ static bool lobby_ai_host_input(unsigned int pressed)
     if (pressed & (PAD_UP | PAD_DOWN)) {
         play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
         int level = zm_net_ai_level() + ((pressed & PAD_UP) ? 1 : -1);
-        if (level < 1) level = 4;
-        if (level > 4) level = 1;
+        if (level < 1) level = 5;
+        if (level > 5) level = 1;
         s_aiLevel = level;
         zm_net_set_ai_level(level);
     }
@@ -877,7 +877,7 @@ static bool lobby_ai_host_input(unsigned int pressed)
 void zombie_lobby_state(void)
 {
     int row = ROW_SINGLE;
-    if (s_aiLevel == 0) s_aiLevel = (g_zmAiDirector >= 1 && g_zmAiDirector <= 4) ? g_zmAiDirector : 2;
+    if (s_aiLevel == 0) s_aiLevel = (g_zmAiDirector >= 1 && g_zmAiDirector <= 5) ? g_zmAiDirector : 2;
     int character = ZM_CHAR_CHRIS;
     bool editing = false;
     int cursor = 0;
@@ -968,8 +968,8 @@ void zombie_lobby_state(void)
             if (row == ROW_HOST_AI && (pressed & (PAD_LEFT | PAD_RIGHT))) {
                 play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
                 s_aiLevel += (pressed & PAD_RIGHT) ? 1 : -1;
-                if (s_aiLevel < 1) s_aiLevel = 4;
-                if (s_aiLevel > 4) s_aiLevel = 1;
+                if (s_aiLevel < 1) s_aiLevel = 5;
+                if (s_aiLevel > 5) s_aiLevel = 1;
             }
             if (pressed & PAD_CANCEL) {
                 play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
@@ -1048,7 +1048,7 @@ void zombie_lobby_state(void)
                 lobby_print(x, by + 30, 0x7F, "CHOOSE YOUR CHARACTER AFTER REVIEW");
             } else if (hosting && zm_net_ai_level() > 0) {
                 char diff[48];
-                snprintf(diff, sizeof(diff), "AI DIRECTOR: %s  UP-DOWN: CHANGE", zm_ai_level_name(zm_net_ai_level()));
+                snprintf(diff, sizeof(diff), "AI: %s  UP-DOWN: CHANGE", zm_ai_level_name(zm_net_ai_level()));
                 lobby_print(x, by + 8, 0x7F, diff);
                 int seated, readied;
                 lobby_ready_count(&seated, &readied);

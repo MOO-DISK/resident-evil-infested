@@ -81,7 +81,7 @@ struct ZmAiLevel {
     bool         ambush;         // zombies wait just inside the entrance (stunned on arrival, then on you)
 };
 
-static const ZmAiLevel kLevels[5] = {
+static const ZmAiLevel kLevels[6] = {
     //                          think  base /min  max   dwell
     //                                                                         march
     // Income: the human director's rate (1 / 2 / 4 a second for 1 / 2 / 3
@@ -92,7 +92,9 @@ static const ZmAiLevel kLevels[5] = {
     { "EASY",      100, 125, 2, 6000,  30,  6, 120,     0, false, false,  600,  50,     0, 0, 100, false },
     { "NORMAL",    150, 100, 2, 4000,  40, 10, 200, 75000, false, false,  900,  70, 60000, 2, 100, false },
     { "HARD",      225,  80, 3, 2500,  50, 14, 280, 45000, true,  false, 1600,  85, 40000, 3,  80, true  },
-    { "NIGHTMARE", 300,  60, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
+    // Nightmare and Hell on Earth use 2.2x / 3x NORMAL income and starting points.
+    { "NIGHTMARE", 330,  60, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
+    { "HELL ON EARTH", 450,  60, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
 };
 
 // What one monster adds to the threat on a route (x10: the zombie is 10).
@@ -347,7 +349,7 @@ bool zm_ai_hosted(void)
 
 const char* zm_ai_level_name(int level)
 {
-    return (level > 0 && level <= 4) ? kLevels[level].name : kLevels[0].name;
+    return (level > 0 && level <= 5) ? kLevels[level].name : kLevels[0].name;
 }
 
 int zm_ai_income_pct(void) { return kLevels[zm_ai_level()].incomePct; }

@@ -968,6 +968,21 @@ static bool rnd_back_room_ok(unsigned char stage, unsigned char room)
     return r >= 0 && s_back[r] && !rnd_room_unverified(stage, room) && !rnd_puzzle_room(stage, room);
 }
 
+// ROOM70C0's camera zones also cover the passage beyond its solid east
+// wall. A generated monster spot at (23500,2300) is visible to that camera
+// union but unreachable from the fighting floor. Pickups need their own
+// reviewed positions here; keep all three on the main floor, off the hole.
+static const short kLessonPickupSpots[3][3] = {
+    { 2500, 0, 6500 }, { 8500, 0, 15100 }, { 10500, 0, 15100 }
+};
+
+static const short* rnd_new_pickup_position(const ZmSpawnSpots& t, int index)
+{
+    if (t.stage == RND_STAGE_2F && t.room == ROOM_LESSON_ROOM)
+        return kLessonPickupSpots[index];
+    return t.spot[index];
+}
+
 static bool rnd_add_new_spot(const ZmSpawnSpots& t, bool ammoOnly, int* flag)
 {
     if (rnd_no_extra_spots(t.stage, t.room)) return false;
@@ -989,7 +1004,7 @@ static bool rnd_add_new_spot(const ZmSpawnSpots& t, bool ammoOnly, int* flag)
     sp.isNew = true;
     sp.slot = (unsigned char)(info.highSlot + 1 + k);
     sp.model = (unsigned char)(info.itemCount + k);
-    const short* at = t.spot[(s_newFirstSpot[st][t.room] + k) % 3];
+    const short* at = rnd_new_pickup_position(t, (s_newFirstSpot[st][t.room] + k) % 3);
     sp.x = at[0];
     sp.y = at[1];
     sp.z = at[2];
@@ -2075,6 +2090,7 @@ void zombie_mode_item_spot(unsigned char* op)
 
 void zombie_mode_item_action(unsigned char slot)
 {
+    if (slot == 2 || slot == 4 || slot == 7) zm_yawn_hole_action();
     if (!s_active || g_stageId != RND_STAGE_1F || g_roomId != ROOM_GALLERY || slot != 5)
         return;
     const RndSpot* spot = rnd_spot_here(0x91);
@@ -2384,16 +2400,11 @@ void zombie_mode_room_prepare(void)
         // ROOM70C0's init/frame scripts use 0x27 for the broken floor and
         // 0x28 for the ladder/furniture moved aside. Both set before init,
         // the native hole boundary, open-room visuals and descent prompt are
-        // used on arrival; both clear, the floor is whole and there is no
-        // way down. Open only once Yawn 2 is beaten (ZombieYawn.cpp), which
-        // also lets ROOM71A0's climb-back prompt run.
-        if (zm_yawn_hole_open()) {
-            Flg_on((int)&g_ScenarioFlags, 0x27);
-            Flg_on((int)&g_ScenarioFlags, 0x28);
-        } else {
-            FUN_00473f10((int*)&g_ScenarioFlags, 0x27);
-            FUN_00473f10((int*)&g_ScenarioFlags, 0x28);
-        }
+        // used on arrival, without the piano's snake entrance scene.
+        // ZombieYawn.cpp still gates both travel prompts on Yawn 2's death;
+        // the visible hole alone must not provide a way around the fight.
+        Flg_on((int)&g_ScenarioFlags, 0x27);
+        Flg_on((int)&g_ScenarioFlags, 0x28);
     } else if (g_roomId == ROOM_MANSION_KITCHEN) {
         // ROOM71C0 disables elevator slot 2 while 0x33 is clear, then plays
         // the power-restoration scene before setting it. Start in its enabled
