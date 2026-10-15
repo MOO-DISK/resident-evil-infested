@@ -6905,6 +6905,10 @@ int door_try_enter(unsigned char* entry)
     }
     play_sfx(2, sfxId, 0);
     Flg_on((int)g_LocksFlags, record[0xc] & 0x3f);
+    // Port-added mod: the key is used up now, not once the message closes -
+    // in the mode the survivor walks through the door the next frame, and a
+    // key with no lock left is discarded without asking (mods/ZombieMessages.cpp).
+    zombie_mode_key_turned();
     return 0;
 }
 

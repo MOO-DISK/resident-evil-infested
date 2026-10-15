@@ -266,7 +266,8 @@
   <Target Name="CopyInfestedAudio" AfterTargets="Build">
     <ItemGroup>
       <InfestedBumperVideos Include="$(ProjectDir)infested\video\**\*.mp4" />
-      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\intro.wav" Condition="Exists('$(ProjectDir)infested\audio\intro.wav')" />
+      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\helicopter.wav" Condition="Exists('$(ProjectDir)infested\audio\helicopter.wav')" />
+      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\survive.wav" Condition="Exists('$(ProjectDir)infested\audio\survive.wav')" />
     </ItemGroup>
     <Copy SourceFiles="@(InfestedBumperVideos)"
           DestinationFiles="@(InfestedBumperVideos->'$(TargetDir)infested\video\%(RecursiveDir)%(Filename)%(Extension)')"

@@ -324,6 +324,7 @@ DWORD zombie_mode_pad_filter(DWORD rawHeld, DWORD rawPressed)
     bool social = (rawHeld & PAD_MOD2) != 0;
     bool modDown = (mod || social) && !s_modWas;
     s_modWas = mod || social;
+    if (zm_bumpers_hold_input()) return 0xFFFFFFFFu;   // a match bumper is playing
     if (!zombie_mode_armed() || zm_game_role() != ZM_NET_SURVIVOR) return 0;
     if (!mod && !social) return 0;
     // What was already held when MOD1 went down stays the game's until it

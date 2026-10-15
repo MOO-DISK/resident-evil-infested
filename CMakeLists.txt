@@ -188,6 +188,16 @@ add_custom_target(copy_voice_lines
     VERBATIM)
 add_dependencies(residentevil copy_voice_lines)
 
+# The match bumpers (docs/INFESTED_BUMPERS.md): infested/video and the intro's
+# sound, copied the same way so new clips need no reconfigure either.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/copy_bumpers_$<CONFIG>.cmake"
+    CONTENT "if(EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/infested/video\")\n  execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_directory \"${CMAKE_CURRENT_SOURCE_DIR}/infested/video\" \"$<TARGET_FILE_DIR:residentevil>/infested/video\" RESULT_VARIABLE copy_result)\n  if(NOT copy_result EQUAL 0)\n    message(FATAL_ERROR \"Failed to copy match bumper videos\")\n  endif()\nendif()\nforeach(sound helicopter survive)\n  if(EXISTS \"${CMAKE_CURRENT_SOURCE_DIR}/infested/audio/\${sound}.wav\")\n    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E make_directory \"$<TARGET_FILE_DIR:residentevil>/infested/audio\")\n    execute_process(COMMAND \"${CMAKE_COMMAND}\" -E copy_if_different \"${CMAKE_CURRENT_SOURCE_DIR}/infested/audio/\${sound}.wav\" \"$<TARGET_FILE_DIR:residentevil>/infested/audio/\${sound}.wav\" RESULT_VARIABLE copy_result)\n    if(NOT copy_result EQUAL 0)\n      message(FATAL_ERROR \"Failed to copy the match bumper sound \${sound}.wav\")\n    endif()\n  endif()\nendforeach()\n")
+add_custom_target(copy_bumpers
+    COMMAND ${CMAKE_COMMAND} -P "${CMAKE_CURRENT_BINARY_DIR}/copy_bumpers_$<CONFIG>.cmake"
+    COMMENT "Copying match bumper videos"
+    VERBATIM)
+add_dependencies(residentevil copy_bumpers)
+
 add_custom_command(TARGET residentevil POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:residentevil>/infested"
     COMMAND ${CMAKE_COMMAND} -E copy_if_different

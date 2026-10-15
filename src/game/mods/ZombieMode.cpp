@@ -2802,8 +2802,11 @@ static void zm_room_name_draw(void)
 void zombie_mode_draw_overlay(void)
 {
     if (zombie_mode_armed() && zm_shotgun_draw()) return;
+    zm_bumpers_draw_hud();                     // "SURVIVE!" as the match starts
+    if (zm_bumpers_intro_playing()) return;    // the intro clips have the screen
     if (!s_winShown) zm_revive_draw();
     if (s_winShown) {
+        if (zm_bumpers_end_playing()) return;   // the ending clip first
         zm_stats_draw(zm_game_time_ms() - s_winAtMs);
         return;
     }
@@ -3024,7 +3027,7 @@ static void zm_end_frame(void)
 {
     if (!s_zombieModeArmed) return;
     zm_stats_frame(zm_match_elapsed_ms());
-    if (!s_winShown || s_endLeaving) return;
+    if (!s_winShown || s_endLeaving || zm_bumpers_end_playing()) return;
     unsigned int since = zm_game_time_ms() - s_winAtMs;
     if ((zm_stats_prompt_up(since) && (g_PlayerPadPressed & 0x0080) != 0) || since >= ZM_END_LEAVE_MS) {
         s_endLeaving = true;
@@ -7687,6 +7690,7 @@ void zombie_mode_net_frame(void)
         zm_net_poll();
         zm_route_events();
     }
+    zm_bumpers_frame();
     zm_clock_frame();
     zm_shotgun_frame();
     zm_piano_frame();
@@ -7697,7 +7701,7 @@ void zombie_mode_net_frame(void)
     zm_yawn_frame();
     zm_end_frame();
     zm_voice_frame();      // after the music's owners: its duck is the last volume set
-    if (zm_match_authority() && !s_winShown) zm_ai_frame();
+    if (zm_match_authority() && !s_winShown && !zm_bumpers_hold_input()) zm_ai_frame();
     if (s_directorMapOnly && !s_winShown && !s_jumpPending) {
         unsigned int held, pressed;
         zm_director_input(g_zombieModeEntity, false, &held, &pressed);

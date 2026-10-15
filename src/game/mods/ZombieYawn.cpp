@@ -1153,6 +1153,7 @@ static void yw_music_stop(void)
 
 static void yw_music_frame(int b)
 {
+    if (zm_bumpers_silenced()) { yw_music_stop(); return; }   // Wesker's ending: silence
     if (!s_here) return;
     if (!yw_beaten(b)) {
         yw_hold_bgm();

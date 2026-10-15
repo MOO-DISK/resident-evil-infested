@@ -215,6 +215,12 @@ bool zombie_mode_cut_skip(void);
 void zombie_mode_cut_closeup(unsigned char prevCam);
 void zombie_mode_cut_restored(void);
 void zombie_mode_message_frame(void);
+// Door keys (ZombieMessages.cpp). door_try_enter, once the key turned: _key_turned
+// uses it up at once instead of when its message closes. use_room_action_item and
+// the message "use" action, a key's last use: _key_used_up(slots, index) discards
+// it (true) instead of the inventory's "This key is useless now. Discard?".
+void zombie_mode_key_turned(void);
+bool zombie_mode_key_used_up(unsigned char* slots, int index);
 // check_action_object, before an Action press runs its entry: true = refuse it
 // (an examine/reveal still running, or its close-up still up). cmd_room_action:
 // true = drop the call (an event cut short by a hit or grab no longer offers

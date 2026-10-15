@@ -81,6 +81,9 @@ of guessed. Run them from the repo root.
 - `estimate_zombie_route_time.py` — turns each seed's fastest escape into seconds (room walks at run speed from the RDT door/pickup positions, fixed door/pickup/crest costs; solo and a coordinated team); report `tools/zombie_route_time_report.json`.
 - `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
 
+**Zombie mod assets**
+- `convert_bumper_videos.py` — convert a folder of videos to the match bumpers' format (`docs/INFESTED_BUMPERS.md`): H.264 yuv420p MP4s at a constant 24 fps, silent except `wesker_victory` (or `--keep-audio`); clips in an `intro` folder are made exactly 72 frames, the rest are cut to 30 s.
+
 **Japanese (Biohazard.exe)**
 - `jpn_font_table.py` — glyph map of the JPN font (`data\FONT.TIM`).
 - `jpn_msg_decode.py` — decode / re-encode the JPN text tables straight from the JPN executable.
@@ -232,6 +235,13 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   path), so the survivor settles idle while monsters, effects, events and its
   STATE keep running; a grab or death answers No; closing raises back only
   those two bits. Menu and door-script messages still pause.
+  A door key is used up as it turns (`zombie_mode_key_turned` in
+  door_try_enter), not when its message closes; on its last lock it is
+  discarded without the inventory's "This key is useless now. Discard?"
+  (`zombie_mode_key_used_up`, both KEY_DEPLETED sites), and "The <key> is no
+  longer useful. You discarded it." shows once the survivor has the control
+  with no other text up - in the next room when it walked straight through.
+  Untested by the user.
   Examine events (`zm_evt_is_examine`: an action press's script that only
   takes the control, cuts to a close-up, shows a message and cuts back - no
   entity, event, door or item command; e.g. ROOM61A0/6050/6170/7010/7050)

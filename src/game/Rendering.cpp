@@ -458,6 +458,9 @@ void FrameRateGovernor(void)
             // Render queued 3D TMD objects (entities, options-menu character)
             FlushTmdObjects();
 
+            // Port-added mod: Wesker's frozen ending frame under the results screen.
+            zombie_mode_bumper_draw_backdrop();
+
             // Render command buffer sprites (game objects, title text, etc.).
             // The >= 0x10000 half already drew before the TMD pass.
             //
@@ -1417,6 +1420,8 @@ static void handle_message_post_action(void)
                     slots[(unsigned int)bVar4 * 2 + 1] = bVar1 - 1;
                     if (slots[(unsigned int)bVar4 * 2 + 1] == 0) {
                         if ((ITEM_OIL < g_selectedItemId) && (g_selectedItemId < ITEM_DESK_KEY)) { // is door key
+                            // Port-added mod: discarded at once, no prompt (mods/ZombieMessages.cpp).
+                            if (zombie_mode_key_used_up(slots, bVar4)) return;
                             g_main_state_flags = g_main_state_flags | MSF_MENU_MODE_KEY_DEPLETED;
                             return;
                         }

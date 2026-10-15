@@ -1285,7 +1285,7 @@ void zm_survivor_frame(void)
         // then put the real pad (the zombie's) back.
         short realHeld = g_PlayerDpadHeld;
         short realPressed = g_PlayerDpadPressed;
-        unsigned int held = zs_think();
+        unsigned int held = zm_bumpers_hold_input() ? 0 : zs_think();
         if (s.present) {
             g_PlayerDpadHeld = (short)held;
             g_PlayerDpadPressed = (short)(held & ~s.prevHeld);

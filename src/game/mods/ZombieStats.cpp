@@ -245,7 +245,8 @@ void zm_stats_draw(unsigned int sinceMs)
     // The fade to white, then held.
     unsigned int level = sinceMs >= ZM_END_FADE_MS ? 255 : sinceMs * 255 / ZM_END_FADE_MS;
     if (level == 0) level = 1;
-    zm_end_rect(0, 0, 320, 240, 0x50000000u, (unsigned char)level, 40);
+    // Over Wesker's frozen frame (ZombieBumpers.cpp) there is no white.
+    if (!zm_bumpers_backdrop()) zm_end_rect(0, 0, 320, 240, 0x50000000u, (unsigned char)level, 40);
     if (sinceMs < ZM_END_TEXT_MS) return;
 
     char line[48], t[16];

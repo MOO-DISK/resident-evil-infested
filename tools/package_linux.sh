@@ -85,10 +85,11 @@ if [ -d "$REPO/infested/video" ]; then
     mkdir -p "$OUT/infested"
     cp -r "$REPO/infested/video" "$OUT/infested/"
 fi
-if [ -f "$REPO/infested/audio/intro.wav" ]; then
+for sound in helicopter survive; do
+    [ -f "$REPO/infested/audio/$sound.wav" ] || continue
     mkdir -p "$OUT/infested/audio"
-    cp "$REPO/infested/audio/intro.wav" "$OUT/infested/audio/"
-fi
+    cp "$REPO/infested/audio/$sound.wav" "$OUT/infested/audio/"
+done
 if [ -d "$REPO/infested/voices" ]; then
     mkdir -p "$OUT/infested"
     cp -r "$REPO/infested/voices" "$OUT/infested/"

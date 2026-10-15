@@ -1,4 +1,5 @@
 #include "ZombieModeInternal.h"
+#include "../PrintText.h"
 #include "../../DebugPrint.h"
 
 extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473ef0 CmdFunctions.cpp
@@ -278,15 +279,19 @@ static void zm_close_release(void)
 }
 
 static void zm_letterbox_frame(void);
+static void zm_key_discard_frame(void);
+static unsigned char s_discardedKey = 0;   // a key used up, its message not shown yet
 
 void zombie_mode_message_frame(void)
 {
     if (!zombie_mode_armed()) {
         s_closeSlot = -1;
         s_closeUp = false;
+        s_discardedKey = 0;
         return;
     }
     zm_letterbox_frame();
+    zm_key_discard_frame();
     // Hit, grabbed or dead: every examine or reveal still running is cut
     // short - it plays on (a puzzle's scene still finishes) but offers no
     // pickup afterwards (zombie_mode_event_room_action_skip), and its
@@ -583,6 +588,51 @@ void zm_message_show(const unsigned char* text)
     s_customText = text;
     set_message_display(0xFB, room ? 0xFF : 0);
     s_customText = NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Door keys. The original takes the key out of the inventory only once the
+// "You have used the key" message closes (check_event_item_usage), and on its
+// last lock opens the inventory to ask "This key is useless now. Discard?".
+// In the mode the message does not hold the survivor, who walks through the
+// door the next frame - the question came up in the room behind it, with the
+// game running. So the key is used up as it turns, and one with no lock left
+// is simply discarded; a message says so once the survivor has the control
+// with no other text up (in the next room, when it walked straight through).
+// ---------------------------------------------------------------------------
+static constexpr auto s_keyDiscarded = STR("The \\i is no\\nlonger useful.\\p You discarded it.");
+
+void zombie_mode_key_turned(void)
+{
+    if (!zombie_mode_armed() || g_eventItemUsedFlag != 1) return;
+    g_eventItemUsedFlag = 0;
+    use_room_action_item();
+}
+
+bool zombie_mode_key_used_up(unsigned char* slots, int index)
+{
+    if (!zombie_mode_armed()) return false;
+    s_discardedKey = slots[index * 2];
+    slots[index * 2] = 0;
+    rearrange_item_slots();
+    dbg_printf("[msg] key 0x%02X used up: discarded\n", (int)s_discardedKey);
+    return true;
+}
+
+static void zm_key_discard_frame(void)
+{
+    if (s_discardedKey == 0) return;
+    if (g_playerEntity.health < 0) {
+        s_discardedKey = 0;
+        return;
+    }
+    if ((g_menu_choice_id & 0x80) != 0 || (g_message_flags & 0x0101) != 0x0101 ||
+        (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) != 0 || g_openMenuFlag != 0) {
+        return;
+    }
+    g_selectedItemId = s_discardedKey;     // the message's \i
+    s_discardedKey = 0;
+    zm_message_show(s_keyDiscarded);
 }
 
 void zombie_mode_message_drop(void)

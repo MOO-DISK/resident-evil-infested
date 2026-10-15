@@ -703,7 +703,7 @@ static unsigned int rnd_reach(unsigned int owned, bool collect, bool* reach)
         for (int i = 0; i < s_spotCount; i++) {
             const RndSpot& s = s_spots[i];
             // Only pool progression survives rnd_place_weapons. Original
-            // non-pool keys/crests become shells, so counting them here would
+            // non-pool keys/crests become supplies, so counting them here would
             // let assumed fill and the final proof rely on removed items.
             if (!s.pool) continue;
             int r = rnd_room_index(s.stage, s.room);
@@ -1123,13 +1123,14 @@ static bool rnd_t3_ammo(unsigned char* id, unsigned char* qty)
     return true;
 }
 
-// One ammo pickup: clips and shells two each, then each tier 3 ammo once.
+// One ammo pickup: two clips to one shells, then each tier 3 ammo once.
+// The shotgun only comes from the trap room (ZombieShotgun.cpp).
 static void rnd_ammo(unsigned char* id, unsigned char* qty)
 {
-    int k = rnd_below(4 + s_t3AmmoCount);
-    if (k >= 4 && rnd_t3_ammo(id, qty)) return;
-    if (k & 1) { *id = ITEM_SHELLS; *qty = 7; }
-    else       { *id = ITEM_CLIP; *qty = 15; }
+    int k = rnd_below(3 + s_t3AmmoCount);
+    if (k >= 3 && rnd_t3_ammo(id, qty)) return;
+    if (k == 2) { *id = ITEM_SHELLS; *qty = 7; }
+    else        { *id = ITEM_CLIP; *qty = 15; }
 }
 
 // The ammo doubling: as many more ammo pickups as the scenario put out
@@ -1163,7 +1164,7 @@ static void rnd_supply(unsigned char* id, unsigned char* qty)
 {
     static const unsigned char kSupplies[][2] = {
         { ITEM_GREEN_HERB, 1 }, { ITEM_GREEN_HERB, 1 }, { ITEM_RED_HERB, 1 },
-        { ITEM_FIRST_AID_SPRAY, 1 }, { ITEM_CLIP, 15 }, { ITEM_CLIP, 15 }, { ITEM_SHELLS, 7 },
+        { ITEM_FIRST_AID_SPRAY, 1 }, { ITEM_CLIP, 15 }, { ITEM_CLIP, 15 },
         { ITEM_SHELLS, 7 },     // no ink ribbons: saving is no use in the mode
     };
     const int n = (int)(sizeof(kSupplies) / sizeof(kSupplies[0]));
@@ -1577,10 +1578,9 @@ static void rnd_place_weapons(bool barry)
 
     // Tier 1 and ammo: what the pool spots held (less the keys and crests;
     // tier 3 ammo becomes the game's own tier 3 ammo, else handgun or shotgun
-    // ammo), plus the shotgun if the pool had none, shuffled over the spots
-    // still empty.
+    // ammo), shuffled over the spots still empty.
     // The shotgun is the trap room's alone (ZombieShotgun.cpp): never on the
-    // floor - shells instead. Barry brings no handgun: one Beretta lies about
+    // floor - ammo instead. Barry brings no handgun: one Beretta lies about
     // as his fallback when he plays.
     unsigned char wid[RND_MAX_SPOTS], wqty[RND_MAX_SPOTS];
     int wCount = 0;
@@ -1591,7 +1591,12 @@ static void rnd_place_weapons(bool barry)
         wid[wCount] = s.origId;
         wqty[wCount] = s.origQty;
         if (rnd_is_tier3_ammo(s.origId)) rnd_ammo(&wid[wCount], &wqty[wCount]);
-        if (wid[wCount] == ITEM_SHOTGUN) { wid[wCount] = ITEM_SHELLS; wqty[wCount] = 7; }
+        // Shells and the shotgun's spot: shells or a clip, one in two (the
+        // shotgun is the trap room's alone).
+        if (s.origId == ITEM_SHELLS || s.origId == ITEM_SHOTGUN) {
+            if (rnd_below(2)) { wid[wCount] = ITEM_SHELLS; wqty[wCount] = 7; }
+            else              { wid[wCount] = ITEM_CLIP; wqty[wCount] = 15; }
+        }
         if (wid[wCount] == ITEM_BERETTA) haveBeretta = true;
         wCount++;
     }
@@ -1611,7 +1616,7 @@ static void rnd_place_weapons(bool barry)
 
     // Spots outside the pool: a key or crest (behind a puzzle) would hand out
     // a second one, a heavy weapon (one outside the puzzles) one more than
-    // the puzzles' - shells instead; tier 3 ammo follows the game's. The
+    // the puzzles' - a supply instead; tier 3 ammo follows the game's. The
     // puzzles' items lie only where the generator put them.
     for (int i = 0; i < s_spotCount; i++) {
         RndSpot& s = s_spots[i];
@@ -1629,7 +1634,7 @@ static void rnd_place_weapons(bool barry)
         else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL || s.origId == ITEM_INK_RIBBONS) {
             rnd_supply(&s.id, &s.qty);
         }
-        else if (rnd_is_key(s.origId) || rnd_is_crest(s.origId) || rnd_is_tier3(s.origId)) { s.id = ITEM_SHELLS; s.qty = 7; }
+        else if (rnd_is_key(s.origId) || rnd_is_crest(s.origId) || rnd_is_tier3(s.origId)) rnd_supply(&s.id, &s.qty);
         else if (rnd_is_tier3_ammo(s.origId)) rnd_ammo(&s.id, &s.qty);
         // Scripted maps (including any re-armed vase pickup) remain supplies:
         // their interaction is not part of the progression route proof.

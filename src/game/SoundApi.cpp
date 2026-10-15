@@ -12,6 +12,7 @@
 #include "../system/AssetPath.h"
 #include "../system/AudioFile.h"
 #include "marni/MarniSound.h"
+#include "mods/ZombieBumpers.h"
 
 // ---------------------------------------------------------------------
 // SFX filename sub-tables (game data, shared by both backends).
@@ -132,6 +133,7 @@ int loadSndBankFromWav(const char* path, bool muffled)
 
 void destroySndBank(int bank)
 {
+    zombie_mode_bgm_stopped(bank);   // port-added mod: a held music channel goes with it
     if (g_pDirectSound != NULL && bank != 0) {
         g_pDirectSound->DestroySound(bank);
     }
@@ -139,6 +141,7 @@ void destroySndBank(int bank)
 
 void setSndStop(int bank)
 {
+    zombie_mode_bgm_stopped(bank);
     if (g_pDirectSound != NULL && bank != 0) {
         g_pDirectSound->StopSound(bank);
     }
@@ -148,6 +151,8 @@ void playSnd(int bank, int slot)
 {
     g_CurSlot = (short)slot;
     g_CurBank = bank;
+    // Port-added mod: the room's music waits for the match intro (ZombieBumpers.cpp).
+    if (zombie_mode_bgm_hold(bank)) return;
     if (g_pDirectSound != NULL && bank != 0) {
         g_pDirectSound->PlaySound(bank, (unsigned int)slot);
     }
@@ -157,6 +162,7 @@ void SetSndSlot(int bank, int slot)
 {
     g_CurSlot = (short)slot;
     g_CurBank = bank;
+    if (zombie_mode_bgm_hold(bank)) return;
     if (g_pDirectSound != NULL && bank != 0) {
         g_pDirectSound->PlaySound(bank, (unsigned int)slot);
     }

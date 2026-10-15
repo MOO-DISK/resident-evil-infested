@@ -6,7 +6,7 @@
 // loaded guns, all four crests in the main hall and every locked door (key
 // doors, the crest door, the elevator's power, the keypad) open. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
