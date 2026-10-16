@@ -20,7 +20,7 @@ struct MATRIX { short m[3][3]; int t[3]; };
 struct JointStruct { SVECTOR rotation; MATRIX transform,world; unsigned char flags; };
 struct Entity { JointStruct* jointsStructs; short angle; struct { MATRIX localMatrix; } scaMatrixData; };
 Entity* ENTITY;
-const int YS_REACH=1875, YS_CLOUD_RADIUS=1500, EFFECT_ZM_SLAM_CLOUD=0x7e;
+const int YS_REACH=2344, YS_CLOUD_RADIUS=1500, EFFECT_ZM_SLAM_CLOUD=0x7e;
 int cloudCount=0,centerX=0,centerZ=0;
 void RotMatrix(SVECTOR*,MATRIX*) {}
 void Effect_CreateBillboard(int type,int depth,int,void* parent,void* point,int marker) {
@@ -113,6 +113,30 @@ int main() {
    for(int k=7;k<15;k++) assert(memcmp(&joints[k].world,&s_slamBody[k].world,sizeof(MATRIX))==0);
    for(int k=3;k<15;k++) assert((joints[k].flags&0x42)==0x40);
  }
+ // Regression: a low, curled neck used to clamp the entire drop early.
+ // The head must reach the hinge's floor height despite those links.
+ double curledDx=s_slamBody[0].world.t[0]-s_slamBody[7].world.t[0];
+ double curledDz=s_slamBody[0].world.t[2]-s_slamBody[7].world.t[2];
+ double curledDy=s_slamBody[0].world.t[1]-s_slamBody[7].world.t[1];
+ double curledFlat=-std::atan2(curledDy,std::sqrt(curledDx*curledDx+curledDz*curledDz));
+ double curledRaise=yawn_slam_raise_angle(curledFlat,curledDx,curledDy,curledDz);
+ int previous=-100000;
+ for(int tick=0;tick<=YS_DROP_FRAMES;tick++) {
+   double t=double(tick)/YS_DROP_FRAMES;
+   yawn_slam_pose(curledRaise+(curledFlat-curledRaise)*t*t);
+   assert(joints[0].world.t[1]>=previous-2);
+   previous=joints[0].world.t[1];
+   for(int k=3;k<=6;k++) {
+     double before=0,after=0;
+     for(int axis=0;axis<3;axis++) {
+       double a=s_slamBody[k].world.t[axis]-s_slamBody[k+1].world.t[axis];
+       double b=joints[k].world.t[axis]-joints[k+1].world.t[axis];
+       before+=a*a;after+=b*b;
+     }
+     assert(std::abs(std::sqrt(before)-std::sqrt(after))<3);
+   }
+ }
+ assert(std::abs(joints[0].world.t[1]-s_slamBody[7].world.t[1])<=2);
  // A director's heading cannot be replaced by a nearby survivor or a hit.
  e.angle=2048; yawn_slam_pose(flat/2); assert(e.angle==s_slamHeading);
  puts("Slam height cap, scaled root, grounded tail, 100 repetitions and mouth impact OK");
