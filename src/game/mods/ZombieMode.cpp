@@ -6091,7 +6091,26 @@ void zm_shared_receive_enemies(const ZmNetEnemy* list, int count, bool adopt,
             if (slot < 0 || slot >= ZM_FIRST_SURVIVOR_SLOT) continue;
             Entity* e = &g_EnemiesList[slot];
             if ((e->status_flags & ENTITY_STATUS_ACTIVE) == 0 || e->id != n.id) continue;
-            if (e == g_zombieModeEntity) continue;
+            if (e == g_zombieModeEntity) {
+                // Taken by a map jump as the room loaded, at its roster spot -
+                // which the old owner never updated while it ran the room.
+                // Only where it really is: the director's controller keeps it.
+                if (corpse || zm_yawn_entity(e)) continue;
+                e->scaMatrixData.localMatrix.t[0] = n.pose.x;
+                e->scaMatrixData.localMatrix.t[1] = n.pose.y;
+                e->scaMatrixData.localMatrix.t[2] = n.pose.z;
+                e->angle = n.pose.angle;
+                if (e->state == ZOMBIE_STATE_INIT) {
+                    zm_world_pending_health(e, n.health);   // its init sets its own first
+                } else {
+                    zm_world_accept_net_state(e);
+                    e->health = n.health;
+                }
+                s_jumpFixCamera = true;
+                dbg_printf("[zombie] possessed slot %d moved to its owner's spot (%d, %d)\n",
+                           slot, (int)n.pose.x, (int)n.pose.z);
+                continue;
+            }
             if (!corpse && s_slotCorpse[slot] && s_snapHave[slot] && s_snap[slot].uid == n.uid)
                 continue; // a delayed live handoff cannot undo confirmed death
             if (zm_yawn_head(e)) {

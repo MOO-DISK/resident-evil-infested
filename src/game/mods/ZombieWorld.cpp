@@ -415,6 +415,14 @@ void zm_world_accept_net_state(Entity* e)
     s_freshInit[slot] = false;
 }
 
+void zm_world_pending_health(Entity* e, short health)
+{
+    int slot = (int)(e - g_EnemiesList);
+    if (slot < 0 || slot >= 30) return;
+    s_pendingHealth[slot] = true;
+    s_pendingHealthValue[slot] = health;
+}
+
 void zm_world_after_update(Entity* e)
 {
     if (!s_worldOn) return;
