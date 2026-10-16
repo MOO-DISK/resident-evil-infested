@@ -255,6 +255,10 @@ void display_game_loading_message(void)
         set_message_display(0x5c, 0);
         Task_exit();
     }
+    // Port-added mod: a human director plays at once, no narration.
+    if (zombie_mode_narration_skip()) Task_exit();
+    zombie_mode_narration_wait();    // port-added mod: the match's roster settles first
+    zombie_mode_narration_sound();   // port-added mod: the helicopter under the narration
     set_message_display(0x5b, 0);
     Task_exit();
 }

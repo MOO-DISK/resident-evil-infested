@@ -32,13 +32,14 @@ enum { ZM_NET_OFF, ZM_NET_ZOMBIE, ZM_NET_SURVIVOR };
 enum { ZM_NET_IDLE, ZM_NET_HOSTING, ZM_NET_JOINING, ZM_NET_CONNECTED, ZM_NET_LOST, ZM_NET_FAILED, ZM_NET_EXPIRED };
 enum { ZM_NET_MAX_PLAYERS=4, ZM_NET_DIRECTOR=0, ZM_NET_ALL=255, ZM_NET_JOINTS=15,
        ZM_CHAR_CHRIS=0, ZM_CHAR_COUNT=6, ZM_VOTE_NONE=0, ZM_VOTE_ACCEPT=1, ZM_LOBBY_JOIN=0,
-       ZM_EV_WIN=9, ZM_EV_REVIVE=21, ZM_EV_PICKUP=30, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34, ZM_EV_DROP=18, ZM_EV_DROP_TAKE=19,
+       ZM_EV_WIN=9, ZM_EV_REVIVE=21, ZM_EV_PICKUP=30, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34, ZM_EV_BOSS=35, ZM_EV_DROP=18, ZM_EV_DROP_TAKE=19,
        ZM_EV_ROSTER=4, ZM_EV_BOX=16, ZM_END_ESCAPE=0, ITEM_SHOTGUN=3, ZM_RECONNECT_BLOB_MAX=65536 };
 struct BioCardLayout { unsigned char totalHeldItems, stageId, roomId, equippedItemId; };
 struct ItemSlot { unsigned char Id,qty; };
 struct ZmReconnectPlayer { unsigned int sequence; BioCardLayout card; int x,y,z; short health; unsigned short boxToken; unsigned char inventory[16]; };
 struct ZmDeathPlayback { unsigned char bytes[64]; };
 struct ZmMonsterAppearance { unsigned char bytes[24]; };
+struct ZmYawnBody { unsigned char bytes[86]; };
 struct PlatNetAddr { unsigned int ip; unsigned short port; };
 struct Pose { int x,y,z; short angle; unsigned char jointCount; short root[3], rot[15][3]; };
 struct ZmNetPeerState {
@@ -80,6 +81,7 @@ static void zm_spec_reconnect_reconcile(int,ZmReconnectPlayer*) {}
 static void zm_shotgun_reconcile(int,ZmReconnectPlayer*) {}
 static void zm_shotgun_take(const short*,int) {}
 static void zm_piano_take(const short*,int) {}
+static void zm_yawn_take(const short*,int) {}
 static void zm_timeout_take(const short*,int) {}
 static bool zm_timeout_active(unsigned int) { return false; }
 static void zm_drops_reconnect_abandon(const ZmReconnectPlayer*) { abandoned++; }
@@ -90,6 +92,8 @@ static void zm_pickups_take(const short*,int) {}
 static void zm_drops_take_event(int,const short*,int) {}
 static bool zm_revive_host_claim(int,int,int) { return false; }
 static void zm_world_apply_remote(const short*,int) {}
+static unsigned char* g_ItemSlotsPointer;
+static int zm_net_char(int) { return -1; }   // seat 0 is the human director here
 static void net_log_drop(const PlatNetAddr*,const char*,int,int) {}
 static void net_take_enemies(int,const unsigned char*,int) {}
 struct Datagram { PlatNetAddr addr; std::vector<unsigned char> bytes; };
@@ -233,7 +237,8 @@ def main():
     for name in ["zm_net_status_text", "zm_net_status_hint", "zm_net_active", "net_grant_char", "net_send_link", "net_send_all", "net_queue",
                  "net_route", "net_send_lobby", "net_take_state", "net_take_event", "net_link_of",
                  "net_pause_broadcast", "net_begin_grace", "net_reject", "net_expire_link",
-                 "net_accept_rejoin", "net_handle", "zm_net_poll", "net_reset"]:
+                 "net_accept_rejoin", "net_handle", "net_take_local", "net_drain_loopback",
+                 "zm_net_poll", "net_reset"]:
         source += function(net, name)
     with tempfile.TemporaryDirectory(prefix="re1-reconnect-") as temp:
         directory = Path(temp)

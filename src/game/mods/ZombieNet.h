@@ -95,6 +95,14 @@ void zm_net_set_vote(int vote);                           // survivor
 bool zm_net_timeout_enabled(void);
 void zm_net_set_timeout_enabled(bool on);                 // host
 bool zm_net_survivor_ready(int player);                   // host: reported in (in the game)
+// The AI director (ZombieDirectorAI.cpp): the host's level, 1 easy .. 5
+// hell on earth, 0 for a human director. No map review then: each survivor picks
+// a character in the lobby and votes ZM_VOTE_ACCEPT as ready.
+int  zm_net_ai_level(void);
+void zm_net_set_ai_level(int level);                      // host, before GO
+// Seats 0..limit-1 exist: three survivors either way (against the AI the
+// host's seat 0 is one of them).
+int  zm_net_seat_limit(void);
 void zm_net_stop(void);
 
 // Pump the socket: receive, time out, resend. Call once per frame anywhere a
@@ -104,7 +112,8 @@ bool zm_net_pause_active(void);       // a link down or the survivors' timeout
 bool zm_net_link_pause_active(void);  // a link down only
 int  zm_net_pause_seconds(void);
 unsigned int zm_game_time_ms(void);
-bool zm_net_rejoin_saved(int seat);
+// Rejoin the last match this copy joined, by its saved match id.
+bool zm_net_rejoin_saved(void);
 bool zm_net_rejoining(void);
 bool zm_net_rejoin_downloaded(void);
 void zm_net_rejoin_ready(void);
@@ -113,3 +122,8 @@ void zm_net_rejoin_ready(void);
 // (or `timeoutMs`) and then releases everyone. False if this copy ends up
 // alone (the game then runs single player).
 bool zm_net_start_game(unsigned int timeoutMs);
+
+// Intro barrier: local 0 entered, 1 loaded, 2 finished; host 0 wait, 1 load, 2 play, 3 release.
+int zm_net_bumper_phase(int progress);
+// Host: every survivor has finished its intro (true without a session).
+bool zm_net_bumper_released(void);

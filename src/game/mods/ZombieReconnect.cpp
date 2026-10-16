@@ -73,7 +73,7 @@ bool zm_reconnect_import(const void* data, int size)
         h->dropBytes != size - (int)sizeof(*h) - h->rosterBytes ||
         h->player.shotgunReplacement > 1023 || h->player.pickaxeSpent > 1 || h->player.card.totalHeldItems > 8 || h->player.card.equippedItemId > h->player.card.totalHeldItems ||
         h->player.card.stageId > 6 || h->player.card.roomId >= 58 ||
-        h->elapsedMs < -1 || h->elapsedMs > 1200000 || !h->player.maxHealth ||
+        h->elapsedMs < -1 || h->elapsedMs > 3600000 || !h->player.maxHealth ||   // an hour: boss fights hold and add to the clock
         (h->shotgun[0] & 3) > 2 || h->shotgun[0] > 1022 || h->shotgun[1] > 2 || h->shotgun[2] > 15001 ||
         h->shotgun[3] > 4 || (h->shotgun[4] & ~14u) || (h->shotgun[5] & ~30u) || h->shotgun[6] > 1023 || h->shotgun[7] > 4) return false;
     for (int i = 0; i < 4; i++)

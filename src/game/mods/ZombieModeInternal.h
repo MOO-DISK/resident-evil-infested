@@ -3,9 +3,10 @@
 
 // Quick testing: 15-second character select, 20000 director points, no monster
 // unlock wait or main-hall lockout, and
-// loaded guns and all four crests in the main hall. Comment out to disable; rebuild
+// loaded guns, all four crests in the main hall and every locked door (key
+// doors, the crest door, the elevator's power, the keypad) open. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -212,7 +213,8 @@ enum {
                          //   a trap set on that room (ZombieTraps.cpp)
     ZM_EV_BOX = 16,      // private atomic box request/receipt; host -> all updates
                          //   changed; the box is shared (ZombieWorld.cpp)
-    ZM_EV_CLOCK = 17,    // director -> all: { seconds left } - the game clock, every 5 s;
+    ZM_EV_CLOCK = 17,    // director -> all: { seconds left, standing still, seconds run } - the game
+                         //   clock, every 5 s and on every hold or bonus;
                          //   at zero the director sends ZM_EV_WIN { player, 1 } (it won)
     ZM_EV_DROP = 18,     // survivor -> all: { uid, item | qty << 8, x, y, z, angle,
                          //   stage | room << 8 } - it dropped an item there (ZombieDrops.cpp)
@@ -235,6 +237,15 @@ enum {
     ZM_EV_TIMEOUT = 34,  // survivor -> host {1 request, player, seed low, seed high}; host -> all
                          //   {2 start, player, seed low, seed high, duration / 100 ms} / {4 end, ...};
                          //   host -> requester {3 refused, reason, ...} (ZombieTimeout.cpp)
+    ZM_EV_BOSS = 35,     // host -> all: {1 lockdown, boss, tenths of a second, seed low, seed high} /
+                         //   {2 done, boss, 0, seed low, seed high} - a Yawn fight's phases; the
+                         //   entry vote (ZombieYawn.cpp): survivor -> host {3 request, boss, player,
+                         //   seed, seed} / {5 answer, boss, player, seed, seed, token, yes}; host -> all
+                         //   {4 ask, boss, 0, seed, seed, token, voters} / {6 go, ...token} /
+                         //   {7 called off, ...token}; host -> requester {8 refused, boss, player, ...}
+    ZM_EV_VOICE = 36,    // survivor -> all: { line, take, character, stage | room << 8, x, y, z, 0 } -
+                         //   a voice line; each copy hears it in that room or through a door
+                         //   from a neighbouring one (ZombieVoice.cpp)
     ZM_EV_TYRANT_TRAIL = 24, // room owner -> all: { stage|room<<8, attacker uid, trail frames }
     ZM_EV_STATS = 20,    // anyone -> all, once the match is over: a survivor's { 0, death s
                          //   (-1 alive), hits, kills, damage taken }, the director's { 1, points
@@ -283,6 +294,85 @@ void zm_roomsync_reset(void);
 void zm_roomsync_room(void);
 void zm_roomsync_frame(void);
 void zm_roomsync_take(const short* args, int src);
+// Yawn, the attic's own boss (ZombieYawn.cpp). Thirteen enemy slots: the head
+// in slot 0 and its body segments in 1-12 (yawn_init's copies).
+#define ZM_YAWN_SLOTS 13
+bool zm_yawn_entity(const Entity* e);       // a Yawn slot, head or segment
+bool zm_yawn_segment(const Entity* e);      // one of the twelve body segments
+bool zm_yawn_head(const Entity* e);
+// A room script's enemy_set slot as the slots it fills (Yawn: twelve more).
+int  zm_yawn_last_slot(unsigned char id, int slot);
+void zm_yawn_after_update(Entity* e);
+void zm_yawn_room_reset(void);
+void zm_yawn_room(void);
+void zm_yawn_frame(void);
+int  zm_yawn_music_bank(void);
+// The randomizer's item_model_set hook: before its patch (`op` as the room
+// has it) and after it.
+void zm_yawn_item_before(const unsigned char* op);
+void zm_yawn_item_after(unsigned char* op);
+// The owner's body (joints 3-14 placed by Yawn's own animator) on the wire,
+// after the head's ZmNetEnemy in an ENEMIES packet.
+struct ZmYawnBody {
+    short         t[ZM_YAWN_SLOTS - 1][3];   // joints 3..14, world translation
+    unsigned char status[ZM_YAWN_SLOTS];     // slots 0..12, status_flags
+    unsigned char pad;
+};
+bool zm_yawn_body_capture(ZmYawnBody* out);
+void zm_yawn_body_take(const ZmYawnBody& body, unsigned char stage, unsigned char room, int origin);
+// A puppet Yawn posed from the owner's head entry and body. False: no body
+// from `owner` for this room yet.
+bool zm_yawn_pose_apply(Entity* head, const ZmNetPose& pose, int owner);
+void zm_yawn_status_apply(Entity* e, int slot);
+void zm_yawn_mark_scaled(void);
+void zm_yawn_bounds_begin(Entity* e);
+void zm_yawn_bounds_end(Entity* e);
+// While Yawn is in the loaded boss room, or its lockdown holds, its doors do
+// not let a survivor out.
+bool zm_yawn_traps_exit(unsigned char stage, unsigned char room);
+// The match's boss phases (the host's; ZM_EV_BOSS on a survivor's copy).
+void zm_yawn_new_game(void);
+void zm_yawn_take(const short* args, int src);
+// The survivor's pad while the entry vote asks it (true: taken).
+bool zm_yawn_prompt_input(void);
+// A body-sized spot of the loaded room clear of its walls (ZombieMode.cpp).
+bool zm_spot_free(int x, int z);
+bool zm_yawn_clock_hold(void);                  // the game clock stands still
+// Yawns beaten this match (lockdown or done; the host's word on a survivor's
+// copy) - the director's monster unlocks - and whether survivors are in a
+// fight with the next one now.
+int  zm_yawn_beaten_count(void);
+bool zm_yawn_lockdown(void);    // a beaten Yawn's 60 s: the director earns no points
+bool zm_yawn_fight_on(void);
+bool zm_yawn_director_closed(unsigned char stage, unsigned char room);
+bool zm_yawn_free_revive(int player, unsigned char stage, unsigned char room);
+void zm_yawn_revived(int player);
+// A boss room the director may jump into: its Yawn's id while that is alive
+// (its fight not done), else 0 - and where the mode places it.
+unsigned char zm_yawn_jump_room(unsigned char stage, unsigned char room);
+void zm_yawn_spawn_spot(unsigned char stage, unsigned char room, short* x, short* z, short* angle);
+// A human director and a fight under way: where it must go to play the Yawn
+// (false: nowhere, or already there in it), and whether it is held to `e`.
+bool zm_yawn_force_jump(const Entity* e, unsigned char* stage, unsigned char* room);
+bool zm_yawn_director_bound(const Entity* e);
+// The living survivors standing in this room as this copy knows them: x, z
+// and player index (-1: single player's own) - ZombieMode.cpp.
+int  zm_room_survivors(int (*xz)[2], int* who, int max);
+void zm_yawn_draw(void);
+// The game clock (ZombieMode.cpp): time added (a boss beaten).
+void zm_clock_add_bonus(unsigned int ms);
+// Every survivor's revives counted afresh (ZombieSpectate.cpp).
+void zm_revive_reset_counts(void);
+// The lesson room <-> B1 passage 1 hole: open once Yawn 2 is beaten. Shut, a
+// door record of either room through it (`dest` from `stage`/`room`) is no way.
+bool zm_yawn_hole_open(void);
+void zm_yawn_hole_action(void);
+bool zm_yawn_hole_door(const unsigned char* record);
+void zm_yawn_blocked_sound(void);
+bool zm_yawn_hole_shut(unsigned char stage, unsigned char room, unsigned char dest);
+// Yawn 2 beaten: the lesson room <-> front lesson room door, shut for good.
+bool zm_yawn_lesson_sealed(unsigned char stage, unsigned char room, unsigned char dest);
+
 // The 2F statue falling into the 1F dining room (ZombieStatue.cpp).
 void zm_statue_room_reset(void);
 void zm_statue_room(void);
@@ -294,6 +384,7 @@ void zm_piano_frame(void);
 void zm_piano_take(const short* args, int src);
 void zm_piano_draw(void);
 bool zm_piano_open(void);
+int  zm_piano_music_bank(void);
 void zm_shotgun_room(void);
 void zm_shotgun_frame(void);
 void zm_shotgun_take(const short* args, int src);
@@ -315,6 +406,11 @@ bool zm_shotgun_room_blocked(unsigned char stage, unsigned char room);
 bool zm_shotgun_hide_room(void);
 void zm_shotgun_director_crush(void);
 void zm_note(const char* text);
+// ---- The survivors' voice lines (ZombieVoice.cpp) ----
+void zm_voice_reset(void);
+void zm_voice_frame(void);
+void zm_voice_draw(void);
+void zm_voice_take(const short* args, int src);
 // The mod's own message text (encoded, 0x01-terminated) on the message line,
 // as a room's message: passive in the room (ZombieMessages.cpp), as it was
 // under a menu.
@@ -427,6 +523,8 @@ unsigned char zm_drops_flag_mask(int byteIndex);
 bool zm_random_room_stub(unsigned char stage, unsigned char room);
 // A safe room (its scripts set an item box): the director may not go in or place there.
 bool zm_random_room_safe(unsigned char stage, unsigned char room);
+// Elevator car: no director entry, placement, marching or reinforcement.
+bool zm_access_room_elevator(unsigned char stage, unsigned char room);
 // Room hooks: the room's new item spots go in after its init script
 // (zombie_mode_room_spawn); the per-room model cache is dropped on reset.
 void zm_random_room_loaded(void);
@@ -484,6 +582,11 @@ unsigned short zm_world_add_extra(unsigned char stage, unsigned char room, unsig
                                   unsigned char behavior, short x, short y, short z, short angle,
                                   bool directorControlled = false, short initialHealth = 0x7FFF);
 int  zm_world_room_extra_count(unsigned char stage, unsigned char room, bool slots = false);
+int  zm_world_room_extra_ids(unsigned char stage, unsigned char room, unsigned char* ids, int max,
+                             short* xz = NULL, unsigned short* uids = NULL);   // uid 0: busy (feeding, possessed)
+unsigned short zm_world_move_extra(unsigned char stage, unsigned char room, unsigned short uid,
+                                   unsigned char toStage, unsigned char toRoom,
+                                   short x, short y, short z, short angle);
 bool zm_world_missing_extra(unsigned short* uid, unsigned char* id, unsigned char* behavior,
                             short* x, short* y, short* z, short* angle,
                             const unsigned short* skip, int skipCount);
@@ -527,6 +630,19 @@ int  zm_world_room_zombies(unsigned char stage, unsigned char room, ZmJumpTarget
 bool zm_zombie_alive(void);
 // ZM_NET_OFF / ZM_NET_ZOMBIE / ZM_NET_SURVIVOR for the current game.
 int  zm_game_role(void);
+// This copy keeps the match - the clock, the outcome, the director's points
+// and the arbitration of shared items: single player, or the host. In an AI
+// director's game the host's game role is ZM_NET_SURVIVOR (its player is a
+// survivor in seat 0) while it still arbitrates.
+bool zm_match_authority(void);
+// A survivor seat as this copy knows it: another player's last STATE, or this
+// copy's own survivor (built from its player now - the host's, in an AI
+// director's game). NULL for a free seat, the human director's, or one not in.
+const ZmNetPeerState* zm_seat_state(int player);
+// The other survivors' stand-ins: seat n in enemy slot ZM_SURVIVOR_SLOT_BASE + n
+// (seat 0 only in an AI director's game). Monsters use the slots below.
+#define ZM_SURVIVOR_SLOT_BASE  26
+#define ZM_FIRST_SURVIVOR_SLOT ZM_SURVIVOR_SLOT_BASE
 // Pose an entity from the other copy's skeleton.
 void zm_apply_net_pose(Entity* e, const ZmNetPeerState* p);
 void zm_apply_pose(Entity* e, const ZmNetPose* pose);
@@ -573,6 +689,8 @@ struct ZmSurvivorInfo {
     unsigned char stage, room;
     int           character;     // ZM_CHAR_*
     bool          dead;
+    short         health;
+    int           player;        // seat (0 the host's, in an AI director's game)
 };
 int  zm_survivor_list(ZmSurvivorInfo* out, int max);
 // Doorway reinforcements: host purchases, loaded room owner validates geometry.
@@ -599,17 +717,31 @@ struct ZmSpawnSpots {
 };
 extern const ZmSpawnSpots g_zmSpawnSpots[];
 extern const int g_zmSpawnSpotCount;
+// The AI director's finer spots (same tool): up to ZM_PLACE_SPOTS per room,
+// spread over its floor, off the steps and clear of the doorways. `open`: the
+// floor cells in the 7 x 7 cell square around the spot (1..49) - low in a
+// corridor or between furniture. `y`: the room's common floor height.
+#define ZM_PLACE_SPOTS 16
+struct ZmPlaceSpot { short x, z; unsigned char open; };
+struct ZmPlaceSpots {
+    unsigned char stage, room, count;
+    short         y;
+    ZmPlaceSpot   spot[ZM_PLACE_SPOTS];
+};
+extern const ZmPlaceSpots g_zmPlaceSpots[];
+extern const int g_zmPlaceSpotCount;
 
-// The director's points (ZombieEconomy.cpp): prices, unlock times and the
-// rooms' monster caps.
+// The director's points (ZombieEconomy.cpp): prices, the Yawns beaten that
+// unlock each monster, and the rooms' monster caps.
 void zm_econ_new_game(bool on);
 bool zm_econ_on(void);
 int  zm_econ_points(void);
 int  zm_econ_cost(unsigned char id);
-unsigned int zm_econ_unlock_ms(unsigned char id); // normal rules, without debug bypass
-int  zm_econ_unlock_left_ms(unsigned char id);      // 0 now, -1 survivors not in yet
+int  zm_econ_unlock_bosses(unsigned char id);   // Yawns to beat first; normal rules, without debug bypass
+int  zm_econ_locked(unsigned char id);          // Yawns still to beat for it: 0 now
 int  zm_econ_room_cap(unsigned char stage, unsigned char room);
 int  zm_econ_monster_slots(unsigned char id);
+bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id);
 bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id,
                        const char* name, char* why, int whyLen);
 void zm_econ_pay(unsigned char id);
@@ -625,6 +757,31 @@ struct ZmEconStats {
     int survivorHits;
 };
 void zm_econ_stats(ZmEconStats* out);
+
+// The AI director (ZombieDirectorAI.cpp) runs only in AI DIRECTOR matches.
+// [Mods] AiDirector sets the lobby's default difficulty.
+// _level: 0 off for this copy, else 1 easy .. 5 hell on earth. The economy scales
+// the income and starting points (_income_pct) by it.
+void zm_ai_new_game(void);
+void zm_ai_frame(void);
+void zm_ai_draw(void);
+int  zm_ai_level(void);
+int  zm_ai_income_pct(void);
+// A lobby "AI DIRECTOR" game, on its host: the AI plays the director there
+// while the host's own player is the survivor in seat 0.
+bool zm_ai_hosted(void);
+const char* zm_ai_level_name(int level);   // "EASY" .. "HELL ON EARTH"
+// ZombieMode.cpp: the map placement's rules and the placement itself.
+bool zm_director_place_allowed(unsigned char stage, unsigned char room, unsigned char id);
+// The AI's unseen walk: may a monster `id` come into (stage, room) - the
+// placement rules less the price and unlock - and does any copy have the room
+// loaded or a player in it (then nothing may move in or out unseen)?
+bool zm_director_move_allowed(unsigned char stage, unsigned char room, unsigned char id);
+bool zm_room_watched(unsigned char stage, unsigned char room);
+// `at`: { x, y, z, angle } for a room that is not loaded (the AI's spot), or
+// NULL for the map's own choice (zm_remote_spot).
+bool zm_director_place_ai(unsigned char stage, unsigned char room, unsigned char id, const char* name,
+                          const short* at = NULL);
 
 // The end of a match (ZombieStats.cpp): how it ended, each player's numbers
 // (kept on its own copy, sent with ZM_EV_STATS), and the screen every copy
@@ -682,6 +839,7 @@ void zm_stats_revived(void);
 void zm_spec_frame(void);                 // zombie_mode_net_frame, before the STATE send
 bool zm_spec_input(void);                 // zombie_mode_survivor_input: true while it has the pad
 bool zm_spec_away(void);                  // left its corpse's room: in no room for the others
+const ZmNetPeerState* zm_spec_corpse(void); // the watching survivor's body (stage, room, spot), else NULL
 bool zm_spec_player_frozen(void);         // no animation, collision or shadow while watching
 void zm_spec_room_exit(void);             // zombie_mode_room_exit
 bool zm_spec_jump_record(const unsigned char* record);
@@ -717,6 +875,9 @@ void zm_map_set_read_only(bool on);
 // are the caller's two bottom lines.
 enum { ZM_ROUTE_DOORS = 0, ZM_ROUTE_KEYS = 1, ZM_ROUTE_ALL = 2 };
 void zm_map_set_route(int level, bool monsters, bool players, const char* status, const char* help);
+// A popup menu over the route map (the pregame lobby's), until the next
+// zm_map_set_route. `enabled` may be NULL (all on).
+void zm_map_set_menu(const char* const* items, const bool* enabled, int count, int sel);
 
 // Title guide shares the lobby character-preview scene. Negative closes it.
 void zm_guide_profile(int survivor, int monster);

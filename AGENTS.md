@@ -81,6 +81,9 @@ of guessed. Run them from the repo root.
 - `estimate_zombie_route_time.py` — turns each seed's fastest escape into seconds (room walks at run speed from the RDT door/pickup positions, fixed door/pickup/crest costs; solo and a coordinated team); report `tools/zombie_route_time_report.json`.
 - `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
 
+**Zombie mod assets**
+- `convert_bumper_videos.py` — convert a folder of videos to the match bumpers' format (`docs/INFESTED_BUMPERS.md`): H.264 yuv420p MP4s at a constant 24 fps, silent except `wesker_victory` (or `--keep-audio`); clips in an `intro` folder are made exactly 72 frames, the rest are cut to 30 s.
+
 **Japanese (Biohazard.exe)**
 - `jpn_font_table.py` — glyph map of the JPN font (`data\FONT.TIM`).
 - `jpn_msg_decode.py` — decode / re-encode the JPN text tables straight from the JPN executable.
@@ -232,6 +235,13 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   path), so the survivor settles idle while monsters, effects, events and its
   STATE keep running; a grab or death answers No; closing raises back only
   those two bits. Menu and door-script messages still pause.
+  A door key is used up as it turns (`zombie_mode_key_turned` in
+  door_try_enter), not when its message closes; on its last lock it is
+  discarded without the inventory's "This key is useless now. Discard?"
+  (`zombie_mode_key_used_up`, both KEY_DEPLETED sites), and "The <key> is no
+  longer useful. You discarded it." shows once the survivor has the control
+  with no other text up - in the next room when it walked straight through.
+  Untested by the user.
   Examine events (`zm_evt_is_examine`: an action press's script that only
   takes the control, cuts to a close-up, shows a message and cuts back - no
   entity, event, door or item command; e.g. ROOM61A0/6050/6170/7010/7050)
@@ -262,6 +272,19 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   The pickup close-ups a monster can walk in on - the bathtub (6130 ev4)
   and the attic (7100 ev1) - are in the list too. The heliport lookout's
   (7180) and the rope (70C0) are not. Untested by the user.
+  An Action press never starts an examine/reveal still running (it used to
+  restart it in its slot: the close-up re-locked onto itself and stuck, and
+  each run asked for the pickup again), nor any pickup or event while a
+  close-up is up (`zombie_mode_action_busy` in check_action_object). A hit,
+  grab or death cuts every running examine/reveal short: its close-up cuts
+  back and its later pickup (`cmd_room_action` handler 4/8, `cmd_got_item`)
+  is dropped (`zombie_mode_event_room_action_skip`). Untested by the user.
+  The letterbox (main-state `MSF_INTENSITY_RAMP`, `bit_op 05 0F`) is not
+  turned on by an examine or a reveal (`zombie_mode_event_letterbox` in
+  `cmd_bit_op`): those can end without the command that takes it away (the
+  armor room, the large gallery's solve), leaving the bars up. Other scenes
+  keep theirs; up for 30 frames with no SCD event running, it is taken away
+  (`zm_letterbox_frame`). Untested by the user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.
@@ -389,7 +412,8 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     snapshot). The rough passage has no door back natively; an open keypad
     builds one over its locked-door zone. The route (`kAccessDoors`,
     `RND_BIT_BATTERY` / `RND_BIT_NOTE`): the back area is computed from the
-    graph (`rnd_find_back`); the battery (out of leaf rooms when it can) and
+    graph (`rnd_find_back`); the battery (out of leaf rooms when it can, and at least 4 door crossings from
+    the kitchen's elevator - `RND_BATTERY_AWAY`, locks ignored) and
     the note (leaf room) lie outside it, one crest always lies in it (its
     room picked evenly, placed first in the fill), no key does - so either
     way in alone is enough. Each back room without a pool spot gets a new one.
@@ -404,6 +428,148 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     reusable pick axe, 60-second ceiling timer and persistent broken door.
     State and committed replacement/rescue reconcile on reconnect. CPU tests:
     `tests/test_zombie_shotgun.py`; user play-testing still required.
+- **Yawn 2 in the lesson room** (`ZombieYawn.cpp`, `kBoss`): placed by the
+  mode as for Yawn 1 (the room's own enemy_set, id 0x12 death flag 0x3E, is
+  refused like every room monster), behaviour 0x06 at (5300, 17500) facing
+  0xC00 - the scripted selector, which never flees (the flee path is the
+  attic's): it dies at 250 health per living survivor. The lesson room's own
+  sounds. Its crest: the generator puts one crest (never the back area's) on
+  a lesson room pool spot (`s_bossItem`, the room gets a new spot if it has
+  none), held back until it is beaten. Its death opens the hole to B1. The
+  same music, locked doors and lockdown as Yawn 1's. Untested by the user.
+- **Blue herbs in the safe rooms** (Yawn poisons): one in each, the same
+  every game and out of the random fill (`rnd_add_herb_spots`). The 1F save
+  room (0x00) gets a spot of its own on its first spawn spot; the mansion
+  storeroom (0x18), which takes no extra spots, has its emptied shells' spot
+  (flag 0xDA, `kTrimmedSpots`) hold it (`rnd_place_weapons`). One pickup each
+  per game. Untested by the user.
+- **Yawn's moves for several survivors** (Yawn.cpp actions 9 and 10, past
+  the original's 8; `zombie_mode_yawn_special` picks them in both selectors,
+  before the flee). The thrash: a hiss (anim 5, 24 frames), then the head
+  whipped side to side (anim 6 with the head's angle swung 0x280 each way,
+  two swings in 40 frames) while the body is dragged after it with a long
+  step, striking everyone within 1300 of any body joint at each swing's end
+  (20). Chosen with two survivors within 2500 of the body, or one along its
+  back half; 9 s cooldown. The slam: the unused reared weave (anim 12, 45
+  frames) toward its target, then the rear-up backwards at double speed;
+  strikes within 2000 of the head and front body (30) with dust; chosen now
+  and then against a survivor 2500-7000 ahead; 12 s cooldown. 3 s between
+  any two. Both hold +0x17C (no flinch) and ignore_player.
+  Area strikes (`zombie_mode_yawn_area_hit` -> `zm_area_resolve`, after the
+  target swap ends): every living survivor in the room in reach
+  (`zm_room_survivors`) gets the bite's reaction - this copy's own through
+  `zm_take_hurt`, the others' by PHURT (700 ms per survivor). Untested by the
+  user.
+- **The director in a Yawn** (`zm_yawn_possessed`): a boss room with its
+  Yawn alive can be jumped into to take it (`zm_yawn_jump_room` in
+  `zm_jump_to` and `zm_world_room_zombies`); placing, traps and doors there
+  stay refused. Forward crawls (Run: faster), the turns steer, Action
+  bites, Aim + Action thrashes, Run + Action slams; START / the map as for any
+  monster. Its decision tree is held off (ignore_player at 1). Beaten (Yawn 1
+  under its flee health - the flee is started - or Yawn 2 dead), it goes
+  back to its own AI and the director to the next monster
+  (`zm_possessed_died`). Its body segments are never possessable
+  (`zm_possessable`). A human director (single player too; not an AI
+  director's game) is made to: once a living survivor is in a boss room with
+  its Yawn alive, its copy jumps there and takes the snake as soon as nothing
+  holds it (`zm_yawn_force_jump` in `zm_director_input`), and stays until it
+  is beaten - no START switch, map jumps refused ("THE FIGHT HOLDS YOU TO
+  YAWN", `zm_yawn_director_bound`). Untested by the user.
+- **Going in together** (`zombie_mode_boss_door_gate`, before
+  `door_begin_transition` in `door_try_enter`, after any key): a boss room's
+  open door takes nobody alone while its Yawn waits. Every living survivor
+  must stand within 3000 of the one at the door, in that room, else "SOMETHING
+  FEELS WRONG - GATHER YOUR TEAM". Gathered, the host asks them all ("ENTER
+  THE FIGHT? ACTION YES - AIM NO", 15 s, the survivor held still, a fresh
+  press needed); all yes, every copy goes through its own room's door to the
+  boss room at once (`yw_go_frame`, the shotgun rescue's way), each then
+  moved (`yw_take_place`, at room spawn) to its place by the door: in seat
+  order among those asked, the n-th of `kTeamPlaces` (the arrival point, 800
+  either side, a step in, ...) the room's walls leave clear - the same on
+  every copy. A no, someone
+  dead, moved off or out of the room, or the time running out calls it off
+  ("ENTRY CALLED OFF"). One living survivor goes straight in; single player
+  has no vote. ZM_EV_BOSS ops 3 request / 5 answer (survivor -> host), 4 ask
+  / 6 go / 7 off (host -> all), 8 refused (host -> requester). Untested by the
+  user.
+- **After Yawn 2:** the lesson room's door to the front lesson room is shut
+  for good both ways ("THE DOOR IS BLOCKED", `zm_yawn_lesson_sealed` in
+  `zombie_mode_door_trapped` and `zm_door_usable`); the way out is the hole,
+  down through the basement (B1 passages, the kitchen) - a choke point for
+  the director. Beaten while the room is loaded, ROOM70C0 event 6 slides the
+  shelf off the hole (and arms the way down, sets ScenarioFlags 0x28; 0x27 set
+  with it). The generator: that door sealed (`kSealedDoors`), the hole open
+  downward only (`kDoorGates`); every seed verified to lead from the lesson
+  room back to the main hall and the exit. Untested by the user.
+- **Boss lockdown** (`ZombieYawn.cpp`): a Yawn beaten (its death flag up),
+  its room stays shut 60 s (`YW_LOCKDOWN_MS`, "REGROUP - DOORS OPEN IN n"); a
+  revive there needs no healing item and ignores the limit
+  (`zm_yawn_free_revive` in ZombieSpectate.cpp). At its end every survivor's
+  revives are counted afresh (`zm_revive_reset_counts`) and the clock gains
+  5:00. Elsewhere the director plays on through the lockdown (places,
+  possesses, jumps, traps) but earns nothing - no income, hit bonus or
+  refund (`zm_yawn_lockdown` in ZombieEconomy.cpp; settled at the
+  lockdown's start and end; the HUD reads "HELD n PTS"). Untested by the
+  user. The director cannot place, jump, trap or send reinforcements into a
+  boss room until it is done (`zm_yawn_director_closed` in
+  `zm_director_safe_room`, the AI director, reinforcements, the map - "BOSS",
+  dark). The host decides: BOSS=35 `{1 lockdown, boss, tenths, seed low,
+  seed high}` / `{2 done, boss, 0, seed low, seed high}`; a survivor's copy
+  that sees a death flag but no word for 40 s counts it done. Untested by the
+  user.
+- **Yawn 1 in the attic** (`ZombieYawn.cpp`): the attic's own enemy_set
+  (id 0x0D, slot 0, death flag 0x18) runs only on the first visit
+  (ScenarioFlags bit 0 clear - `bit_test`'s third byte 1 passes on a clear
+  bit), so the mode places it itself after the init script (`zm_yawn_room`,
+  `zm_spawn_monster`) as that record's "already in the room" version
+  (behaviour 0x02 at (11000, 10000)), on every visit until the flag is up. The
+  return attic's sound row has no Yawn; it takes the first visit's
+  (`zm_monster_sound_row`). `yawn_init` leaves ignore_player (+0x85) set -
+  the original clears it at the end of the ceiling entrance - so it is
+  cleared while the head idles or crawls (`zm_yawn_after_update`) and the
+  snake hunts at once. The fight plays `Bgm_08` looped (the first-visit
+  attic's music group; the return attic has none), faded out over 3 s once it
+  has fled. While it is in the loaded attic a survivor's door out is refused
+  ("THE DOOR WON'T OPEN", `zm_yawn_traps_exit` in `zombie_mode_door_trapped`
+  and the AI survivor's `zm_door_usable`). It runs on its own engine AI; the original's flee at health
+  under 0x0AF0 is the defeat (the flee raises the death flag). Health starts
+  250 above that per living survivor. While the flag is down the attic's
+  randomized key/crest pickup is held back - no model, no sparkle, its pickup
+  and ROOM7100 event 1's close-up refused (`zombie_mode_yawn_guards` in
+  `check_action_object` and `cmd_room_action`) - and comes out as the room's
+  init set it once the flag is up (here or through the flag merge). Attic
+  event 0 (the after-flee scene) is skipped. Yawn's 13 slots (head 0, body
+  segments 1-12 from `yawn_init`) are reserved from the extras
+  (`zm_room_highest_script_slot`) and kept out of the economy, stun, roster
+  capture, monster counts, the director's hit credit and the corpse hand-over
+  (segments keep the original's health -1). Across copies the owner sends the
+  head as an ENEMIES entry plus a `ZmYawnBody` after the entries (header flag
+  2: joints 3-14 world positions, the 13 slots' status bytes); other copies
+  run `yawn_init` once and copy the pose (`zm_yawn_puppet_update`), forwarding
+  head and segment shots as HIT. In a networked match the swallow is off and a
+  bite can kill (no victim handoff, as the Hunter's drag); single player keeps
+  the original. `[yawn]` lines in the debug log. Untested by the user.
+- **The lesson room's hole** (lesson room 2F 0x0C <-> B1 passage 1 2F 0x1A) is
+  shut until Yawn 2 is beaten (`zm_yawn_hole_open`: its death flag 0x3E; Yawn 2
+  is not in the mode yet, so all game for now). `zombie_mode_room_prepare`
+  clears ScenarioFlags 0x27/0x28 (floor whole, no way down) instead of setting
+  them, B1 passage 1's climb-up prompt (slot 2, event 0) is refused, and the
+  AI survivor's `zm_door_usable` and the generator (`kDoorGates`: both records
+  closed) count it shut. B1 stays reachable from the kitchen. No progression
+  item lies in the lesson room (`rnd_boss_room` in `rnd_key_spot_ok` and
+  `rnd_key_item_room`): it is Yawn 2's arena. The lesson room's way down
+  (slot 7, event 12) is refused too. Verified over 2000 seeds; untested by the
+  user.
+- **Key roles** (`rnd_generate_once`): which key type plays which role is
+  random. Key 1 opens the pillar passage's door (lock 0x0D) and lies where no
+  key is needed; key 2 opens the attic's door (lock 0x07) and lies behind a
+  key-1 door; key 3 lies in the attic (its only key or crest), held back until
+  Yawn flees, and opens at least one door; key 4 opens the lesson room's door
+  (lock 0x19) and lies where only key 3 reaches. The other locks take any key.
+  So exactly two keys are in reach before the attic fight. Verified over 2000
+  real seeds (keys 1 and 2 one at a time, then the attic, then key 4).
+  `tests/check_randomizer_progression.py` (a synthetic star of 1F rooms, no
+  attic) predates the attic rule and fails; it needs a new fixture.
 - **Win condition:** a survivor opening the storeroom's (stage 1 room 0x1B)
   door out to the courtyard requests an escape from the host (`zm_is_last_door`).
   Only the host confirms the final result: escape=0, timeout=1, all-dead=2
@@ -455,19 +621,24 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   player's numbers once the match is over (STATS). Action (after 4 s) or a
   minute leaves it through the death fade, without the death screen
   (`zombie_mode_match_over` in die_state).
-- **Game clock:** 20 minutes (`ZM_TIME_LIMIT_MS`) from the moment every
+- **Game clock:** 12 minutes (`ZM_TIME_LIMIT_MS`) from the moment every
   survivor is in (`zm_survivors_in_ms`), shown bottom right on every copy
-  (the hall countdown sits a line above it). The director's copy (and single
-  player) keeps it and sends CLOCK `{seconds left}` every 5 s; a survivor's
-  copy counts down from the last one. At zero the director wins: WIN
+  (the hall countdown sits a line above it), +5:00 for each Yawn beaten (at
+  the end of its lockdown, `zm_clock_add_bonus`). It stands still ("PAUSED
+  m:ss") while every living survivor is in a boss room with its snake alive,
+  and during a lockdown (`zm_yawn_clock_hold`). The director's copy (and
+  single player) keeps it and sends CLOCK `{seconds left, standing still,
+  seconds run}` every 5 s and on every hold or bonus; a survivor's copy counts
+  down from the last one. Untested by the user. At zero the director wins: WIN
   `{-1, 1, ...}` (an escape is `{winner, 0, ...}`), a "TIME IS UP" banner, then the
   same end.
 - **Disconnect recovery** (`ZombieNet.cpp`, `ZombieReconnect.cpp`): five seconds
   without gameplay packets starts a 30-second grace period. All copies pause
   simulation and gameplay timers while continuing network polling. The original
   client reconnects automatically; a crashed survivor uses New Game → REJOIN
-  SURVIVOR 1/2/3 on the same computer/save directory. Saved seat credentials
-  reclaim only that seat in that seeded match. A new connection epoch rejects
+  THE LAST MATCH on the same computer/save directory: `infestation-rejoin.dat`
+  holds the host, the seed and the survivor's match id, and the host gives
+  back the seat that id was seated under, in that seeded match only. A new connection epoch rejects
   delayed packets from the old process. The host sends a retried chunked snapshot
   with the player's last received inventory, room/position, health/death, stats,
   rescue usage, shared flags/box, monsters and drops. Pending committed pickups,
@@ -482,29 +653,42 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   reliable events carry a source and a destination, and the host relays them.
   - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START.
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
-    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34. FX, SOUND, PSND, BURST, HEAL and STUN carry
+    PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34, BOSS=35, VOICE=36. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 64) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 72) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
     troubleshooting guidance. Quick debug remains developer-only.
   - WELCOME / GO carry the host's scenario seed (`zm_net_seed`), the lobby
     phase, the veto flags and the survivors' votes; a survivor's HELLO carries
-    its character, its vote and the seed's low byte (a vote counts only for
-    the map it was cast on). Picks stay open after GO until that survivor
+    its character, its vote, the lobby revision (a vote counts only for the
+    map it was cast on) and its match id - two words the survivor draws when
+    it joins; the host seats it under that id and a rejoin's HELLO presents
+    it again to reclaim the seat. Picks stay open after GO until that survivor
     sends READY; the host no longer waits at the start barrier.
-- **Game start flow** (`ZombieLobby.cpp`): the host hosts and the survivors
-  join; the host advances (Enter) to the map review - every copy builds the
-  seed's scenario and shows the route map: key doors (blue) and where the
-  keys and crests lie (purple); the director's also shows every new pickup
-  (teal). Each side may veto once (Aim; the
-  survivors' veto needs every survivor), which re-rolls the seed. The host
-  can press Enter to start when every survivor has accepted (Action), or after
-  90 s even without all acceptances. The
-  director plays at once; the survivors get the character select screen and
-  all spawn in the main hall when its two minutes run out (a pick can change
-  until then).
+- **Game start flow** (`ZombieLobby.cpp`): every choice is a menu item
+  picked with Action (Cancel backs out); Aim is not used. The host hosts and
+  the survivors join; the join screen lists the director and the survivor
+  seats; the host picks GENERATE THE MAP (or, against the AI director,
+  CONTINUE TO THE MAP - also the AI level and the timeout switch there).
+  The map review: every copy builds the seed's scenario and shows the route
+  map: key doors (blue) and where the keys and crests lie (purple); the
+  director's also shows every new pickup (teal). The arrows browse rooms,
+  Action opens a popup menu (`zm_map_set_menu`). Against a human director
+  each side may veto once (the survivors' veto needs every survivor), which
+  re-rolls the seed, and the director's START THE GAME is open once every
+  survivor accepted or after 90 s; the director plays at once - no
+  narration, intro or barrier wait on its copy (`director_plays_at_once` in
+  ZombieBumpers.cpp); the host runs the survivors' intro barrier from their
+  reports, and the clock starts once they are all in and released. The survivors
+  then get the character select and the pregame lobby: the survivors and
+  their characters, CHANGE CHARACTER, VIEW THE MAP and the countdown; all
+  spawn in the main hall when its two minutes run out. Against the AI there
+  are no votes: everyone (the host too) goes from the map to the character
+  select and the pregame lobby, where survivors toggle READY and the host
+  has START THE GAME (asked twice with someone not ready) and BACK TO THE
+  LOBBY. Untested by the user.
 - **Survivors' timeout** (`ZombieTimeout.cpp`, multiplayer): once a match,
   from 5:00 on the game clock, a living survivor calls it from its map
   (OPTIONS, then Run twice within 3 s) while every living survivor stands in
@@ -560,6 +744,11 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   An award arriving after death joins the corpse's inventory drops. Maps and
   documents retain their original collection paths. The shared item box uses
   the separate atomic swap protocol above. Untested by the user.
+  After the host's grant the item must still be there by its roomItems flag,
+  not by its action entry's handler: a room script may disarm the entry while
+  the viewer is up (ROOM7150's frame script switches the red jewel's slot 5
+  off whenever flag 0xC8, another item's, is clear - the deer's scene still
+  hands the jewel over). It gave "PICKUP CANCELLED". Untested by the user.
 - **Dropped items** (`ZombieDrops.cpp`): a survivor's inventory command box
   has a fourth row, DROP (MainMenu.cpp `menu_item_drop` / `menu_draw_drop_row`:
   status.tim has no DROP button, so it is the CHECK button's edges with a
@@ -631,8 +820,12 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Prices: zombie 100, green 125, naked 150 (+25% health, on every copy, in
     `zm_world_after_update`), Cerberus 200, web spinner 150,
     Chimera 400, Hunter 500, Tyrant 1800.
-  - Unlocks after every survivor is in (`zm_survivors_in_ms`): Cerberus 3 min,
-    Hunter 10, Chimera 12, Tyrant 15.
+  - Unlocks by Yawns beaten (`kPrices` `bosses`, `zm_econ_locked`, counted by
+    `zm_yawn_beaten_count` from the boss phases - a lockdown counts): zombies
+    and Cerberus from the start; Hunter, Chimera and web spinner after the
+    first Yawn; the Tyrant after both. The map's type list shows "YAWN n" for
+    a locked type; the AI director saves for the next tier only while the
+    survivors fight the Yawn that unlocks it. Untested by the user.
   - Room caps: the generated `cap` in `ZombieSpawnSpots.cpp` (main hall 5,
     1-4 elsewhere, 2 for a room not in the table), +1 at 6 min and +1 at 10 -
     except a cap set by hand (gen_spawn_spots.py `CAP_OVERRIDES`,
@@ -713,6 +906,42 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     `door_try_enter`; the lock stays for the survivors). A door into a stub
     room keeps its lock. A non-zombie travels as itself: it is re-spawned as a
     roster extra in the new room (`s_carriedId`), not as the zombie body.
+- **Modifier buttons** (`PAD_MOD1` / `PAD_MOD2`, docs/GAMEPAD_INPUT.md 6a):
+  in the mode LB / RB (keyboard Shift / Tab) are two new buttons, no longer
+  aim, read past the remap tables in `ReadPadBoth`. Untested by the user.
+- **Reload button** (survivors): cancel/run pressed while aiming (pad B / LT,
+  keyboard V / Ctrl / Esc) plays the empty gun's reload (behaviour 0x18,
+  motion 0xE) on a part-loaded handgun, shotgun or Python with its ammo in
+  the inventory; `fire_consume_ammo_stack` tops it up, keeping the rounds in
+  it (`zombie_mode_manual_reload`, `weapon_manual_reload_ready`). In the mode
+  that press no longer switches targets (the original's behaviour 0x1A). The
+  other weapons have no reload motion and still reload through the
+  inventory. Untested by the user.
+- **Voice lines** (`ZombieVoice.cpp`, survivors): hold LB (Shift) and press
+  up HELP, down WATCH OUT, left GUARD ME, right LEAD THE WAY; aim (X)
+  FOLLOW ME, inventory (Y) STAY HERE, action (A) USE THAT, run (B) RUN AWAY.
+  RB (Tab) groups supplies/social: up JOKE, down GOOD JOB, left NEED AMMO,
+  right NEED HEALTH (hurt/dying by HP), X TAKE THIS, A THANKS, B TAUNT,
+  Y WE'RE SCREWED. See docs/GAMEPAD_INPUT.md 6a.
+  Read as the bound functions, so RT / LT and keyboard keys say them too.
+  While either modifier is held those never reach gameplay
+  (`zombie_mode_pad_filter` in PlayerPad_Update, before the remap), except a
+  face function already held when LB went down (aiming keeps the gun up).
+  Recordings per character:
+  `<exe dir>/infested/voices/<character>/<line>_<n>.wav` (chris, jill, barry,
+  rebecca, richard, enrico; help, takethis, needammo, needhealth, followme,
+  stayhere, watchout, guardme, leadtheway, runaway, usethat, thanks,
+  goodjob, joke, werescrewed, hurt, dying, taunt; takes 1..
+  up to the first missing, max 16; .ogg too). The speaker picks the take;
+  1.5 s between two lines. VOICE=36 `{line, take, character, stage|room<<8,
+  x, y, z}`. Each copy (the director's too) hears it in the speaker's room
+  panned from the speaker, or in a room with a door to it muffled (-6 dB,
+  AudioFile_Muffle) and panned from that door; a caption ("JILL: HELP!" /
+  "JILL - NEXT ROOM: HELP!") either way. The music ducks under a line this
+  copy hears (-10 dB, -8 dB through a door; the room's banks, the Yawn fight's,
+  the piano's), easing back after it; an owner's fade is taken as its new base. One bank per speaker, loaded on
+  play and freed after (Windows has 80 banks). `[voice]` lines. Untested by
+  the user.
 - **Director controls:**
   - START switches monster. Action attacks; Aim+Action is the second attack.
   - Aim: a white-coat zombie lies down / gets up; a naked or green zombie
@@ -725,7 +954,8 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     mansion's B1 RDTs (stage 2 rooms 0x1A-0x1C) are 4-byte stubs. On the
     map: the arrows move to the nearest room in that direction (on the drawn
     map, 1F's right edge leads to 2F), Run opens the monster-type list
-    (up/down, Action or Run to keep), Aim places one, Action jumps there,
+    (up/down, Action or Run to keep), LB / RB (Shift / Tab) step the
+    monster type list open or not, Aim places one, Action jumps there,
     OPTIONS closes.
   - Mod text goes through `zm_text_encode` before `PrintText8x14`: the 8x14
     sheet draws glyph byte - 36, so only letters, digits, `:` `;` `?` and
@@ -737,6 +967,10 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Placed monsters in rooms that aren't loaded wait at `g_zmSpawnSpots`.
     `ZombieSpawnSpots.cpp` is generated by `tools/gen_spawn_spots.py`; don't
     edit it by hand.
+    The three spots keep as far from the room's own pickups (item_model_set
+    zones and positions) as its floor allows, up to 4000 (`ITEM_CLEAR`): the
+    randomizer's extra pickups lie on them, and the boiler room's sat on its
+    four green herbs.
   - Survivors start in a triangle in the main hall around (17000, 8500).
   - The director starts inside the back exit.
 - **Piano** (`ZombiePiano.cpp`, multiplayer survivors): Jill, Rebecca or
@@ -859,6 +1093,8 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieMessages.cpp` | messages that do not pause the game: the passive decision, the reading timer, the hand-over to doors and the menu |
 | `ZombieRoomSync.cpp` | a room's pushed objects and puzzle flags, shared by the survivors in it |
 | `ZombieStatue.cpp` | the 2F dining statue falling into the 1F dining room, seen live from below |
+| `ZombieYawn.cpp` | the two Yawn fights: spawns, health, music, locked doors, lockdowns and the clock's holds, the guarded key/crest, the lesson room's hole, the body across copies |
+| `ZombieVoice.cpp` | the survivors' voice lines: LB + a direction, the recordings, who hears them (the room, muffled through a door) |
 | `ZombieTraps.cpp` | the director's traps: LOCK DOORS (the room's doors shut for survivors) |
 | `ZombieSpectate.cpp` | a dead survivor watching the living ones: the follow, the frozen corpse STATE, the HUD |
 | `ZombieStats.cpp` | the end of a match: each player's stats, their exchange (STATS) and the white end screen |

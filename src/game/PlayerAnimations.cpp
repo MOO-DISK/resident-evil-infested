@@ -1472,9 +1472,14 @@ unsigned char Effect_CreateBillboard(
         unsigned int* dst = (unsigned int*)&eff->animId;
         for (int i = 0; i < 6; i++) dst[i] = src[i];
 
+        // Use the padding byte as a local rendering tag. The spawn parameter
+        // also travels with network effect replay, so every copy gets green FX.
+        bool slamCloud = zombie_mode_armed() && type == 9 &&
+                         (unsigned char)lightFactor == EFFECT_ZM_SLAM_CLOUD;
+        eff->pad_42 = slamCloud ? EFFECT_ZM_SLAM_CLOUD : 0;
         // Set light factor if provided
         if (lightFactor != 0) {
-            eff->lightFactor = lightFactor;
+            eff->lightFactor = slamCloud ? 36 : lightFactor;
         }
 
         // Decrement frame count, apply yaw, mark active
@@ -2549,6 +2554,15 @@ int check_action_object(void)
     g_playerPosScratch.x = g_svecScratch.x + g_playerEntity.scaMatrixData.localMatrix.t[0];
     g_playerPosScratch.z = g_svecScratch.z + g_playerEntity.scaMatrixData.localMatrix.t[2];
 
+    if (zombie_mode_armed() && g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_LESSON_ROOM) {
+        const unsigned short* hole = *(const unsigned short* const*)(&g_RoomActionTable[2 * 12 + 8]);
+        dbg_printf("[yawn hole] Action at (%d,%d), probe (%d,%d), handler %d flags %02X, in zone %d\n",
+                   g_playerEntity.scaMatrixData.localMatrix.t[0], g_playerEntity.scaMatrixData.localMatrix.t[2],
+                   g_playerPosScratch.x, g_playerPosScratch.z,
+                   (int)g_RoomActionTable[24], (unsigned)g_RoomActionTable[25],
+                   hole != NULL ? is_point_in_action_zone(&g_playerPosScratch, (unsigned short*)hole) : 0);
+    }
+
     unsigned char* entry = g_RoomActionTable;
     if ((unsigned char*)g_RoomActionTable - 1 < (unsigned char*)g_RoomActionTail) {
         char index = 0;
@@ -2559,12 +2573,15 @@ int check_action_object(void)
                     if ((flags & 0x40) == 0) {
                         if (is_point_in_action_zone((VECTOR*)&g_playerPosScratch,
                                                     *(unsigned short**)(entry + 8)) != 0) {
+                            // Port-added mod: no second run of a scene still playing.
+                            if (zombie_mode_action_busy(entry)) return 0;
                             g_fwdPosActionId = (unsigned char)(index + 1);
                             return ((int(*)(unsigned char*))room_check_actions[*entry])(entry);
                         }
                     } else {
                         if (is_point_in_action_zone((VECTOR*)g_playerEntity.scaMatrixData.localMatrix.t,
                                                     *(unsigned short**)(entry + 8)) != 0) {
+                            if (zombie_mode_action_busy(entry)) return 0;   // port-added mod
                             g_entPosActionId = (unsigned char)(index + 1);
                             return ((int(*)(unsigned char*))room_check_actions[*entry])(entry);
                         }
@@ -4072,6 +4089,21 @@ static char weapon_fire_check(void)
     return (char)(get_item_slot(weapon_ammo_item_id(g_playerEntity.equippedWeaponId)) + 1);
 }
 
+// Port-added mod: can the survivor's reload button reload the equipped gun
+// now? Only the guns with a reload motion (b18 is gated on id < 6 - the
+// handgun, the shotgun and the Pythons), short of a full load, with their
+// ammo in the inventory. The DC's endless Python never needs one.
+static bool weapon_manual_reload_ready(void)
+{
+    unsigned char weaponId = g_playerEntity.equippedWeaponId;
+    if (g_EquippedItemId == 0 || weaponId < ITEM_BERETTA || weaponId >= 6) return false;
+    unsigned char* slot = (unsigned char*)g_ItemSlotsPointer + (g_EquippedItemId - 1) * 2;
+    if (dc_is_infinite_colt_python(slot[0])) return false;
+    unsigned char maxQty = g_ItemMaxQty[(unsigned int)weapon_ammo_item_id(weaponId) * 4];
+    if ((slot[1] & 0x7f) >= maxQty) return false;
+    return weapon_fire_check() != 0;
+}
+
 // ============================================================================
 // player_aim_cone_test @ 0x00496be0
 // Does the ray from the player through `delta` cross a sight-blocking room
@@ -4622,8 +4654,19 @@ static void player_behavior_13_gun_hold_input(void)
             }
         }
     }
+    // Port-added mod: in the zombie mode a survivor's cancel/run press (pad B /
+    // LT, keyboard V / Ctrl / Esc) reloads instead - the empty gun's reload
+    // motion, whose ammo step tops a part-loaded gun up (fire_consume_ammo_stack).
+    // Nothing to reload, the press does nothing: it never switches targets.
+    if ((g_PlayerPadHeld & 0x40) != 0 && zombie_mode_manual_reload()) {
+        if (weapon_manual_reload_ready()) {
+            g_playerEntity.action_behavior = 0x18;
+            g_playerEntity.action_state = 0;
+            return;
+        }
+    }
     // Raw pad bit 4 with a target lock starts the special lock-on fire.
-    if ((g_PlayerPadHeld & 0x40) != 0 && player_find_aim_target() != 0) {
+    else if ((g_PlayerPadHeld & 0x40) != 0 && player_find_aim_target() != 0) {
         g_playerEntity.action_behavior = 0x1a;           // 0x00459150 - not yet transcribed
         g_playerEntity.action_state = 0;
         return;
@@ -5247,6 +5290,28 @@ static void fire_consume_ammo_stack(void)
             bestSlot = i;
             bestQty = qty;
         }
+    }
+    // Port-added mod: the survivor's reload button reloads a part-loaded gun
+    // (weapon_manual_reload_ready); the rounds still in it are kept and only
+    // the shortfall comes off the stack. The original only gets here empty,
+    // where this is the same as below. Bit 7 (the volley gate) is dropped.
+    unsigned char* gunQty = (unsigned char*)g_ItemSlotsPointer + g_EquippedItemId * 2 - 1;
+    unsigned char loaded = zombie_mode_armed() ? (unsigned char)(*gunQty & 0x7f) : 0;
+    if (loaded != 0) {
+        unsigned char need = (unsigned char)(maxQty > loaded ? maxQty - loaded : 0);
+        if (bestQty == 0 || need == 0) {
+            *gunQty = loaded;
+            return;
+        }
+        if (need < bestQty) {
+            *gunQty = maxQty;
+            ((unsigned char*)g_ItemSlotsPointer)[bestSlot * 2 + 1] = bestQty - need;
+            return;
+        }
+        *gunQty = (unsigned char)(loaded + bestQty);
+        ((unsigned char*)g_ItemSlotsPointer)[bestSlot * 2] = 0;
+        rearrange_item_slots();
+        return;
     }
     if (maxQty < bestQty) {
         ((unsigned char*)g_ItemSlotsPointer)[g_EquippedItemId * 2 - 1] = maxQty;
@@ -6807,9 +6872,8 @@ int door_try_enter(unsigned char* entry)
     unsigned char  lock   = record[0xc];
 
     // Port-added mod: a door the zombie mode's director has trapped shut
-    // (mods/ZombieTraps.cpp) - the lock click, as for a locked door.
+    // (mods/ZombieTraps.cpp). The refusal handles its sound and message.
     if (zombie_mode_door_trapped(record)) {
-        play_sfx(2, 0x14, 0);
         return 0;
     }
 
@@ -6828,6 +6892,9 @@ int door_try_enter(unsigned char* entry)
 
     // 0x0041b441: unlocked outright, or its lock flag is already raised.
     if ((lock & 0x80) == 0 || Flg_ck((int)g_LocksFlags, lock & 0x3f) != 0) {
+        // Port-added mod: a boss room's door, open - the survivors go in all
+        // together or not at all (mods/ZombieYawn.cpp).
+        if (zombie_mode_boss_door_gate(record)) return 0;
         door_begin_transition(record);
         return 0;
     }
@@ -6886,6 +6953,10 @@ int door_try_enter(unsigned char* entry)
     }
     play_sfx(2, sfxId, 0);
     Flg_on((int)g_LocksFlags, record[0xc] & 0x3f);
+    // Port-added mod: the key is used up now, not once the message closes -
+    // in the mode the survivor walks through the door the next frame, and a
+    // key with no lock left is discarded without asking (mods/ZombieMessages.cpp).
+    zombie_mode_key_turned();
     return 0;
 }
 

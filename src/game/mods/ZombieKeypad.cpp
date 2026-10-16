@@ -46,6 +46,13 @@ extern int  cmd_door_set(void);                                        // 0x0C C
 #define KP_ROUGH_DOOR_SLOT   1          // ROOM7140's "The door is locked." zone
 #define KP_DOOR_MARGIN       1500       // how far from an elevator door the battery can be put in
 #define KP_WRONG_MS          1200
+
+// The elevator car is a survivor-only transit room, even after power is restored.
+bool zm_access_room_elevator(unsigned char stage, unsigned char room)
+{
+    return room == KP_ELEVATOR_CAR &&
+        (stage == STAGE_MANSION_2F || stage == KP_STAGE);
+}
 #define KP_DIGITS            4
 
 static bool          s_known;           // this copy's survivor has read the note
@@ -95,8 +102,14 @@ static bool kp_here(unsigned char room)
 
 void zm_access_new_game(void)
 {
+#ifdef QUICK_DEBUG
+    // Quick testing: the elevator powered and the keypad door open from the start.
+    Flg_on((int)g_ScenarioFlags2, ZM_FLAG2_ELEVATOR_POWER);
+    Flg_on((int)g_ScenarioFlags2, ZM_FLAG2_KEYPAD_OPEN);
+#else
     FUN_00473f10((int*)g_ScenarioFlags2, ZM_FLAG2_ELEVATOR_POWER);
     FUN_00473f10((int*)g_ScenarioFlags2, ZM_FLAG2_KEYPAD_OPEN);
+#endif
     s_known = false;
     s_keypad = false;
     s_len = 0;

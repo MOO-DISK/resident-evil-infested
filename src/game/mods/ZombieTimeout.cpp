@@ -82,7 +82,7 @@ static bool to_seed_ok(const short* a)
 bool zm_timeout_active(unsigned int now)
 {
     if (!s_active) return false;
-    unsigned int limit = s_durationMs + (zm_game_role() == ZM_NET_ZOMBIE ? 0u : ZM_TIMEOUT_SLACK_MS);
+    unsigned int limit = s_durationMs + (zm_net_role() == ZM_NET_ZOMBIE ? 0u : ZM_TIMEOUT_SLACK_MS);
     return now - s_startMs < limit;
 }
 
@@ -92,18 +92,14 @@ static unsigned int to_left_ms(void)
     return gone >= s_durationMs ? 0 : s_durationMs - gone;
 }
 
-// Every living survivor in a safe room. `self` is this copy's survivor (its
-// own STATE is not in the peer table); -1 on the host.
-static bool to_all_safe(int self)
+// Every living survivor in a safe room - this copy's own too, when it plays
+// one (a survivor's, or an AI director's host).
+static bool to_all_safe(int)
 {
     int living = 0;
-    if (self > 0 && g_playerEntity.health >= 0) {
-        if (!zm_random_room_safe(g_stageId, g_roomId)) return false;
-        living++;
-    }
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        if (i == self || zm_net_char(i) < 0) continue;
-        const ZmNetPeerState* p = zm_net_player(i);
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (zm_net_char(i) < 0) continue;
+        const ZmNetPeerState* p = zm_seat_state(i);
         if (p == NULL || p->dead || p->spectating) continue;
         if (p->transitioning || !zm_random_room_safe(p->stage, p->room)) return false;
         living++;
@@ -117,7 +113,7 @@ static int to_why_not(int self)
     if (!to_on()) return TO_WHY_OFF;
     if (s_used) return TO_WHY_USED;
     if (s_active || zombie_mode_match_over() || zm_net_pause_active()) return TO_WHY_BUSY;
-    int elapsed = zm_game_role() == ZM_NET_ZOMBIE ? zm_survivors_in_ms() : (int)zm_match_elapsed_ms();
+    int elapsed = zm_net_role() == ZM_NET_ZOMBIE ? zm_survivors_in_ms() : (int)zm_match_elapsed_ms();
     if (elapsed < ZM_TIMEOUT_AT_MS) return TO_WHY_EARLY;
     if (!to_all_safe(self)) return TO_WHY_UNSAFE;
     return 0;
@@ -139,10 +135,10 @@ static void to_begin(int caller, unsigned int durationMs)
 void zm_timeout_take(const short* a, int src)
 {
     if (!to_seed_ok(a)) return;
-    if (zm_game_role() == ZM_NET_ZOMBIE) {
-        if (a[0] != TO_REQUEST || src < 1 || src >= ZM_NET_MAX_PLAYERS) return;
+    if (a[0] == TO_REQUEST) {
+        if (zm_net_role() != ZM_NET_ZOMBIE || src < 0 || src >= ZM_NET_MAX_PLAYERS || zm_net_char(src) < 0) return;
         int why = to_why_not(-1);
-        const ZmNetPeerState* p = zm_net_player(src);
+        const ZmNetPeerState* p = zm_seat_state(src);
         if (!why && (p == NULL || p->dead || p->spectating)) why = TO_WHY_UNSAFE;
         if (why) {
             zm_net_send_event_to(src, ZM_EV_TIMEOUT, TO_REFUSE, (short)why, (short)to_seed(),
@@ -189,7 +185,7 @@ void zm_timeout_poll(void)
 {
     if (s_active && !zm_timeout_active(plat_time_ms())) {
         s_active = false;
-        if (zm_game_role() == ZM_NET_ZOMBIE)
+        if (zm_net_role() == ZM_NET_ZOMBIE)
             zm_net_send_event_to(ZM_NET_ALL, ZM_EV_TIMEOUT, TO_END, 0, (short)to_seed(),
                                  (short)(to_seed() >> 16), 0, 0, 0, 0);
         dbg_printf("[timeout] over\n");

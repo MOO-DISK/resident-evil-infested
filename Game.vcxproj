@@ -201,6 +201,7 @@
     <ClCompile Include="src\game\mods\ZombieEconomy.cpp" />
     <ClCompile Include="src\game\mods\ZombieSpawnSpots.cpp" />
     <ClCompile Include="src\game\mods\ZombieTraps.cpp" />
+    <ClCompile Include="src\game\mods\ZombieDirectorAI.cpp" />
     <ClCompile Include="src\game\mods\ZombieReinforcements.cpp" />
     <ClCompile Include="src\game\mods\ZombiePickups.cpp" />
     <ClCompile Include="src\game\mods\ZombieBox.cpp" />
@@ -208,11 +209,14 @@
     <ClCompile Include="src\game\mods\ZombieSpectate.cpp" />
     <ClCompile Include="src\game\mods\ZombieShotgun.cpp" />
     <ClCompile Include="src\game\mods\ZombiePiano.cpp" />
+    <ClCompile Include="src\game\mods\ZombieBumpers.cpp" />
+    <ClCompile Include="src\game\mods\ZombieVoice.cpp" />
     <ClCompile Include="src\game\mods\ZombieTimeout.cpp" />
     <ClCompile Include="src\game\mods\ZombieKeypad.cpp" />
     <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
     <ClCompile Include="src\game\mods\ZombieRoomSync.cpp" />
     <ClCompile Include="src\game\mods\ZombieStatue.cpp" />
+    <ClCompile Include="src\game\mods\ZombieYawn.cpp" />
     <ClCompile Include="src\game\mods\ZombieStats.cpp" />
     <ClCompile Include="src\game\mods\ZombieDrops.cpp" />
     <ClCompile Include="src\game\mods\ZombieMessages.cpp" />
@@ -251,6 +255,8 @@
     <ClInclude Include="src\game\TmdRenderer.h" />
     <ClInclude Include="src\game\entities\EntityCommon.h" />
     <ClInclude Include="src\game\entities\Zombie.h" />
+    <ClInclude Include="src\game\mods\ZombieBumpers.h" />
+    <ClInclude Include="src\game\mods\ZombieBumperBarrier.h" />
     <ClInclude Include="src\game\mods\ZombieMode.h" />
     <ClInclude Include="src\game\mods\ZombieModeInternal.h" />
     <ClInclude Include="src\game\mods\ZombieNet.h" />
@@ -258,6 +264,16 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <Target Name="CopyInfestedAudio" AfterTargets="Build">
+    <ItemGroup>
+      <InfestedBumperVideos Include="$(ProjectDir)infested\video\**\*.mp4" />
+      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\helicopter.wav" Condition="Exists('$(ProjectDir)infested\audio\helicopter.wav')" />
+      <InfestedBumperAudio Include="$(ProjectDir)infested\audio\survive.wav" Condition="Exists('$(ProjectDir)infested\audio\survive.wav')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(InfestedBumperVideos)"
+          DestinationFiles="@(InfestedBumperVideos->'$(TargetDir)infested\video\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" Condition="'@(InfestedBumperVideos)' != ''" />
+    <Copy SourceFiles="@(InfestedBumperAudio)" DestinationFolder="$(TargetDir)infested\audio"
+          SkipUnchangedFiles="true" Condition="'@(InfestedBumperAudio)' != ''" />
     <MakeDir Directories="$(TargetDir)infested" />
     <Copy SourceFiles="$(ProjectDir)infested\audio\infested.wav"
           DestinationFiles="$(TargetDir)infested\infested.wav"

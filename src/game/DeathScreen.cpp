@@ -440,6 +440,7 @@ die_screen_done:
 // ============================================================================
 void die_state(void)
 {
+    zombie_mode_bumper_leave();   // port-added mod: the ending's frozen frame
     g_SpecialRoomLightState = 0xFFFF;
     g_menu_choice_id        = 0;
     g_spriteAnimIntensity   = 0;

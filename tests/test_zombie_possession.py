@@ -46,6 +46,7 @@ struct ZmMonsterType { unsigned char idleAnim = 1; };
 static ZmMonsterType type;
 static const ZmMonsterType* zm_monster_type(unsigned char) { return &type; }
 static bool zm_is_possessable_id(unsigned char id) { return id <= ENEMY_TYRANT_2; }
+static bool zm_yawn_head(const Entity*) { return false; }   // the Yawn driver (ZombieYawn.cpp): none here
 static bool zombie_mode_is_puppet(const Entity*) { return false; }
 static bool zm_reinforce_hold(const Entity*) { return false; }
 static unsigned int zm_game_time_ms() { return now; }

@@ -636,6 +636,8 @@ void use_room_action_item(void)
             // Item depleted
             if (g_selectedItemId > ITEM_OIL && g_selectedItemId < ITEM_DESK_KEY) { // is door key
                 // Key item depleted — display drop message
+                // Port-added mod: discarded at once, no prompt (mods/ZombieMessages.cpp).
+                if (zombie_mode_key_used_up(slots, index)) return;
                 g_main_state_flags |= MSF_MENU_MODE_KEY_DEPLETED;
                 return;
             }

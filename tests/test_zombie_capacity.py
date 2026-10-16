@@ -30,17 +30,20 @@ enum { ENEMY_HUNTER=6, ENEMY_CHIMERA=9, ENEMY_TYRANT_1=12, ENEMY_TYRANT_2=16,
        ZM_FIRST_SURVIVOR_SLOT=27, ZM_ROSTER_MAX=8, ZM_UID_EXTRA_FIRST=256 };
 struct Entity { unsigned char id; int status_flags, health; };
 static Entity g_EnemiesList[30];
-struct ZmRosterEntry { bool used, alive; unsigned short uid; unsigned char stage, room, id; };
+struct ZmRosterEntry { bool used, alive; unsigned short uid; unsigned char stage, room, id; bool departed; };
 static ZmRosterEntry s_roster[ZM_ROSTER_MAX];
 static unsigned char g_stageId=5, g_roomId=1;
 static bool s_worldOn=true, s_on=true;
 static int cap=3, money=2000, unlock;
 static int zm_world_slot_of_uid(unsigned short uid) { return uid == 256 ? 0 : -1; }
-static int zm_econ_unlock_left_ms(unsigned char) { return unlock; }
+static int zm_econ_locked(unsigned char) { return unlock; }
+static int zm_econ_unlock_bosses(unsigned char) { return 1; }
+static bool zombie_mode_armed() { return true; }
+static bool zm_access_room_elevator(unsigned char, unsigned char) { return false; }
 static int zm_econ_room_cap(unsigned char, unsigned char) { return cap; }
 static int zm_econ_cost(unsigned char) { return 100; }
 static int zm_econ_points() { return money; }
-static void zm_econ_mmss(char* out, int len, int) { snprintf(out,len,"1:00"); }
+static bool zm_yawn_entity(const Entity*) { return false; }
 int zm_world_room_extra_count(unsigned char, unsigned char, bool slots=false);
 int zm_world_room_unspawned(bool slots=false);
 '''
@@ -80,7 +83,7 @@ int main() {
     memset(g_EnemiesList,0,sizeof(g_EnemiesList)); cap=1;
     assert(zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
     money=0; assert(!zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
-    money=2000; unlock=1000;
+    money=2000; unlock=1;
     assert(!zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
     unlock=0;
     s_roster[0] = {true,true,257,5,1,0};
@@ -104,7 +107,7 @@ def main():
         ("ZombieEconomy.cpp", ["zm_econ_monster_slots"]),
         ("ZombieWorld.cpp", ["zm_world_room_extra_count", "zm_world_room_unspawned"]),
         ("ZombieMode.cpp", ["zm_room_monster_count", "zm_room_monster_slots"]),
-        ("ZombieEconomy.cpp", ["zm_econ_can_place"]),
+        ("ZombieEconomy.cpp", ["zm_econ_room_fits", "zm_econ_can_place"]),
     ]:
         for name in names:
             source += function("src/game/mods/" + filename, name)

@@ -7,6 +7,7 @@
 // Visual-only cue; called when a Tyrant arms its claw ribbon.
 void zombie_mode_tyrant_trail_started(const struct Entity* e, unsigned short frames);
 #include "../../Globals.h"
+#include "ZombieBumpers.h"
 
 // ============================================================================
 // ZombieMode.h - port-added "play as a zombie" mod ([Mods] PlayInfested=1)
@@ -151,6 +152,10 @@ bool zombie_mode_armed(void);
 // not the PC unlock's endless one (PlayerAnimations.cpp weapon_autoaim_check
 // / the hold-fire, MainMenu.cpp's count).
 bool zombie_mode_ingram_finite(unsigned char itemId);
+// A survivor's reload button (PlayerAnimations.cpp's gun aim hold): the
+// cancel/run press while aiming plays the empty gun's reload (behavior 0x18)
+// on a part-loaded one and tops it up, instead of switching targets.
+bool zombie_mode_manual_reload(void);
 // cmd_scd_event_create: true = this event script is a story scene (a voice
 // line or a movie in it) or a monster's entrance (takes the control and drives
 // an enemy); do not start it - its flag writes are made instead.
@@ -214,6 +219,38 @@ bool zombie_mode_cut_skip(void);
 void zombie_mode_cut_closeup(unsigned char prevCam);
 void zombie_mode_cut_restored(void);
 void zombie_mode_message_frame(void);
+// Door keys (ZombieMessages.cpp). door_try_enter, once the key turned: _key_turned
+// uses it up at once instead of when its message closes. use_room_action_item and
+// the message "use" action, a key's last use: _key_used_up(slots, index) discards
+// it (true) instead of the inventory's "This key is useless now. Discard?".
+void zombie_mode_key_turned(void);
+bool zombie_mode_key_used_up(unsigned char* slots, int index);
+// check_action_object, before an Action press runs its entry: true = refuse it
+// (an examine/reveal still running, or its close-up still up). cmd_room_action:
+// true = drop the call (an event cut short by a hit or grab no longer offers
+// its pickup).
+bool zombie_mode_action_busy(const unsigned char* entry);
+// cmd_bit_op, a script turning the letterbox on (main-state MSF_INTENSITY_RAMP):
+// false = drop it (an examine or a reveal - ZombieMessages.cpp).
+bool zombie_mode_event_letterbox(void);
+bool zombie_mode_event_room_action_skip(unsigned char actionIdx);
+// cmd_room_action, before a handler runs on `entry`: true = drop the call (the
+// attic's key or crest, held back while Yawn is in the room - ZombieYawn.cpp).
+bool zombie_mode_yawn_guards(const unsigned char* entry, unsigned char handler);
+// Yawn's bite (Yawn.cpp): true while a monster update's target is another
+// copy's survivor swapped into the player entity - the bite's story flags
+// (Yawn's poison) are that copy's, not this one's.
+bool zombie_mode_target_remote(void);
+// Yawn's two moves of the mode (Yawn.cpp actions 9 and 10, ZombieYawn.cpp):
+// the selectors ask which to start (0 none, 9 the thrash, 10 the slam), and
+// each strikes every survivor within `radius` of any of `points` (x, y, z) -
+// the local one and, through PHURT, the other copies'.
+int  zombie_mode_yawn_special(void);
+// door_try_enter, an unlocked door about to be taken: true = held back (a
+// boss room's door, the whole team gathered and asked first - ZombieYawn.cpp).
+bool zombie_mode_boss_door_gate(const unsigned char* record);
+bool zombie_mode_boss_prompt_answer(bool yes);
+void zombie_mode_yawn_area_hit(const int (*points)[3], int count, int radius, int damage);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,
 // 2 Barry), else `base`. EntityModelLoader.cpp.
@@ -253,6 +290,10 @@ int  zombie_mode_inventory_portrait(void);
 bool zombie_mode_hold_death(void);
 // die_state: the match is over - the mode's own end screen ran, no death screen.
 bool zombie_mode_match_over(void);
+// PlayerPad_Update, after its edge detection: the raw pad bits a held
+// modifier takes for itself this frame (the survivors' voice lines,
+// ZombieVoice.cpp) - dropped before the remap. 0: the pad is left alone.
+DWORD zombie_mode_pad_filter(DWORD rawHeld, DWORD rawPressed);
 // apply_weapon_damage, after a hit (the end-of-match stats, ZombieStats.cpp).
 void zombie_mode_on_weapon_hit(const Entity* enemy, short healthBefore);
 // LoadEntityModel, after the player's EMD: a borrowed character takes Chris's
@@ -354,6 +395,9 @@ void zombie_mode_drop_label(short x, short y);
 bool zombie_mode_shots_penetrate(void);
 // Add_speedXZ on the player: Enrico moves 10% further.
 int  zombie_mode_player_move_speed(int speed);
+// Enrico: double knife damage, and half the zombie's bite-loop timer.
+int zombie_mode_player_weapon_damage(unsigned char weaponId, int damage);
+int zombie_mode_player_zombie_grab_time(int frames);
 // game_loop, before its menu check: Richard's radio (OPTIONS opens the map).
 void zombie_mode_survivor_input(void);
 // menu_item_use_heal's result: Rebecca's spray heals the survivors near her
@@ -366,3 +410,7 @@ bool zombie_mode_grab_mash(char* reduce);
 
 // zombie_attack_withdraw: a surviving victim pushes nearby zombies back too.
 void zombie_mode_grab_push_off(void);
+
+// Cinematic completion: start the match/results clocks after playback.
+void zm_bumper_intro_clock_release(void);
+void zm_bumper_end_clock_release(void);

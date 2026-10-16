@@ -955,3 +955,107 @@ void plat_video_set_window_mode(BOOL forVideo)
         SetWindowLongA(g_hWnd, GWL_STYLE, style & 0xFFFAFFFF | 0xC00000);
     }
 }
+
+
+// Silent independent Media Foundation readers for the Infested panel compositor.
+struct PlatVideoClip {
+    IMFSourceReader* reader = NULL;
+    int width = 0, height = 0;
+    LONG stride = 0;
+    LONGLONG origin = -1, timestamp = -1;
+    bool eof = false;
+    unsigned char* rgba = NULL;
+};
+void plat_video_clip_close(PlatVideoClip* clip)
+{
+    if (!clip) return;
+    if (clip->reader) clip->reader->Release();
+    free(clip->rgba);
+    delete clip;
+}
+PlatVideoClip* plat_video_clip_open(const char* path)
+{
+    if (!mf::Init()) return NULL;
+    WCHAR wide[1024];
+    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wide, 1024)) return NULL;
+    PlatVideoClip* clip = new PlatVideoClip;
+    IMFAttributes* attrs = NULL;
+    MFCreateAttributes(&attrs, 1);
+    if (attrs) attrs->SetUINT32(MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, TRUE);
+    HRESULT hr = MFCreateSourceReaderFromURL(wide, attrs, &clip->reader);
+    if (attrs) attrs->Release();
+    IMFMediaType* type = NULL;
+    UINT32 w = 0, h = 0;
+    if (SUCCEEDED(hr)) hr = clip->reader->GetNativeMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &type);
+    if (type) { MFGetAttributeSize(type, MF_MT_FRAME_SIZE, &w, &h); type->Release(); type = NULL; }
+    if (FAILED(hr) || !w || !h || w > 4096 || h > 4096 || !mf::SetVideoType(clip->reader, w, h)) {
+        plat_video_clip_close(clip); return NULL;
+    }
+    clip->width = (int)w; clip->height = (int)h;
+    clip->stride = -(LONG)w * 4; // RGB32's default is bottom-up.
+    clip->reader->SetStreamSelection(MF_SOURCE_READER_ALL_STREAMS, FALSE);
+    clip->reader->SetStreamSelection(MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
+    if (SUCCEEDED(clip->reader->GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM, &type))) {
+        UINT32 stride;
+        if (SUCCEEDED(type->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride))) clip->stride = (LONG)stride;
+        type->Release();
+    }
+    clip->rgba = (unsigned char*)malloc((size_t)w * h * 4);
+    if (!clip->rgba) { plat_video_clip_close(clip); return NULL; }
+    const unsigned char* pixels; int fw, fh;
+    if (!plat_video_clip_frame(clip, 0, &pixels, &fw, &fh)) { plat_video_clip_close(clip); return NULL; }
+    return clip;
+}
+BOOL plat_video_clip_frame(PlatVideoClip* clip, int timeMs,
+                          const unsigned char** rgba, int* width, int* height)
+{
+    if (!clip || !rgba || !width || !height) return FALSE;
+    LONGLONG target = (LONGLONG)timeMs * 10000;
+    while (!clip->eof && (clip->timestamp < 0 || clip->timestamp < target)) {
+        DWORD flags = 0; LONGLONG ts = 0;
+        IMFSample* sample = NULL;
+        HRESULT hr = clip->reader->ReadSample(MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, NULL, &flags, &ts, &sample);
+        if (FAILED(hr) || (flags & (MF_SOURCE_READERF_ENDOFSTREAM | MF_SOURCE_READERF_ERROR))) {
+            clip->eof = true;
+            if (sample) sample->Release();
+            break;
+        }
+        if (!sample) continue;
+        IMFMediaBuffer* buffer = NULL;
+        hr = sample->ConvertToContiguousBuffer(&buffer);
+        if (SUCCEEDED(hr)) {
+            IMF2DBuffer* twoD = NULL;
+            BYTE* data = NULL; LONG pitch = clip->stride;
+            bool locked2D = SUCCEEDED(buffer->QueryInterface(IID_PPV_ARGS(&twoD))) &&
+                            SUCCEEDED(twoD->Lock2D(&data, &pitch));
+            DWORD bytes = 0;
+            bool locked = locked2D;
+            if (!locked) {
+                locked = SUCCEEDED(buffer->Lock(&data, NULL, &bytes));
+                if (locked && bytes < (DWORD)((size_t)abs(pitch) * clip->height)) {
+                    buffer->Unlock(); locked = false;
+                }
+                if (locked && pitch < 0) data += (size_t)(clip->height - 1) * (-pitch);
+            }
+            if (locked) {
+                for (int y = 0; y < clip->height; ++y) {
+                    const BYTE* src = data + (ptrdiff_t)y * pitch;
+                    unsigned char* dst = clip->rgba + (size_t)y * clip->width * 4;
+                    for (int x = 0; x < clip->width; ++x) {
+                        dst[4*x] = src[4*x+2]; dst[4*x+1] = src[4*x+1];
+                        dst[4*x+2] = src[4*x]; dst[4*x+3] = 255;
+                    }
+                }
+                if (locked2D) twoD->Unlock2D(); else buffer->Unlock();
+                if (clip->origin < 0) clip->origin = ts;
+                clip->timestamp = ts - clip->origin;
+            } else clip->eof = true;
+            if (twoD) twoD->Release();
+            buffer->Release();
+        } else clip->eof = true;
+        sample->Release();
+    }
+    *rgba = clip->timestamp >= 0 ? clip->rgba : NULL;
+    *width = clip->width; *height = clip->height;
+    return *rgba && !(clip->eof && target > clip->timestamp);
+}

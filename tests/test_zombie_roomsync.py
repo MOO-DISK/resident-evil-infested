@@ -36,6 +36,7 @@ static ZmNetPeerState peers[4];
 const ZmNetPeerState* zm_net_player(int p) { return p==self ? nullptr : &peers[p]; }
 bool zombie_mode_armed() { return true; }
 int zm_game_role() { return role; }
+int zm_net_char(int p) { return p==0 ? -1 : 0; }
 int zm_net_self() { return self; }
 unsigned int zm_game_time_ms() { return now; }
 struct Msg { short a[8]; };

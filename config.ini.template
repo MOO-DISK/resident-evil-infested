@@ -55,6 +55,10 @@ RunInBackground=0
 ; 1 = enables the infested game mode where you can play against others in a race
 ; to escape the mansion
 PlayInfested=1
+; Default HOST - AI DIRECTOR difficulty: 1 easy, 2 normal, 3 hard,
+; 4 nightmare, 5 hell on earth. 0 uses normal as the lobby default.
+; Human director matches never run the AI.
+AiDirector=0
 
 [Net]
 ; Two-player zombie mode (NEW GAME -> HOST / JOIN, with PlayInfested=1 on both

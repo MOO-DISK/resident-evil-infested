@@ -49,11 +49,16 @@ int game_loop(void)
     // 0x00480b30-0x00480b51: Wait for any pending menu/message to close
     // (at a new game, the opening narration). Port-added mod: the zombie mode
     // keeps the link fed meanwhile, or the host counts a survivor still
-    // reading it as disconnected (mods/ZombieReconnect.cpp).
-    while ((g_menu_choice_id & 0x80) != 0) {
+    // reading it as disconnected (mods/ZombieReconnect.cpp), and fetches the
+    // roster for the intro's slices - and holds until the roster is settled
+    // ahead of the narration (mods/ZombieBumpers.cpp).
+    while ((g_menu_choice_id & 0x80) != 0 || zombie_mode_narration_held()) {
         zombie_mode_reconnect_wait();
+        zombie_mode_bumper_roster_poll();
         Task_sleep(1);
     }
+
+    zombie_mode_bumper_intro();
 
     // 0x00480b53: Mark gameplay active
     g_main_state_flags |= MSF_GAMEPLAY_ACTIVE;

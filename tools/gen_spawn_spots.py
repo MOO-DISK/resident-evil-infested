@@ -18,13 +18,31 @@ How a spot is found, per room:
   * candidates: floor cells at least 2000 units from every door zone and
     arrival point of the room.
   * the three: farthest-point picks - the candidate furthest from the doors,
-    then each next one furthest from those already picked.
+    then each next one furthest from those already picked - kept as far as
+    the room's floor allows of ITEM_CLEAR from the room's own pickups (item_model_set: its pickup zone and, placed
+    in room coordinates, its model), while the room has floor that far. The
+    randomizer's extra pickups lie on these spots (ZombieRandom.cpp), so one
+    must not end up among the room's own items - the boiler room's spot on
+    its four green herbs was all but out of reach.
   * the height: the most common arrival height in the room.
 
 The cap is the room's floor area: the cells of the flood fill a camera shows
 (CAP_STEPS, smallest first) - the main hall (some 10000 cells) holds 5, a
 dead-end corridor 1. EXCLUDED_AREAS and CAP_OVERRIDES hold the reviewed
 exceptions (the piano bar's alcove, the bathroom).
+
+The AI director's placement spots (g_zmPlaceSpots, ZombieDirectorAI.cpp):
+up to PLACE_SPOTS per room from the same floor, so it can choose where in a
+room a monster stands, not only the room:
+  * candidates: shown floor cells off the steps, at least PLACE_DOOR_CLEAR
+    from every door zone (nothing blocks a doorway) and PLACE_STUN_CLEAR from
+    every arrival point - outside the door stun's reach (ZombieMode.cpp,
+    ZM_STUN_RADIUS 2200), which the AI must never trigger;
+  * the spots: farthest-point picks again, the first furthest from the doors,
+    until PLACE_SPOTS or no candidate lies PLACE_SPACING from the others;
+  * each spot's openness: its floor cells within PLACE_OPEN_CELLS - low in a
+    corridor or a gap between furniture, high in the middle of a hall.
+The doors themselves are not stored: the game reads them from the RDT.
 
 Run from the repo root:  python3 tools/gen_spawn_spots.py [assets/USA]
 """
@@ -43,6 +61,12 @@ MANSION_STAGES = [0, 1, 5, 6]
 CELL = 200
 BODY = 400
 DOOR_CLEAR = 2000
+PLACE_SPOTS = 16
+PLACE_DOOR_CLEAR = 1000
+PLACE_STUN_CLEAR = 2700
+PLACE_SPACING = 1000
+ITEM_CLEAR = (4000, 3000, 2000, 1500)      # the most a room's floor allows
+PLACE_OPEN_CELLS = 3            # a 7 x 7 cell square around the spot: openness 1..49
 # (floor cells at least, cap): the first row a room reaches.
 CAP_STEPS = [(6000, 5), (1500, 4), (700, 3), (250, 2), (0, 1)]
 
@@ -110,6 +134,29 @@ def doors_of(b):
                 zx, zz, zw, zd = struct.unpack_from('<4H', r, 0)
                 ax, ay, az = struct.unpack_from('<HhH', r, 0x0E)
                 out.append((zx, zz, zw, zd, r[0x0D], r[0x0B], ax, ay, az))
+            q += 1 + W[op]
+        p = e
+    return out
+
+
+def items_of(b):
+    """item_model_set records of the init SCD: (zone x, z, w, d, x, z or None) - the
+    model's position only when it is in room coordinates (no parent)."""
+    out = []
+    p = struct.unpack_from('<I', b, 0x60)[0]
+    while p + 2 <= len(b):
+        bs = struct.unpack_from('<H', b, p)[0]
+        if bs == 0:
+            break
+        q, e = p + 2, p + bs
+        while q < e:
+            op = b[q]
+            if op >= len(W):
+                break
+            if op == 0x18 and q + 0x1A <= len(b):
+                zx, zz, zw, zd = struct.unpack_from('<4H', b, q + 2)
+                x, z = struct.unpack_from('<hxxh', b, q + 0x0E)
+                out.append((zx, zz, zw, zd, x if b[q + 0x0D] == 0xFF else None, z))
             q += 1 + W[op]
         p = e
     return out
@@ -260,6 +307,16 @@ def spots_for(root, stage, room, arrivals):
         cand = [(x, z) for x, z in floor if not in_steps(x, z, steps)] or floor
     if not cand:
         return None
+    # Clear of the room's own pickups (the randomizer's extra ones lie here).
+    items = items_of(b)
+    def item_gap(x, z):
+        g = min([rect_dist(x, z, i[0], i[1], i[2], i[3]) for i in items] or [99999])
+        return min([g] + [((x - i[4]) ** 2 + (z - i[5]) ** 2) ** 0.5 for i in items if i[4] is not None])
+    for need in ITEM_CLEAR:
+        clear = [(x, z) for x, z in cand if item_gap(x, z) >= need]
+        if clear:
+            cand = clear
+            break
     heights = collections.Counter(a[1] for a in seeds)
     y = heights.most_common(1)[0][0]
     picks = [max(cand, key=lambda p: door_gap(*p))]
@@ -270,9 +327,28 @@ def spots_for(root, stage, room, arrivals):
         picks.append(nxt)
     while len(picks) < 3:
         picks.append(picks[-1])
+    # The AI director's spots.
+    cells = set(key(x, z) for x, z in floor)
+    def stun_gap(x, z):
+        return min([((x - a[0]) ** 2 + (z - a[2]) ** 2) ** 0.5 for a in seeds] or [99999])
+    near = [(x, z) for x, z in floor if not in_steps(x, z, steps) and door_gap(x, z) >= PLACE_DOOR_CLEAR
+            and stun_gap(x, z) >= PLACE_STUN_CLEAR]
+    place = []
+    if near:
+        place.append(max(near, key=lambda p: door_gap(*p)))
+        while len(place) < PLACE_SPOTS:
+            nxt = max(near, key=lambda p: min(((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) for q in place))
+            if min(((nxt[0] - q[0]) ** 2 + (nxt[1] - q[1]) ** 2) for q in place) < PLACE_SPACING ** 2:
+                break
+            place.append(nxt)
+    def openness(x, z):
+        kx, kz = key(x, z)
+        return sum((kx + i, kz + j) in cells for i in range(-PLACE_OPEN_CELLS, PLACE_OPEN_CELLS + 1)
+                   for j in range(-PLACE_OPEN_CELLS, PLACE_OPEN_CELLS + 1))
+    place = [(x, z, openness(x, z)) for x, z in place]
     if (stage, room) in CAP_OVERRIDES:
-        return [(x, y, z) for x, z in picks], '%d | ZM_SPAWN_CAP_FIXED' % CAP_OVERRIDES[(stage, room)]
-    return [(x, y, z) for x, z in picks], '%d' % cap_of(len(floor))
+        return [(x, y, z) for x, z in picks], '%d | ZM_SPAWN_CAP_FIXED' % CAP_OVERRIDES[(stage, room)], y, place
+    return [(x, y, z) for x, z in picks], '%d' % cap_of(len(floor)), y, place
 
 
 def main():
@@ -295,7 +371,7 @@ def main():
         for room in range(0x20):
             s = spots_for(root, stage, room, arrivals)
             if s:
-                rows.append((stage, room, s[0], s[1]))
+                rows.append((stage, room, s[0], s[1], s[2], s[3]))
     out = []
     out.append('// GENERATED by tools/gen_spawn_spots.py - do not edit by hand.')
     out.append('// Three monster spawn spots per mansion room (see the tool for how they')
@@ -305,14 +381,28 @@ def main():
     out.append('#include "ZombieModeInternal.h"')
     out.append('')
     out.append('const ZmSpawnSpots g_zmSpawnSpots[] = {')
-    for stage, room, s, cap in rows:
+    for stage, room, s, cap, y, place in rows:
         pts = ', '.join('{ %d, %d, %d }' % p for p in s)
         out.append('    { %d, 0x%02X, %s, { %s } },' % (stage, room, cap, pts))
     out.append('};')
     out.append('const int g_zmSpawnSpotCount = (int)(sizeof(g_zmSpawnSpots) / sizeof(g_zmSpawnSpots[0]));')
+    out.append('')
+    out.append('// The AI director\'s placement spots (ZombieDirectorAI.cpp): up to %d a room,' % PLACE_SPOTS)
+    out.append('// { x, z, openness } - its floor cells in the %d x %d square around it.'
+               % (PLACE_OPEN_CELLS * 2 + 1, PLACE_OPEN_CELLS * 2 + 1))
+    out.append('const ZmPlaceSpots g_zmPlaceSpots[] = {')
+    total = 0
+    for stage, room, s, cap, y, place in rows:
+        if not place:
+            continue
+        total += len(place)
+        pts = ', '.join('{ %d, %d, %d }' % p for p in place)
+        out.append('    { %d, 0x%02X, %d, %d, { %s } },' % (stage, room, len(place), y, pts))
+    out.append('};')
+    out.append('const int g_zmPlaceSpotCount = (int)(sizeof(g_zmPlaceSpots) / sizeof(g_zmPlaceSpots[0]));')
     path = 'src/game/mods/ZombieSpawnSpots.cpp'
     open(path, 'w').write('\n'.join(out) + '\n')
-    print('%d rooms -> %s' % (len(rows), path))
+    print('%d rooms, %d AI placement spots -> %s' % (len(rows), total, path))
 
 
 if __name__ == '__main__':

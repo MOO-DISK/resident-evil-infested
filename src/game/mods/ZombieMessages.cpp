@@ -1,4 +1,5 @@
 #include "ZombieModeInternal.h"
+#include "../PrintText.h"
 #include "../../DebugPrint.h"
 
 extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473ef0 CmdFunctions.cpp
@@ -45,7 +46,10 @@ extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473
 // A passive message gives way to a different one at once, and to a door or
 // the inventory opening (game_loop waits on g_menu_choice_id 0x80 before
 // either). The same message is not restarted while it is up, nor for
-// ZM_MSG_REPEAT_MS after: walk-in zones probe every frame.
+// ZM_MSG_REPEAT_MS after: walk-in zones probe every frame. The key turning
+// (door_try_enter's global 0x03, naming g_selectedItemId) is exempt: one id
+// for every key, and each unlock is new - two doors opened in quick
+// succession lost the second's message.
 // ============================================================================
 
 #define ZM_MSG_BASE_MS     700   // reading time per page: this
@@ -53,6 +57,7 @@ extern void Flg_on(int baseAddr, unsigned int bitIndex);              // 0x00473
 #define ZM_MSG_MIN_MS     1200   //   within these bounds
 #define ZM_MSG_MAX_MS     4000
 #define ZM_MSG_REPEAT_MS  1000
+#define ZM_MSG_KEY_TURNED 0x43      // global message 0x03 (msg id & 0x7F): "unlocked using the %item"
 #define ZM_MSG_PROMPT_MASK 0x0140   // what a Yes/No prompt clears
 
 
@@ -64,6 +69,8 @@ static unsigned int   s_waitStart = 0;     // when the shown page finished typin
 static signed char    s_evtSlot = -1;      // event slot whose SCD command is running
 static bool           s_examine[8];        // per event slot: an examine event (or a reveal)
 static bool           s_reveal[8];         // per event slot: a reveal played as a close-up
+static unsigned char  s_script[8];         // per event slot: the script it runs
+static bool           s_cut[8];            // per event slot: cut short by a hit, grab or death
 
 // Reveals: scenes that take the control, cut the camera and pose or place
 // the player to show what a puzzle changed. In the mode they play like an
@@ -111,6 +118,7 @@ static bool zm_is_reveal(int script)
 static int            s_closeSlot = -1;    // the event that cut to a close-up
 static unsigned char  s_closeCam, s_prevCam, s_closeStage, s_closeRoom;
 static bool           s_closeReleased = false;
+static bool           s_closeUp = false;   // a close-up camera is on screen, not yet cut back from
 static unsigned short s_lastId = 0xFFFF;   // the last passive message, and when it ended
 static unsigned int   s_lastEnd = 0;
 
@@ -159,7 +167,8 @@ static void zm_msg_finish(void)
 
 bool zombie_mode_message_replace(unsigned short msgId)
 {
-    if (!s_passive || (msgId & 0x7F) == (s_id & 0x7F)) return false;
+    if (!s_passive) return false;
+    if ((msgId & 0x7F) == (s_id & 0x7F) && (msgId & 0x7F) != ZM_MSG_KEY_TURNED) return false;
     g_menu_choice_id &= 0x7F;
     zm_msg_finish();
     return true;
@@ -167,7 +176,7 @@ bool zombie_mode_message_replace(unsigned short msgId)
 
 bool zombie_mode_message_repeat(unsigned short msgId, unsigned short pause)
 {
-    if (!zombie_mode_armed() || pause == 0) return false;
+    if (!zombie_mode_armed() || pause == 0 || (msgId & 0x7F) == ZM_MSG_KEY_TURNED) return false;
     return (msgId & 0x7F) == (s_lastId & 0x7F) &&
            zm_game_time_ms() - s_lastEnd < ZM_MSG_REPEAT_MS;
 }
@@ -201,6 +210,8 @@ void zombie_mode_event_init(int slot, int script)
     const bool inherit = zombie_mode_armed() && s_evtSlot >= 0 && s_evtSlot < 8 && s_reveal[s_evtSlot];
     s_reveal[slot] = inherit || (zombie_mode_armed() && zm_is_reveal(script));
     s_examine[slot] = s_reveal[slot] || (zombie_mode_armed() && zm_evt_is_examine(script));
+    s_script[slot] = (unsigned char)script;
+    s_cut[slot] = false;
     if (slot == s_closeSlot) s_closeSlot = -1;
     if (s_examine[slot]) dbg_printf("[msg] event %d (slot %d) is an %s event\n", script, slot,
                                     s_reveal[slot] ? "reveal" : "examine");
@@ -221,7 +232,18 @@ void zombie_mode_cut_closeup(unsigned char prevCam)
     if (!zm_in_examine()) return;
     // A scene cutting from one close-up to the next still returns to the
     // camera before the first.
-    if (!zm_same_close(s_closeSlot, s_evtSlot)) s_prevCam = prevCam;
+    if (!zm_same_close(s_closeSlot, s_evtSlot)) {
+        // Locked again from its own close-up, never cut back from (a scene
+        // started over while it ran): the camera to go back to is still the
+        // room's. Taking the close-up's own left the camera stuck on it.
+        if (s_closeUp && prevCam == s_closeCam && g_stageId == s_closeStage && g_roomId == s_closeRoom) {
+            g_cutId = s_prevCam;
+            dbg_printf("[msg] close-up %d locked again: back to camera %d kept\n", (int)prevCam, (int)s_prevCam);
+        } else {
+            s_prevCam = prevCam;
+        }
+    }
+    s_closeUp = true;
     s_closeSlot = s_evtSlot;
     s_closeCam = g_roomCameraId;
     s_closeStage = g_stageId;
@@ -231,6 +253,7 @@ void zombie_mode_cut_closeup(unsigned char prevCam)
 
 void zombie_mode_cut_restored(void)
 {
+    s_closeUp = false;
     if (zm_in_examine() && zm_same_close(s_closeSlot, s_evtSlot) && !s_closeReleased) s_closeSlot = -1;
 }
 
@@ -239,6 +262,7 @@ void zombie_mode_cut_restored(void)
 static void zm_close_release(void)
 {
     extern void cut_set(void);
+    s_closeUp = false;
     g_main_state_flags &= ~MSF_CAMERA_LOCK;
     if (g_RdtPointer == NULL || g_RdtPointer->cam_switch_zones == NULL) return;
     const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
@@ -254,28 +278,90 @@ static void zm_close_release(void)
     dbg_printf("[msg] close-up %d left for camera %d\n", (int)s_closeCam, (int)g_roomCameraId);
 }
 
+static void zm_letterbox_frame(void);
+static void zm_key_discard_frame(void);
+static unsigned char s_discardedKey = 0;   // a key used up, its message not shown yet
+
 void zombie_mode_message_frame(void)
 {
-    if (s_closeSlot < 0) return;
-    if (!zombie_mode_armed() || g_stageId != s_closeStage || g_roomId != s_closeRoom ||
-        !zm_close_running()) {
+    if (!zombie_mode_armed()) {
         s_closeSlot = -1;
+        s_closeUp = false;
+        s_discardedKey = 0;
+        return;
+    }
+    zm_letterbox_frame();
+    zm_key_discard_frame();
+    // Hit, grabbed or dead: every examine or reveal still running is cut
+    // short - it plays on (a puzzle's scene still finishes) but offers no
+    // pickup afterwards (zombie_mode_event_room_action_skip), and its
+    // close-up gives the camera back below.
+    const bool attacked = g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0;
+    if (attacked) {
+        for (int i = 0; i < 8; i++) {
+            if (s_cut[i] || !s_examine[i] || g_ScdEventTable[i].active == 0) continue;
+            s_cut[i] = true;
+            dbg_printf("[msg] event %d (slot %d) cut short: survivor attacked\n", (int)s_script[i], i);
+        }
+    }
+    if (s_closeSlot < 0) return;
+    if (g_stageId != s_closeStage || g_roomId != s_closeRoom || !zm_close_running()) {
+        s_closeSlot = -1;
+        s_closeUp = false;
         return;
     }
     if (s_closeReleased) return;
     // Someone else has the camera now: not ours to give back.
     if ((g_main_state_flags & MSF_CAMERA_LOCK) == 0 || g_roomCameraId != s_closeCam) {
         s_closeSlot = -1;
+        s_closeUp = false;
         return;
     }
-    // Hit, grabbed or dead: back to the survivor at once.
-    const bool attacked = g_playerEntity.isBeingAttackedFlag != 0 || g_playerEntity.health < 0;
     if (!attacked) {
         if ((g_message_flags & 0x0101) != 0x0101) return;
         if ((g_PlayerDpadHeld & (ZM_PAD_FORWARD | ZM_PAD_BACK | ZM_PAD_TURN_A | ZM_PAD_TURN_B)) == 0) return;
     }
     s_closeReleased = true;
     zm_close_release();
+}
+
+// An Action press while a scene is playing. The original takes the control
+// for these, so a press cannot reach them; in the mode an examine or a
+// reveal leaves it with the survivor, and each press started its scene over
+// in the same slot - the close-up locked again from itself (a stuck camera)
+// and every run asked for the pickup once more. So a press does not start an
+// examine or reveal that is still running, and while its close-up is on
+// screen no other pickup (handler 4) or scene (handler 9) starts either.
+bool zombie_mode_action_busy(const unsigned char* entry)
+{
+    if (!zombie_mode_armed() || entry == NULL) return false;
+    const unsigned char handler = entry[0];
+    // The attic's key or crest and its close-up, while Yawn is there.
+    if (zombie_mode_yawn_guards(entry, handler)) return true;
+    if (handler != 4 && handler != 9) return false;
+    if (s_closeSlot >= 0 && s_closeUp && !s_closeReleased) {
+        dbg_printf("[msg] action (handler %d) refused: close-up still up\n", (int)handler);
+        return true;
+    }
+    if (handler != 9) return false;
+    const int slot = entry[2], script = entry[4];
+    for (int i = 0; i < 8; i++) {
+        if (g_ScdEventTable[i].active == 0 || !s_examine[i]) continue;
+        if (i != slot && s_script[i] != script) continue;
+        dbg_printf("[msg] event %d refused: slot %d still runs event %d\n", script, i, (int)s_script[i]);
+        return true;
+    }
+    return false;
+}
+
+// cmd_room_action from an event cut short by a hit: no take screen (4) or
+// item box (8) opens afterwards. The item stays where it lies.
+bool zombie_mode_event_room_action_skip(unsigned char actionIdx)
+{
+    if (!zombie_mode_armed() || s_evtSlot < 0 || s_evtSlot >= 8 || !s_cut[s_evtSlot]) return false;
+    if (actionIdx != 4 && actionIdx != 8) return false;
+    dbg_printf("[msg] event %d (slot %d): pickup dropped, cut short\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
+    return true;
 }
 
 unsigned short zombie_mode_message_pause(unsigned short msgId, unsigned short pause,
@@ -380,6 +466,40 @@ unsigned int zombie_mode_event_flag_clear(unsigned int mask)
     return mask & ~(unsigned int)ZM_MSG_WORLD_FLAGS;
 }
 
+// The letterbox (main-state MSF_INTENSITY_RAMP, MainLoop.cpp's bars) of the
+// scenes played as a close-up stays off. The mode runs them on without the
+// control - cut short by a hit, their later cuts dropped, a reveal's group
+// ending in an event that never comes - so the command that takes the bars
+// away again (bit_op 05 0F 01) can be left unrun: the armor room's display
+// case (ROOM7050 event 1), the large gallery's solve (ROOM6170 event 20, whose
+// bars event 21 takes away) and the rest of kReveals and the examines.
+// Other scenes keep theirs (zm_letterbox_frame is their net).
+bool zombie_mode_event_letterbox(void)
+{
+    if (!zm_in_examine()) return true;
+    dbg_printf("[msg] event %d (slot %d): letterbox left off\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
+    return false;
+}
+
+// Only scenes (SCD events) turn the letterbox on - no room's per-frame script
+// does. Up with no event running for a second (a skipped scene's flag replay
+// that turned it on and not off, a scene the mode ended early), it goes.
+#define ZM_LETTERBOX_IDLE_FRAMES 30
+static void zm_letterbox_frame(void)
+{
+    static int idle = 0;
+    bool running = false;
+    for (int i = 0; i < 8 && !running; i++) running = g_ScdEventTable[i].active != 0;
+    if ((g_main_state_flags & MSF_INTENSITY_RAMP) == 0 || running) {
+        idle = 0;
+        return;
+    }
+    if (++idle < ZM_LETTERBOX_IDLE_FRAMES) return;
+    idle = 0;
+    g_main_state_flags &= ~MSF_INTENSITY_RAMP;
+    dbg_printf("[msg] letterbox left up with no scene running: taken away\n");
+}
+
 // The event VM's state 1, a reveal's command on the player: the look-at
 // (0x81 / 0x82), the pose (0x83 / 0x84 / 0x85), the stand-back (0x86), the
 // flags (0x87), the timer (0x88) and the frame (0x89 / 0x8A) are not applied -
@@ -468,6 +588,51 @@ void zm_message_show(const unsigned char* text)
     s_customText = text;
     set_message_display(0xFB, room ? 0xFF : 0);
     s_customText = NULL;
+}
+
+// ---------------------------------------------------------------------------
+// Door keys. The original takes the key out of the inventory only once the
+// "You have used the key" message closes (check_event_item_usage), and on its
+// last lock opens the inventory to ask "This key is useless now. Discard?".
+// In the mode the message does not hold the survivor, who walks through the
+// door the next frame - the question came up in the room behind it, with the
+// game running. So the key is used up as it turns, and one with no lock left
+// is simply discarded; a message says so once the survivor has the control
+// with no other text up (in the next room, when it walked straight through).
+// ---------------------------------------------------------------------------
+static constexpr auto s_keyDiscarded = STR("The \\i is no\\nlonger useful.\\p You discarded it.");
+
+void zombie_mode_key_turned(void)
+{
+    if (!zombie_mode_armed() || g_eventItemUsedFlag != 1) return;
+    g_eventItemUsedFlag = 0;
+    use_room_action_item();
+}
+
+bool zombie_mode_key_used_up(unsigned char* slots, int index)
+{
+    if (!zombie_mode_armed()) return false;
+    s_discardedKey = slots[index * 2];
+    slots[index * 2] = 0;
+    rearrange_item_slots();
+    dbg_printf("[msg] key 0x%02X used up: discarded\n", (int)s_discardedKey);
+    return true;
+}
+
+static void zm_key_discard_frame(void)
+{
+    if (s_discardedKey == 0) return;
+    if (g_playerEntity.health < 0) {
+        s_discardedKey = 0;
+        return;
+    }
+    if ((g_menu_choice_id & 0x80) != 0 || (g_message_flags & 0x0101) != 0x0101 ||
+        (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_DOOR_TRANSITION)) != 0 || g_openMenuFlag != 0) {
+        return;
+    }
+    g_selectedItemId = s_discardedKey;     // the message's \i
+    s_discardedKey = 0;
+    zm_message_show(s_keyDiscarded);
 }
 
 void zombie_mode_message_drop(void)

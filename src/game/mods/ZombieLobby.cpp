@@ -7,6 +7,7 @@
 #include "../SFXIds.h"
 #include "../../system/AssetPath.h"
 #include "../OptionsMenu.h"            // options_render_entity
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -14,14 +15,24 @@
 
 // ============================================================================
 // ZombieLobby.cpp - the zombie mod's NEW GAME screen (port-added): single
-// player against the AI, host a game as the director, or join one as a
-// survivor. Hosting or joining leads into the game's lobby, where everyone
-// sees who is in and each survivor picks a character nobody else has (Chris,
-// Jill, Barry, Rebecca, Richard or Enrico; up to three survivors) until the
-// director starts. Chained from the title screen's NEW GAME when [Mods] PlayInfested is on. Single player goes
-// on to the normal character select; a multiplayer game skips it and starts
-// Chris's scenario for everyone (lobby_start_game) - the survivors' picks are
-// the models they wear.
+// player against the AI, host a game as the director (or against the AI
+// director, ZombieDirectorAI.cpp, at the level picked on that row), join one
+// as a survivor, or rejoin the last match joined (its saved match id finds
+// the seat). Chained from the title screen's NEW GAME when [Mods]
+// PlayInfested is on. Single player goes on to the normal character select;
+// a multiplayer game skips it and starts Chris's scenario for everyone
+// (lobby_start_game) - the survivors' picks are the models they wear.
+//
+// A session's screens, every choice an item of a menu (Action picks):
+//   1. the join screen (lobby_room): who is in; the host advances to the map.
+//   2. the map review (lobby_map_review): the arrows browse it, Action opens
+//      its menu. Against a human director each side may veto once and the
+//      director starts the game (GO); against the AI everyone just looks.
+//   3. the character select (lobby_character_select), then
+//   4. the pregame lobby (lobby_pregame): the survivors and their characters,
+//      CHANGE CHARACTER and VIEW THE MAP. Against a human director it counts
+//      down to the survivors' spawn; against the AI each survivor marks
+//      itself ready and the host starts.
 //
 // Drawn over the generated CRT backdrop with inset text, redrawn every frame. Read off the raw PSX pad word the
 // title screen uses (g_PlayerPadPressed): 0x1000 up, 0x4000 down, 0x8000 left,
@@ -38,16 +49,14 @@ extern void game_start(void);                   // GameStart.cpp
 #define PAD_RIGHT   0x2000
 #define PAD_CONFIRM 0x0080
 #define PAD_CANCEL  0x0040
-#define PAD_AIM     0x0008
 #define PAD_OPTIONS 0x0900
 
 enum {
     ROW_SINGLE = 0,
     ROW_HOST,
+    ROW_HOST_AI,
     ROW_JOIN,
-    ROW_REJOIN_1,
-    ROW_REJOIN_2,
-    ROW_REJOIN_3,
+    ROW_REJOIN,
     ROW_ADDRESS,
     ROW_PORT,
     ROW_BACK,
@@ -141,23 +150,99 @@ static void lobby_start_game(void)
     Task_chain((void*)game_start);
 }
 
+// The players in the session: the director, then every survivor seat in
+// order (against the AI the host's own seat 0 is the first survivor).
+// Characters show once the map is up - before that they are only the
+// host's placeholders; against the AI each survivor's READY too.
 static void lobby_draw_players(int x, int y)
 {
     char line[80];
+    int self = zm_net_self();
+    int ai = zm_net_ai_level();
+    bool picking = zm_net_lobby_started() || zm_net_lobby_phase() != ZM_LOBBY_JOIN;
     lobby_print(x, y, 0x8F, "PLAYERS");
-    y += 11;
-    snprintf(line, sizeof(line), "  DIRECTOR%s", zm_net_self() == 0 ? "  - YOU" : "");
+    y += 12;
+    if (ai > 0) snprintf(line, sizeof(line), "DIRECTOR    AI - %s", zm_ai_level_name(ai));
+    else snprintf(line, sizeof(line), "DIRECTOR    %s", self == 0 ? "YOU" : "HOST");
     lobby_print(x, y, 0x7F, line);
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
-        y += 11;
+    int n = 0;
+    for (int i = ai > 0 ? 0 : 1; i < zm_net_seat_limit(); i++) {
+        y += 12;
         int c = zm_net_char(i);
+        n++;
         if (c < 0) {
-            snprintf(line, sizeof(line), "  SURVIVOR %d  EMPTY", i);
-        } else {
-            snprintf(line, sizeof(line), "  SURVIVOR %d  CONNECTED%s", i,
-                     zm_net_self() == i ? "  - YOU" : "");
+            snprintf(line, sizeof(line), "SURVIVOR %d  OPEN", n);
+            lobby_print(x, y, 0x2F, line);
+            continue;
         }
-        lobby_print(x, y, c < 0 ? 0x2F : 0x7F, line);
+        const char* state = "";
+        if (ai > 0 && picking) state = (i == 0 || zm_net_vote(i) == ZM_VOTE_ACCEPT) ? "  READY" : "  NOT READY";
+        snprintf(line, sizeof(line), "SURVIVOR %d  %s%s%s%s", n, picking ? zm_char_name(c) : "JOINED",
+                 i == 0 && ai > 0 ? "  HOST" : "", state, i == self ? "  - YOU" : "");
+        lobby_print(x, y, 0x7F, line);
+    }
+}
+
+// A screen's menu: Up / Down move, Action picks an available item. Items
+// carry an id (MI_*) so a screen can build its list from what applies.
+enum {
+    MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_TIMEOUT, MI_LEAVE, MI_START, MI_VETO,
+    MI_ACCEPT, MI_BACK_LOBBY, MI_CONTINUE, MI_CLOSE, MI_READY, MI_CHANGE_CHAR, MI_VIEW_MAP,
+};
+#define LOBBY_MENU_MAX 8
+
+struct LobbyMenu {
+    int  count;
+    int  id[LOBBY_MENU_MAX];
+    bool on[LOBBY_MENU_MAX];
+    char text[LOBBY_MENU_MAX][48];
+    const char* ptr[LOBBY_MENU_MAX];
+
+    LobbyMenu() : count(0) {}
+    void add(int item, bool enabled, const char* fmt, ...)
+    {
+        if (count >= LOBBY_MENU_MAX) return;
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(text[count], sizeof(text[count]), fmt, args);
+        va_end(args);
+        id[count] = item;
+        on[count] = enabled;
+        ptr[count] = text[count];
+        count++;
+    }
+    int indexOf(int item) const
+    {
+        for (int i = 0; i < count; i++) if (id[i] == item) return i;
+        return -1;
+    }
+};
+
+// Move the cursor; returns the picked item's id, or -1.
+static int lobby_menu_input(const LobbyMenu& m, int* sel, unsigned int pressed)
+{
+    if (m.count == 0) return -1;
+    if (*sel >= m.count) *sel = m.count - 1;
+    if (*sel < 0) *sel = 0;
+    int old = *sel;
+    if (pressed & PAD_UP)   *sel = (*sel + m.count - 1) % m.count;
+    if (pressed & PAD_DOWN) *sel = (*sel + 1) % m.count;
+    if (*sel != old) play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+    if (!(pressed & PAD_CONFIRM)) return -1;
+    if (!m.on[*sel]) {
+        play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+        return -1;
+    }
+    play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
+    return m.id[*sel];
+}
+
+static void lobby_menu_draw(const LobbyMenu& m, int sel, int x, int y)
+{
+    char line[56];
+    for (int i = 0; i < m.count; i++) {
+        snprintf(line, sizeof(line), "%s%s", i == sel ? "> " : "  ", m.text[i]);
+        lobby_print(x, y + i * 14, !m.on[i] ? 0x2F : i == sel ? 0x8F : 0x7F, line);
     }
 }
 
@@ -438,11 +523,9 @@ static void cs_draw(int sel, int mine)
     cs_print_wrapped(8, y, 0x8F, info.perk, 33);
 
     bool other = zm_net_char_taken(sel) && sel != mine;
-    char hint[48];
-    if (other) snprintf(hint, sizeof(hint), "TAKEN BY ANOTHER SURVIVOR");
-    else snprintf(hint, sizeof(hint), "ACTION: PICK   YOU: %s", mine >= 0 ? zm_char_name(mine) : "-");
-    lobby_print(8, 228, 0x7F, hint);
+    lobby_print(8, 228, 0x7F, other ? "TAKEN BY ANOTHER SURVIVOR  CANCEL: BACK" : "ACTION: PICK  CANCEL: BACK");
 }
+
 
 // Read-only title profiles: no network picks and no monster AI updates.
 // Reload into one private arena, so paging never consumes room memory or
@@ -562,8 +645,9 @@ void zm_guide_profile(int survivor, int monster)
         options_render_entity((int)&s_guideMonster);
         lobby_print(8, 16, 0x8F, info.name);
         char buying[64];
-        int unlock = (int)(zm_econ_unlock_ms(info.id) / 60000);
-        if (unlock) snprintf(buying, sizeof(buying), "%d POINTS - UNLOCK: %d MIN", zm_econ_cost(info.id), unlock);
+        int unlock = zm_econ_unlock_bosses(info.id);
+        if (unlock >= 2) snprintf(buying, sizeof(buying), "%d POINTS - AFTER BOTH YAWNS", zm_econ_cost(info.id));
+        else if (unlock) snprintf(buying, sizeof(buying), "%d POINTS - AFTER THE FIRST YAWN", zm_econ_cost(info.id));
         else snprintf(buying, sizeof(buying), "%d POINTS - AVAILABLE AT START", zm_econ_cost(info.id));
         lobby_print(8, 32, 0x7F, buying);
         int y = cs_print_wrapped(8, 46, 0x7F, info.description, 32) + 3;
@@ -574,110 +658,258 @@ void zm_guide_profile(int survivor, int monster)
     ENTITY = savedEntity;
 }
 
-// After the map is chosen (GO): the survivor picks until `deadlineMs` - and
-// waits it out either way: every survivor spawns at the deadline, which gives
-// the director its two minutes to set up. A pick can be changed until then;
-// at the deadline the survivor keeps the character it holds.
-static void lobby_character_screen(unsigned int deadlineMs)
+// Survivors ready in an AI director's lobby (the host's seat always is).
+static void lobby_ready_count(int* seated, int* readied)
+{
+    *seated = *readied = 0;
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
+        if (zm_net_char(i) < 0) continue;
+        (*seated)++;
+        if (i == 0 || zm_net_vote(i) == ZM_VOTE_ACCEPT) (*readied)++;
+    }
+}
+
+// A survivor once the map is chosen: two minutes to pick a character, then
+// into the game (the director is already playing).
+#ifdef QUICK_DEBUG
+#define ZM_PICK_MS 15000
+#else
+#define ZM_PICK_MS 120000
+#endif
+
+// Should a pregame screen give up? The session ended; with a deadline (a
+// human director's game after GO) once it has passed; without one (an AI
+// director's lobby, before GO) once the host started the game or took the
+// lobby back from the map.
+static bool lobby_screen_over(unsigned int deadlineMs)
+{
+    bool host = zm_net_role() == ZM_NET_ZOMBIE;
+    if (zm_net_status() != (host ? ZM_NET_HOSTING : ZM_NET_CONNECTED)) return true;
+    if (deadlineMs != 0) return (int)(deadlineMs - plat_time_ms()) <= 0;
+    if (!host && zm_net_lobby_started()) return true;
+    return zm_net_lobby_phase() != ZM_LOBBY_MAP;
+}
+
+// The countdown to the survivors' spawn, or (against the AI) who is ready.
+static void lobby_timer_text(unsigned int deadlineMs, char* out, int len)
+{
+    if (deadlineMs != 0) {
+        int ms = (int)(deadlineMs - plat_time_ms());
+        unsigned int left = ms > 0 ? ((unsigned int)ms + 999) / 1000 : 0;
+        snprintf(out, len, "ENTERING IN %u:%02u", left / 60, left % 60);
+    } else {
+        int seated, readied;
+        lobby_ready_count(&seated, &readied);
+        snprintf(out, len, "AI %s  READY %d OF %d", zm_ai_level_name(zm_net_ai_level()), readied, seated);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The character select screen
+//
+// Action picks the highlighted character (if nobody else wears it) and goes
+// back; Cancel goes back keeping the current one. Every seat always holds a
+// character (the host hands out a free one on joining), so backing out is
+// always allowed.
+// ---------------------------------------------------------------------------
+static void lobby_character_select(unsigned int deadlineMs)
 {
     int mine = zm_net_char(zm_net_self());
     int sel = mine >= 0 ? mine : 0;
     int loaded = -1;
-    bool map = false;
-    unsigned int shownSeed = 0;
     bool first = true;          // the press that opened the screen is not a pick
-    zm_map_set_setup(true);
+    char timer[40];
     cs_scene_begin();
     for (;;) {
         zm_net_poll();
-        if (zm_net_status() != ZM_NET_CONNECTED) break;
-        unsigned int now = plat_time_ms();
-        if ((int)(deadlineMs - now) <= 0) break;
+        if (lobby_screen_over(deadlineMs)) break;
         mine = zm_net_char(zm_net_self());
         unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
         first = false;
-        if (pressed & PAD_OPTIONS) {
-            play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-            map = !map;
-            if (map) {
-                cs_scene_end();
-                if (!zm_map_is_open()) zm_map_toggle();
-            } else {
-                if (zm_map_is_open()) zm_map_toggle();
-                zm_map_set_read_only(false);
-                cs_scene_begin();
-                loaded = -1;
-            }
-            pressed = 0;
+        int oldSel = sel;
+        if (pressed & PAD_UP)    sel = (sel + 3) % ZM_CHAR_COUNT;
+        if (pressed & PAD_DOWN)  sel = (sel + 3) % ZM_CHAR_COUNT;
+        if (pressed & PAD_LEFT)  sel = (sel / 3) * 3 + (sel % 3 + 2) % 3;
+        if (pressed & PAD_RIGHT) sel = (sel / 3) * 3 + (sel % 3 + 1) % 3;
+        if (sel != oldSel) play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+        if (pressed & PAD_CANCEL) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            break;
         }
-        char timer[24];
-        unsigned int left = (deadlineMs - now + 999) / 1000;
-        snprintf(timer, sizeof(timer), "SPAWN IN %u:%02u", left / 60, left % 60);
-        if (map) {
-            unsigned int seed = zm_net_seed();
-            if (seed != shownSeed) {
-                zm_random_build(seed);
-                shownSeed = seed;
-            }
-            zm_map_set_route(ZM_ROUTE_KEYS, false, false, timer, "OPTIONS: CHARACTER SELECT");
-            zm_map_input(pressed & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT));
-            zm_map_draw();
-        } else {
-            int oldSel = sel;
-            if (pressed & PAD_UP)    sel = (sel + 3) % ZM_CHAR_COUNT;
-            if (pressed & PAD_DOWN)  sel = (sel + 3) % ZM_CHAR_COUNT;
-            if (pressed & PAD_LEFT)  sel = (sel / 3) * 3 + (sel % 3 + 2) % 3;
-            if (pressed & PAD_RIGHT) sel = (sel / 3) * 3 + (sel % 3 + 1) % 3;
-            if (sel != oldSel) play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
-            bool other = zm_net_char_taken(sel) && sel != mine;
-            if ((pressed & PAD_CONFIRM) && !other) {
+        bool other = zm_net_char_taken(sel) && sel != mine;
+        if (pressed & PAD_CONFIRM) {
+            if (other) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            } else {
                 play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
                 zm_net_set_char(sel);
+                break;
             }
-            if (sel != loaded) {
-                cs_load_model(sel);
-                loaded = sel;
-            }
-            cs_draw(sel, mine);
-            lobby_print(8, 214, 0x7F, "OPTIONS: REVIEW MAP");
-            lobby_print(320 - 8 - (int)strlen(timer) * 6, 6, 0x8F, timer);
-            cs_draw_model();
         }
+        if (sel != loaded) {
+            cs_load_model(sel);
+            loaded = sel;
+        }
+        cs_draw(sel, mine);
+        lobby_timer_text(deadlineMs, timer, sizeof(timer));
+        lobby_print(320 - 8 - (int)strlen(timer) * 6, 6, 0x8F, timer);
+        cs_draw_model();
+        Task_sleep(1);
+    }
+    cs_scene_end();
+}
+
+// The route map to look at from the pregame lobby; Action or Cancel goes back.
+static void lobby_view_map(unsigned int deadlineMs)
+{
+    zm_map_set_setup(true);
+    if (!zm_map_is_open()) zm_map_toggle();
+    unsigned int shownSeed = 0;
+    bool first = true;
+    char timer[40];
+    for (;;) {
+        zm_net_poll();
+        if (lobby_screen_over(deadlineMs)) break;
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+        if (pressed & (PAD_CONFIRM | PAD_CANCEL | PAD_OPTIONS)) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            break;
+        }
+        unsigned int seed = zm_net_seed();
+        if (seed != shownSeed) {
+            zm_random_build(seed);
+            shownSeed = seed;
+        }
+        lobby_timer_text(deadlineMs, timer, sizeof(timer));
+        zm_map_set_route(ZM_ROUTE_KEYS, false, false, timer, "ARROWS: ROOMS  ACTION: BACK");
+        zm_map_input(pressed & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT));
+        zm_map_draw();
         Task_sleep(1);
     }
     if (zm_map_is_open()) zm_map_toggle();
     zm_map_set_read_only(false);
-    cs_scene_end();
     zm_map_set_setup(false);
 }
 
 // ---------------------------------------------------------------------------
-// The map review (after the director advances the lobby)
+// The pregame lobby: after a survivor has picked its character. Lists the
+// survivors and their characters, with CHANGE CHARACTER and VIEW MAP.
+//
+// A human director's game (`deadlineMs`, after GO): the countdown to the
+// survivors' spawn; at the deadline everyone goes in with what they hold.
+// An AI director's game (no deadline, before GO): each survivor marks
+// itself READY / NOT READY and the host starts - with someone not ready,
+// START asks once more first. Returns true when the game starts (the host
+// sent GO already when it is the one starting), false when the lobby went
+// back to the join screen or the session ended.
+// ---------------------------------------------------------------------------
+static bool lobby_pregame(unsigned int deadlineMs)
+{
+    bool host = zm_net_role() == ZM_NET_ZOMBIE;
+    int sel = 0;
+    bool first = true;
+    bool confirmStart = false;          // START pressed with someone not ready
+    char timer[40];
+    for (;;) {
+        zm_net_poll();
+        if (zm_net_status() != (host ? ZM_NET_HOSTING : ZM_NET_CONNECTED)) return false;
+        if (deadlineMs != 0 && (int)(deadlineMs - plat_time_ms()) <= 0) return true;
+        if (deadlineMs == 0 && !host && zm_net_lobby_started()) return true;
+        if (deadlineMs == 0 && zm_net_lobby_phase() != ZM_LOBBY_MAP) return false;
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+
+        int seated, readied;
+        lobby_ready_count(&seated, &readied);
+        bool ready = !host && zm_net_vote(zm_net_self()) == ZM_VOTE_ACCEPT;
+        if (readied >= seated) confirmStart = false;
+
+        LobbyMenu m;
+        if (deadlineMs == 0 && host)
+            m.add(MI_START, true, confirmStart ? "START ANYWAY - NOT ALL READY" : "START THE GAME");
+        if (deadlineMs == 0 && !host) m.add(MI_READY, true, ready ? "READY - SELECT TO UNREADY" : "NOT READY - SELECT TO READY");
+        m.add(MI_CHANGE_CHAR, true, "CHANGE CHARACTER");
+        m.add(MI_VIEW_MAP, true, "VIEW THE MAP");
+        if (deadlineMs == 0) m.add(host ? MI_BACK_LOBBY : MI_LEAVE, true, host ? "BACK TO THE LOBBY" : "LEAVE");
+
+        int pick = lobby_menu_input(m, &sel, pressed);
+        if (pick != MI_START) {
+            if (pick >= 0) confirmStart = false;
+        }
+        switch (pick) {
+        case MI_START:
+            if (readied < seated && !confirmStart) {
+                confirmStart = true;
+                break;
+            }
+            zm_random_build(zm_net_seed());
+            zm_net_lobby_go();
+            return true;
+        case MI_READY:
+            zm_net_set_vote(ready ? ZM_VOTE_NONE : ZM_VOTE_ACCEPT);
+            break;
+        case MI_CHANGE_CHAR:
+            lobby_character_select(deadlineMs);
+            first = true;
+            break;
+        case MI_VIEW_MAP:
+            lobby_view_map(deadlineMs);
+            first = true;
+            break;
+        case MI_LEAVE:
+            zm_net_stop();
+            return false;
+        case MI_BACK_LOBBY:
+            zm_net_set_phase(ZM_LOBBY_JOIN);
+            return false;
+        }
+
+        zm_guide_background(true);
+        int x = 40, y = 20;
+        lobby_print(x, y, 0x8F, ZM_GAME_TITLE);
+        lobby_timer_text(deadlineMs, timer, sizeof(timer));
+        lobby_print(320 - 24 - (int)strlen(timer) * 6, y, 0x8F, timer);
+        y += 22;
+        lobby_print(x, y, 0x8F, deadlineMs != 0 ? "GET READY - THE DIRECTOR IS SETTING UP" : "LOBBY - THE AI IS THE DIRECTOR");
+        lobby_draw_players(x, y + 18);
+        lobby_menu_draw(m, sel, x, 150);
+        Task_sleep(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The map review (after the host advances the lobby)
 //
 // Every copy builds this game's scenario (ZombieRandom.cpp) from the seed the
 // host hands out and shows it on the director's map, look-only: the rooms
 // with key-locked doors and, for the picked room, which key opens each door
 // and where it leads. The director's map also shows where the keys, crests
-// and new pickups lie.
+// and new pickups lie. The arrows browse the rooms; Action opens the menu.
 //
-// Each side may veto one map. The director's veto is its own; the survivors'
-// needs every survivor's vote (aim). A veto draws a new map (a new seed) and
-// clears the votes. The director starts once every survivor has accepted
-// (action) - or after ZM_REVIEW_MAX_MS, so a quiet survivor cannot hold the
-// game. Returns true once the game is on (GO); false if the director closed
-// the review or the session ended.
+// A human director's game: each side may veto one map. The director's veto
+// is its own; the survivors' needs every survivor's vote. A veto draws a new
+// map (a new seed) and clears the votes. The director starts once every
+// survivor has accepted - or after ZM_REVIEW_MAX_MS, so a quiet survivor
+// cannot hold the game. An AI director's game has no votes: everyone looks
+// and continues to the character select on their own.
 // ---------------------------------------------------------------------------
 #define ZM_REVIEW_MAX_MS 90000
 
-static bool lobby_map_review(void)
+enum { REVIEW_ENDED, REVIEW_GO, REVIEW_CONTINUE };
+
+static int lobby_map_review(void)
 {
     zm_map_set_setup(true);
     bool host = zm_net_role() == ZM_NET_ZOMBIE;
+    bool ai = zm_net_ai_level() > 0;
     if (!zm_map_is_open()) zm_map_toggle();
     bool first = true;              // the press that opened it
+    bool menu = false;
+    int sel = 0;
     unsigned int shownSeed = 0, shownMs = plat_time_ms();
-    bool go = false;
-    char status[64], help[64];
+    int result = REVIEW_ENDED;
+    char status[64];
     for (;;) {
         zm_net_poll();
         int st = zm_net_status();
@@ -687,8 +919,9 @@ static bool lobby_map_review(void)
             zm_random_build(seed);
             shownSeed = seed;
             shownMs = plat_time_ms();
+            menu = false;
         }
-        if (!host && zm_net_lobby_started()) { go = true; break; }
+        if (!host && zm_net_lobby_started()) { result = REVIEW_GO; break; }
         if (zm_net_lobby_phase() != ZM_LOBBY_MAP) break;
         unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
         first = false;
@@ -704,44 +937,69 @@ static bool lobby_map_review(void)
         }
         int used = zm_net_veto_used();
         bool timedOut = plat_time_ms() - shownMs > ZM_REVIEW_MAX_MS;
+        if (host && !ai && seated > 0 && vetoes == seated && (used & ZM_VETO_SURVIVORS) == 0) {
+            zm_net_reroll(ZM_VETO_SURVIVORS);
+        }
 
-        if (host) {
-            if (seated > 0 && vetoes == seated && (used & ZM_VETO_SURVIVORS) == 0) {
-                zm_net_reroll(ZM_VETO_SURVIVORS);
-            } else if ((pressed & PAD_AIM) && (used & ZM_VETO_DIRECTOR) == 0) {
-                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-                zm_net_reroll(ZM_VETO_DIRECTOR);
-            } else if ((pressed & PAD_CONFIRM) && seated > 0 && (accepted == seated || timedOut)) {
-                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-                zm_net_lobby_go();
-                go = true;
-                break;
-            } else if (pressed & PAD_CANCEL) {
-                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
-                zm_net_set_phase(ZM_LOBBY_JOIN);
-                break;
-            }
+        LobbyMenu m;
+        if (ai) {
+            m.add(MI_CONTINUE, true, "CHOOSE YOUR CHARACTER");
+            m.add(host ? MI_BACK_LOBBY : MI_LEAVE, true, host ? "BACK TO THE LOBBY" : "LEAVE");
+            snprintf(status, sizeof(status), "THE MAP - AI DIRECTOR: %s", zm_ai_level_name(zm_net_ai_level()));
+        } else if (host) {
+            m.add(MI_START, seated > 0 && (accepted == seated || timedOut),
+                  (accepted == seated || timedOut) ? "START THE GAME" : "START - WAITING FOR OK");
+            m.add(MI_VETO, (used & ZM_VETO_DIRECTOR) == 0, (used & ZM_VETO_DIRECTOR) ? "VETO USED" : "VETO THIS MAP");
+            m.add(MI_BACK_LOBBY, true, "BACK TO THE LOBBY");
             snprintf(status, sizeof(status), "SURVIVORS %d OK %d VETO OF %d  YOUR VETO %s",
                      accepted, vetoes, seated, (used & ZM_VETO_DIRECTOR) ? "USED" : "LEFT");
-            snprintf(help, sizeof(help), "%s  AIM: VETO",
-                     (accepted == seated || timedOut) ? "ENTER: START" : "WAITING FOR OK");
         } else {
-            bool canVeto = (used & ZM_VETO_SURVIVORS) == 0;
-            if (pressed & PAD_CONFIRM) {
-                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-                zm_net_set_vote(ZM_VOTE_ACCEPT);
-            }
-            if ((pressed & PAD_AIM) && canVeto) {
-                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-                zm_net_set_vote(ZM_VOTE_VETO);
-            }
             int mine = zm_net_vote(zm_net_self());
+            bool canVeto = (used & ZM_VETO_SURVIVORS) == 0;
+            m.add(MI_ACCEPT, mine != ZM_VOTE_ACCEPT, mine == ZM_VOTE_ACCEPT ? "MAP ACCEPTED" : "ACCEPT THIS MAP");
+            m.add(MI_VETO, canVeto && mine != ZM_VOTE_VETO,
+                  !canVeto ? "VETO USED" : mine == ZM_VOTE_VETO ? "VETO VOTED - ALL MUST" : "VOTE TO VETO - ALL MUST");
+            m.add(MI_LEAVE, true, "LEAVE");
             snprintf(status, sizeof(status), "YOU: %s  TEAM: %d OK %d VETO OF %d",
                      mine == ZM_VOTE_ACCEPT ? "OK" : mine == ZM_VOTE_VETO ? "VETO" : "-",
                      accepted, vetoes, seated);
-            snprintf(help, sizeof(help), "ACTION: OK  %s", canVeto ? "AIM: VETO (ALL)" : "VETO USED");
         }
-        zm_map_set_route(host ? ZM_ROUTE_ALL : ZM_ROUTE_KEYS, false, false, status, help);
+        m.add(MI_CLOSE, true, "CLOSE THE MENU");
+
+        int pick = -1;
+        if (menu) {
+            if (pressed & PAD_CANCEL) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+                menu = false;
+            } else {
+                pick = lobby_menu_input(m, &sel, pressed);
+            }
+            pressed = 0;                        // the arrows are the menu's
+        } else if (pressed & PAD_CONFIRM) {
+            play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
+            menu = true;
+            sel = 0;
+            pressed = 0;
+        }
+        bool done = false;
+        switch (pick) {
+        case MI_CONTINUE:   result = REVIEW_CONTINUE; done = true; break;
+        case MI_START:      zm_net_lobby_go(); result = REVIEW_GO; done = true; break;
+        case MI_VETO:
+            if (host) zm_net_reroll(ZM_VETO_DIRECTOR);
+            else zm_net_set_vote(ZM_VOTE_VETO);
+            menu = false;
+            break;
+        case MI_ACCEPT:     zm_net_set_vote(ZM_VOTE_ACCEPT); menu = false; break;
+        case MI_BACK_LOBBY: zm_net_set_phase(ZM_LOBBY_JOIN); done = true; break;
+        case MI_LEAVE:      zm_net_stop(); done = true; break;
+        case MI_CLOSE:      menu = false; break;
+        }
+        if (done) break;
+
+        zm_map_set_route(host && !ai ? ZM_ROUTE_ALL : ZM_ROUTE_KEYS, false, false, status,
+                         menu ? "UP-DOWN: CHOOSE  ACTION: SELECT  CANCEL: CLOSE" : "ARROWS: ROOMS  ACTION: MENU");
+        if (menu) zm_map_set_menu(m.ptr, m.on, m.count, sel);
         zm_map_input(pressed & (PAD_UP | PAD_DOWN | PAD_LEFT | PAD_RIGHT));
         zm_map_draw();
         Task_sleep(1);
@@ -749,17 +1007,104 @@ static bool lobby_map_review(void)
     if (zm_map_is_open()) zm_map_toggle();
     zm_map_set_read_only(false);
     zm_map_set_setup(false);
-    return go;
+    return result;
 }
 
-// A survivor once the map is chosen: two minutes to pick a character, then
-// into the game (the director is already playing).
-#ifdef QUICK_DEBUG
-#define ZM_PICK_MS 15000
-#else
-#define ZM_PICK_MS 120000
-#endif
+// ---------------------------------------------------------------------------
+// The join screen: who is in, and the host's settings. The host advances to
+// the map (a human director once someone has joined; against the AI at any
+// time - it may play alone). A survivor waits here until the map is up.
+// ---------------------------------------------------------------------------
 
+// The AI director's level for HOST - AI DIRECTOR: config's AiDirector, else normal.
+static int s_aiLevel = 0;
+
+static void lobby_room(void)
+{
+    int sel = 0;
+    bool first = true;
+    for (;;) {
+        zm_net_poll();
+        int status = zm_net_status();
+        int role = zm_net_role();
+        bool host = role == ZM_NET_ZOMBIE && status == ZM_NET_HOSTING;
+        bool joined = role == ZM_NET_SURVIVOR && status == ZM_NET_CONNECTED;
+        bool joining = role == ZM_NET_SURVIVOR && status == ZM_NET_JOINING;
+        if (!host && !joined && !joining) return;
+        if (joined && (zm_net_lobby_started() || zm_net_lobby_phase() != ZM_LOBBY_JOIN)) return;
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+
+        int ai = zm_net_ai_level();
+        LobbyMenu m;
+        if (host && ai > 0) {
+            m.add(MI_TO_MAP, true, "CONTINUE TO THE MAP");
+            m.add(MI_AI_LEVEL, true, "AI DIRECTOR: %s", zm_ai_level_name(ai));
+        } else if (host) {
+            m.add(MI_GENERATE, zm_net_survivor_count() > 0,
+                  zm_net_survivor_count() > 0 ? "GENERATE THE MAP" : "GENERATE THE MAP - NOBODY YET");
+        }
+        if (host) m.add(MI_TIMEOUT, true, "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
+        m.add(MI_LEAVE, true, "LEAVE");
+
+        // The AI level steps with left / right as well as Action.
+        if (host && ai > 0 && sel == m.indexOf(MI_AI_LEVEL) && (pressed & (PAD_LEFT | PAD_RIGHT))) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+            s_aiLevel = ai + ((pressed & PAD_RIGHT) ? 1 : -1);
+            if (s_aiLevel < 1) s_aiLevel = 5;
+            if (s_aiLevel > 5) s_aiLevel = 1;
+            zm_net_set_ai_level(s_aiLevel);
+        }
+        int pick = lobby_menu_input(m, &sel, pressed);
+        if (pick < 0 && (pressed & PAD_CANCEL)) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            pick = MI_LEAVE;
+        }
+        switch (pick) {
+        case MI_GENERATE:
+        case MI_TO_MAP:
+            zm_net_set_phase(ZM_LOBBY_MAP);
+            return;
+        case MI_AI_LEVEL:
+            s_aiLevel = ai >= 5 ? 1 : ai + 1;
+            zm_net_set_ai_level(s_aiLevel);
+            break;
+        case MI_TIMEOUT:
+            zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
+            break;
+        case MI_LEAVE:
+            zm_net_stop();
+            return;
+        }
+
+        zm_guide_background(true);
+        int x = 40, y = 20;
+        lobby_print(x, y, 0x8F, ZM_GAME_TITLE);
+        y += 24;
+        lobby_print(x, y, 0x8F, !host ? "LOBBY"
+                    : ai > 0 ? "LOBBY - THE AI IS THE DIRECTOR" : "LOBBY - YOU ARE THE DIRECTOR");
+        y += 18;
+        if (joining) {
+            lobby_print(x, y, 0x7F, zm_net_status_text());
+            lobby_print(x, y + 16, 0x7F, "WAITING FOR THE HOST...");
+        } else {
+            lobby_draw_players(x, y);
+        }
+        if (joined) {
+            char option[48];
+            snprintf(option, sizeof(option), "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
+            lobby_print(x, 136, 0x7F, option);
+            lobby_print(x, 200, 0x7F, "WAITING FOR THE HOST TO SHOW THE MAP");
+        }
+        lobby_menu_draw(m, sel, x, host ? 136 : 160);
+        Task_sleep(1);
+    }
+}
+
+// A survivor once the host said go: a rejoin restores its survivor; a human
+// director's game gives two minutes to pick a character in the pregame
+// lobby (the director is already playing); an AI director's game was picked
+// before GO.
 static void lobby_survivor_go(void)
 {
     if (zm_net_rejoining()) {
@@ -774,14 +1119,55 @@ static void lobby_survivor_go(void)
         lobby_start_game();
         return;
     }
-    lobby_character_screen(plat_time_ms() + ZM_PICK_MS);
+    if (zm_net_ai_level() == 0) {
+        unsigned int deadline = plat_time_ms() + ZM_PICK_MS;
+        lobby_character_select(deadline);
+        if (!lobby_pregame(deadline)) return;
+    }
     lobby_start_game();
+}
+
+// The session, from hosting or joining until the game starts or it ends.
+// Returns when it ended (back to the NEW GAME menu); does not return once
+// the game starts.
+static void lobby_session(void)
+{
+    for (;;) {
+        zm_net_poll();
+        int status = zm_net_status();
+        int role = zm_net_role();
+        bool hosting = role == ZM_NET_ZOMBIE && status == ZM_NET_HOSTING;
+        bool joined = role == ZM_NET_SURVIVOR && status == ZM_NET_CONNECTED;
+        bool joining = role == ZM_NET_SURVIVOR && status == ZM_NET_JOINING;
+        if (!hosting && !joined && !joining) return;
+        if (joined && zm_net_lobby_started()) {
+            lobby_survivor_go();
+        } else if (joining || zm_net_lobby_phase() == ZM_LOBBY_JOIN) {
+            lobby_room();
+        } else {
+            int review = lobby_map_review();
+            if (review == REVIEW_GO && hosting) {
+                lobby_start_game();             // the director plays at once
+                return;
+            }
+            if (review == REVIEW_CONTINUE) {
+                // Against the AI: the character, then the ready-up lobby.
+                lobby_character_select(0);
+                if (lobby_pregame(0)) {
+                    lobby_start_game();
+                    return;
+                }
+            }
+        }
+        // The press that closed a screen must not reach the next one.
+        Task_sleep(1);
+    }
 }
 
 void zombie_lobby_state(void)
 {
     int row = ROW_SINGLE;
-    int character = ZM_CHAR_CHRIS;
+    if (s_aiLevel == 0) s_aiLevel = (g_zmAiDirector >= 1 && g_zmAiDirector <= 5) ? g_zmAiDirector : 2;
     bool editing = false;
     int cursor = 0;
     lobby_load_fields();
@@ -792,51 +1178,14 @@ void zombie_lobby_state(void)
         zm_net_poll();
         unsigned int pressed = (unsigned int)g_PlayerPadPressed;
         int status = zm_net_status();
-        int role = zm_net_role();
-        bool hosting = role == ZM_NET_ZOMBIE && status == ZM_NET_HOSTING;
-        bool joined = role == ZM_NET_SURVIVOR && status == ZM_NET_CONNECTED;
-        bool joining = role == ZM_NET_SURVIVOR && status == ZM_NET_JOINING;
+        if (status == ZM_NET_HOSTING || status == ZM_NET_JOINING || status == ZM_NET_CONNECTED) {
+            lobby_session();
+            Task_sleep(1);
+            continue;
+        }
 
         // ---- input ----
-        if (hosting) {
-            // The director's room: once someone is in, advance to the map.
-            if ((pressed & PAD_CONFIRM) && zm_net_survivor_count() > 0) {
-                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
-                zm_net_set_phase(ZM_LOBBY_MAP);
-                if (lobby_map_review()) {
-                    lobby_start_game();         // the director plays at once
-                    return;
-                }
-                Task_sleep(1);
-                continue;
-            }
-            // The survivors' timeout (ZombieTimeout.cpp): on or off.
-            if (pressed & (PAD_LEFT | PAD_RIGHT)) {
-                play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
-                zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
-            }
-            if (pressed & PAD_CANCEL) {
-                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
-                zm_net_stop();
-            }
-        } else if (joined || joining) {
-            if (zm_net_lobby_started()) {
-                lobby_survivor_go();
-                continue;
-            }
-            if (joined && zm_net_lobby_phase() == ZM_LOBBY_MAP) {
-                if (lobby_map_review()) {
-                    lobby_survivor_go();
-                    continue;
-                }
-                Task_sleep(1);
-                continue;
-            }
-            if (pressed & PAD_CANCEL) {
-                play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
-                zm_net_stop();
-            }
-        } else if (editing) {
+        if (editing) {
             if (row == ROW_ADDRESS) lobby_edit(s_addr, 15, &cursor, pressed);
             if (row == ROW_PORT)    lobby_edit(s_port, 5, &cursor, pressed);
             if (pressed & (PAD_CONFIRM | PAD_CANCEL)) {
@@ -849,6 +1198,12 @@ void zombie_lobby_state(void)
             if (pressed & PAD_UP)   row = (row + ROW_COUNT - 1) % ROW_COUNT;
             if (pressed & PAD_DOWN) row = (row + 1) % ROW_COUNT;
             if (row != oldRow) play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+            if (row == ROW_HOST_AI && (pressed & (PAD_LEFT | PAD_RIGHT))) {
+                play_sfx(SFX_UI_BANK, SFX_UI_CURSOR);
+                s_aiLevel += (pressed & PAD_RIGHT) ? 1 : -1;
+                if (s_aiLevel < 1) s_aiLevel = 5;
+                if (s_aiLevel > 5) s_aiLevel = 1;
+            }
             if (pressed & PAD_CANCEL) {
                 play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
                 zm_guide_background(false);
@@ -869,14 +1224,17 @@ void zombie_lobby_state(void)
                     lobby_store_fields();
                     zm_net_host();
                     break;
+                case ROW_HOST_AI:
+                    lobby_store_fields();
+                    zm_net_host();
+                    zm_net_set_ai_level(s_aiLevel);
+                    break;
                 case ROW_JOIN:
                     lobby_store_fields();
-                    zm_net_join(g_zmNetAddress, g_zmNetPort, character);
+                    zm_net_join(g_zmNetAddress, g_zmNetPort, -1);   // the character comes after the map
                     break;
-                case ROW_REJOIN_1:
-                case ROW_REJOIN_2:
-                case ROW_REJOIN_3:
-                    zm_net_rejoin_saved(row - ROW_REJOIN_1 + 1);
+                case ROW_REJOIN:
+                    zm_net_rejoin_saved();
                     break;
                 case ROW_ADDRESS:
                 case ROW_PORT:
@@ -898,42 +1256,12 @@ void zombie_lobby_state(void)
         lobby_print(x, y, 0x8F, ZM_GAME_TITLE);
         y += 24;
 
-        if (hosting || joined || joining) {
-            // Show occupied seats here; character picks happen after map review.
-            lobby_print(x, y, 0x8F, hosting ? "LOBBY - YOU ARE THE DIRECTOR" : "LOBBY");
-            y += 18;
-            if (joining) {
-                lobby_print(x, y, 0x7F, zm_net_status_text());
-                lobby_print(x, y + 16, 0x7F, "WAITING FOR THE DIRECTOR...");
-            } else {
-                lobby_draw_players(x, y);
-            }
-            int by = 158;
-            if (hosting || joined) {
-                char option[64];
-                snprintf(option, sizeof(option), "SURVIVOR TIMEOUT: %s%s", zm_net_timeout_enabled() ? "ON" : "OFF",
-                         hosting ? "  ARROWS: CHANGE" : "");
-                lobby_print(x, by - 6, 0x7F, option);
-            }
-            if (joined) {
-                lobby_print(x, by + 14, 0x7F, "WAITING FOR THE DIRECTOR'S MAP");
-                lobby_print(x, by + 30, 0x7F, "CHOOSE YOUR CHARACTER AFTER REVIEW");
-            } else if (hosting) {
-                lobby_print(x, by + 14, 0x7F, zm_net_survivor_count() > 0
-                            ? "ENTER: GENERATE THE MAP" : "WAITING FOR SURVIVORS - UP TO 3");
-            }
-            lobby_print(x, by + 62, 0x7F, "ESC / CANCEL TO LEAVE");
-            Task_sleep(1);
-            continue;
-        }
-
         static const char* const labels[ROW_COUNT] = {
             "SINGLE PLAYER - AI SURVIVOR",
             "HOST - PLAY THE DIRECTOR",
+            "",               // host vs the AI director, with its level
             "JOIN - PLAY A SURVIVOR",
-            "REJOIN - SURVIVOR 1",
-            "REJOIN - SURVIVOR 2",
-            "REJOIN - SURVIVOR 3",
+            "REJOIN THE LAST MATCH",
             "",               // address
             "",               // port
             "BACK",
@@ -946,6 +1274,9 @@ void zombie_lobby_state(void)
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  HOST ADDRESS ", s_addr, cursor,
                                   editing && row == ROW_ADDRESS);
+            } else if (r == ROW_HOST_AI) {
+                snprintf(line, sizeof(line), "%sHOST - AI DIRECTOR  < %s >", mark, zm_ai_level_name(s_aiLevel));
+                lobby_print(x, yy, r == row ? 0x8F : 0x7F, line);
             } else if (r == ROW_PORT) {
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  PORT ", s_port, cursor,

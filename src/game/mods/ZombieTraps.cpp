@@ -16,8 +16,9 @@
 //   LOCK DOORS  every door of the room, and every door into it from its
 //               neighbours, is held shut for survivors for ZM_TRAP_LOCK_MS.
 //               ZM_EV_TRAP takes it to every copy, which times it on its own
-//               clock from when it arrives. Survivors trying one hear the
-//               lock click (door_try_enter, zombie_mode_door_trapped); the
+//               clock from when it arrives. Survivors in the room hear the
+//               lock click on activation, without a message. Trying one plays
+//               the lock click (door_try_enter, zombie_mode_door_trapped); the
 //               single-player AI survivor treats those doors as unusable
 //               (zm_door_usable). The director's own body is not held.
 // ============================================================================
@@ -145,7 +146,7 @@ bool zm_trap_place(unsigned char stage, unsigned char room, unsigned char id, co
 }
 
 // ZM_EV_TRAP from the director. True when it is this copy's room (the
-// survivor is told).
+// survivor hears the lock click).
 bool zm_trap_take(const short* a)
 {
     if ((unsigned char)a[0] != ZM_TRAP_LOCK_DOORS) return false;

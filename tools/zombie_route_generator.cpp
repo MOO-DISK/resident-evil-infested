@@ -116,7 +116,7 @@ static void generate(unsigned int seed) {
         for (int i = 0; i < s_spotCount; ++i) {
             const RndSpot& s = s_spots[i];
             // rnd_place_weapons replaces non-pool original keys/crests with
-            // shells. Only pool progression belongs to the final scenario.
+            // supplies. Only pool progression belongs to the final scenario.
             if (!s.pool || !rnd_item_bit(s.id)) continue;
             printf("%s[%d,%d,%d,%d,%d,%d]", first ? "" : ",", s.stage, s.room, s.id, s.flag, s.x, s.z);
             first = false;

@@ -175,6 +175,15 @@ void plat_cursor_show(BOOL show);
 typedef BOOL (*PlatVideoOverlayCallback)(DWORD32 frameTexture, int frameMs);
 void plat_video_set_overlay_callback(PlatVideoOverlayCallback callback);
 
+// Independent silent, forward-only decoder for simultaneous mod bumpers.
+// Returned pixels belong to the decoder until its next frame/close call.
+// FALSE at EOF/error; the last pixels remain available until close.
+struct PlatVideoClip;
+PlatVideoClip* plat_video_clip_open(const char* path);
+BOOL plat_video_clip_frame(PlatVideoClip* clip, int timeMs,
+                          const unsigned char** rgba, int* width, int* height);
+void plat_video_clip_close(PlatVideoClip* clip);
+
 // Probe the decoder backend. FALSE means "no FMV available, skip the movie".
 BOOL plat_video_init(void);
 

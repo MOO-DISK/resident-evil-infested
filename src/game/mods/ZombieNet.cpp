@@ -1,5 +1,6 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
+#include "ZombieBumperBarrier.h"
 #include "ZombieReconnect.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
@@ -37,7 +38,10 @@ unsigned short g_zmNetPort = 27960;
 // Version 63: ink ribbons are supplies; the main hall's Beretta and the vacant
 // room's broken shotgun are taken out. Version 64: no ink ribbons among the
 // supplies.
-#define ZM_NET_VERSION    64
+// Version 70: the survivors' voice lines (ZM_EV_VOICE).
+// Version 72: a survivor's own match id (its HELLO token) seats it and
+// reclaims that seat on a rejoin; the lobby's menu-driven flow.
+#define ZM_NET_VERSION    72
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -60,6 +64,7 @@ enum {
     PKT_RECOVERY_CHUNK = 13,
     PKT_RECOVERY_READY = 14,
     PKT_REJECT = 15,
+    PKT_BUMPER = 17,           // intro readiness / host phase + frozen roster
     PKT_VERSION_REJECT = 16,    // diagnostic only; decoded before the full header
 };
 
@@ -119,7 +124,7 @@ struct NetEnemyEntry {
 };
 
 struct NetEnemiesHeader {
-    unsigned char  count, flags, stage, room;        // flags: 1 adopt
+    unsigned char  count, flags, stage, room;        // flags: 1 adopt, 2 a ZmYawnBody follows the entries
 };
 
 struct NetLobbyBody {
@@ -135,6 +140,8 @@ struct NetLobbyBody {
     unsigned char options;                           // ZM_LOBBY_OPT_* (the host's)
 };
 #define ZM_LOBBY_OPT_NO_TIMEOUT 0x01                 // the director turned the survivors' timeout off
+#define ZM_LOBBY_OPT_AI_SHIFT   1                    // bits 1-3: the AI director's level (0 a human)
+#define ZM_LOBBY_OPT_AI_MASK    0x0E
 struct NetHelloBody { unsigned char character, vote; unsigned int revision, seed, token[2]; };
 struct NetPauseBody { unsigned int serial, remainingMs; unsigned char missing, present; };
 struct NetRecoveryChunk { unsigned int offset, total; unsigned short bytes; unsigned char data[900]; };
@@ -168,8 +175,23 @@ static int            s_role = ZM_NET_OFF;
 static int            s_status = ZM_NET_IDLE;
 static int            s_self = -1;
 static NetLink        s_links[ZM_NET_MAX_PLAYERS];
+// The host's own survivor (an AI director's game): its live inventory.
+static bool net_own_inventory(int player, unsigned char out[16])
+{
+    if (player != s_self || s_role != ZM_NET_ZOMBIE || zm_net_char(player) < 0 || g_ItemSlotsPointer == NULL)
+        return false;
+    memcpy(out, g_ItemSlotsPointer, 16);
+    return true;
+}
+
 bool zm_net_has_item(int player, unsigned char item)
 {
+    unsigned char own[16];
+    if (net_own_inventory(player, own)) {
+        for (int i = 0; i < 8; i++)
+            if (own[i * 2] == item && (own[i * 2 + 1] || item == ITEM_SHOTGUN)) return true;
+        return false;
+    }
     if (player < 1 || player >= ZM_NET_MAX_PLAYERS || !s_links[player].checkpointHave) return false;
     const ZmReconnectPlayer& p = s_links[player].checkpoint;
     for (int i = 0; i < 8; i++)
@@ -179,6 +201,7 @@ bool zm_net_has_item(int player, unsigned char item)
 static unsigned char  s_chars[ZM_NET_MAX_PLAYERS];
 bool zm_net_inventory(int player, unsigned char out[16])
 {
+    if (net_own_inventory(player, out)) return true;
     if (player < 1 || player >= ZM_NET_MAX_PLAYERS || !s_links[player].checkpointHave) return false;
     ZmReconnectPlayer p = s_links[player].checkpoint;
     // Include committed transactions which have not yet appeared in STATE.
@@ -208,6 +231,11 @@ static unsigned char  s_lobbyOptions = 0;            // ZM_LOBBY_OPT_*
 struct NetInboxEntry { NetEvent ev; };
 static NetInboxEntry  s_inbox[ZM_NET_MAX_PENDING * 2];
 static int            s_inboxCount = 0;
+// The host's own survivor (an AI director's game) addresses its requests to
+// the host - itself. They come back through zm_net_poll as if received, after
+// the sender's frame, the way a remote survivor's would.
+static NetEvent       s_loopback[ZM_NET_MAX_PENDING];
+static int            s_loopbackCount = 0;
 static NetEvent       s_pendingWin;
 static bool           s_pendingWinHave = false; // confirmation received before game initialization
 
@@ -216,6 +244,9 @@ static ZmNetPeerState s_states[ZM_NET_MAX_PLAYERS];
 // The game-start barrier.
 static bool           s_ready[ZM_NET_MAX_PLAYERS];
 static bool           s_started = false;
+static signed char s_bumperReady[ZM_NET_MAX_PLAYERS] = { -1, -1, -1, -1 };
+static unsigned char s_bumperPhase = 0;
+static unsigned int s_bumperSent = 0;
 static bool s_rejoining = false, s_downloaded = false;
 static bool s_rejoinLoadReady = false;
 static unsigned int s_downloadOffset, s_downloadTotal, s_lastDownloadMs;
@@ -224,6 +255,11 @@ static unsigned int s_localLostAt, s_pauseRemaining, s_pauseReceived, s_pauseSer
 static unsigned char s_pauseMissing;
 static unsigned int s_pauseTotal, s_pauseBegan;
 static bool s_clockPaused;
+// Before the game starts, a survivor whose host left (BYE) or went silent is
+// sent back to the NEW GAME menu: the session closes at the end of the poll.
+static const char* s_kickText = NULL;
+#define ZM_NET_LOBBY_TIMEOUT_MS 10000   // the host polls every frame in its menus
+static void net_bumper_advance(void);
 static const char* s_failureText = "COULD NOT OPEN THE CONNECTION";
 static const char* s_failureHint = "";
 
@@ -276,10 +312,12 @@ int zm_net_pause_seconds(void)
 bool zm_net_rejoining(void) { return s_rejoining; }
 bool zm_net_rejoin_downloaded(void) { return s_downloaded; }
 
+// The last match this copy joined: the host, the seed and this survivor's
+// match id. One file - the id, not a seat number, finds the seat again.
 struct NetRejoinCredential { unsigned int magic, seed, token[2], ip; unsigned short port; unsigned char seat, character; };
-static void net_credential_path(char* out, int len, int seat)
+static void net_credential_path(char* out, int len)
 {
-    snprintf(out, len, "%sinfestation-rejoin-%d.dat", GetSaveRoot(), seat);
+    snprintf(out, len, "%sinfestation-rejoin.dat", GetSaveRoot());
 }
 static void net_save_credential(void)
 {
@@ -289,7 +327,7 @@ static void net_save_credential(void)
     c.magic = 0x52454A43; c.seed = s_seed;
     c.token[0] = L.token[0]; c.token[1] = L.token[1];
     c.ip = L.addr.ip; c.port = L.addr.port; c.seat = (unsigned char)s_self; c.character = s_chars[s_self];
-    char path[512]; net_credential_path(path, sizeof(path), s_self);
+    char path[512]; net_credential_path(path, sizeof(path));
     plat_mkdir(GetSaveRoot());
     if (!plat_file_write_atomic(path, &c, sizeof(c))) dbg_printf("[rejoin] could not save seat %d credential\n", s_self);
 }
@@ -320,7 +358,7 @@ int zm_net_char(int player)
 
 bool zm_net_char_taken(int character)
 {
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (i != s_self && s_chars[i] == character) return true;
     }
     return false;
@@ -331,14 +369,14 @@ bool zm_net_char_taken(int character)
 static unsigned char net_grant_char(int seat, int wish)
 {
     bool wishFree = wish >= 0 && wish < ZM_CHAR_COUNT;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS && wishFree; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS && wishFree; i++) {
         if (i != seat && s_chars[i] == wish) wishFree = false;
     }
     if (wishFree) return (unsigned char)wish;
     if (s_chars[seat] < ZM_CHAR_COUNT) return s_chars[seat];
     for (int c = 0; c < ZM_CHAR_COUNT; c++) {
         bool free = true;
-        for (int i = 1; i < ZM_NET_MAX_PLAYERS && free; i++) {
+        for (int i = 0; i < ZM_NET_MAX_PLAYERS && free; i++) {
             if (i != seat && s_chars[i] == c) free = false;
         }
         if (free) return (unsigned char)c;
@@ -349,7 +387,7 @@ static unsigned char net_grant_char(int seat, int wish)
 int zm_net_survivor_count(void)
 {
     int n = 0;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         if (zm_net_char(i) >= 0) n++;
     }
     return n;
@@ -392,7 +430,8 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
     NetLink& L = s_links[link];
     if (!L.used) return;
     static unsigned char buf[sizeof(NetHeader) + sizeof(NetEvent) * ZM_NET_MAX_PENDING +
-                             sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES];
+                             sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
+                             sizeof(ZmYawnBody)];
     NetHeader* h = (NetHeader*)buf;
     h->magic = ZM_NET_MAGIC;
     h->version = ZM_NET_VERSION;
@@ -435,7 +474,7 @@ static void net_queue(int link, const NetEvent& ev)
     // traffic is awaiting acknowledgement. Never evict an assigned sequence.
     bool critical = ev.kind == ZM_EV_PICKUP || ev.kind == ZM_EV_BOX || ev.kind == ZM_EV_DROP ||
                     ev.kind == ZM_EV_WIN || ev.kind == ZM_EV_REVIVE || ev.kind == ZM_EV_SHOTGUN ||
-                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT;
+                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT || ev.kind == ZM_EV_BOSS;
     int limit = critical ? ZM_NET_MAX_PENDING : ZM_NET_MAX_PENDING - 24;
     if (L.pendingCount >= limit) {
         dbg_printf("[net] link %d event queue full, dropping kind %d\n", link, (int)ev.kind);
@@ -465,7 +504,7 @@ static void net_route(const NetEvent& ev, int fromLink)
 void zm_net_send_event_to(int dst, int kind, short a0, short a1, short a2, short a3,
                           short a4, short a5, short a6, short a7)
 {
-    if (!zm_net_active() || dst == s_self) return;
+    if (!zm_net_active()) return;
     NetEvent ev;
     memset(&ev, 0, sizeof(ev));
     ev.kind = (unsigned char)kind;
@@ -473,6 +512,12 @@ void zm_net_send_event_to(int dst, int kind, short a0, short a1, short a2, short
     ev.dst = (unsigned char)dst;
     ev.args[0] = a0; ev.args[1] = a1; ev.args[2] = a2; ev.args[3] = a3;
     ev.args[4] = a4; ev.args[5] = a5; ev.args[6] = a6; ev.args[7] = a7;
+    if (dst == s_self) {
+        if (s_role != ZM_NET_ZOMBIE || zm_net_char(s_self) < 0) return;
+        if (s_loopbackCount < ZM_NET_MAX_PENDING) s_loopback[s_loopbackCount++] = ev;
+        else dbg_printf("[net] loopback full, dropping kind %d\n", (int)kind);
+        return;
+    }
     net_route(ev, -1);
     net_send_all(PKT_PING, (unsigned char)s_self, NULL, 0, -1);   // out now
 }
@@ -609,7 +654,8 @@ void zm_net_send_state(const Entity* ch, bool inGame, const Entity* zombieOverri
 void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, int count, bool adopt)
 {
     if (!zm_net_active()) return;
-    static unsigned char body[sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES];
+    static unsigned char body[sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
+                              sizeof(ZmYawnBody)];
     NetEnemiesHeader* h = (NetEnemiesHeader*)body;
     NetEnemyEntry* out = (NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
     if (count > ZM_NET_MAX_ENEMIES) count = ZM_NET_MAX_ENEMIES;
@@ -642,8 +688,17 @@ void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, 
             memcpy(d.tail, raw + 0x178, sizeof(d.tail));
         }
     }
-    net_send_all(PKT_ENEMIES, (unsigned char)s_self, body,
-                 (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count), -1);
+    int len = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
+    // Yawn's body, which its head's pose cannot carry (ZombieYawn.cpp).
+    bool yawn = false;
+    for (int i = 0; i < count && !yawn; i++) yawn = zm_yawn_head(list[i]);
+    ZmYawnBody yb;
+    if (yawn && zm_yawn_body_capture(&yb)) {
+        h->flags |= 2;
+        memcpy(body + len, &yb, sizeof(yb));
+        len += (int)sizeof(yb);
+    }
+    net_send_all(PKT_ENEMIES, (unsigned char)s_self, body, len, -1);
 }
 
 static void net_send_lobby(int link, unsigned char type)
@@ -733,6 +788,12 @@ static void net_take_enemies(int origin, const unsigned char* body, int bodyLen)
     if (count > ZM_NET_MAX_ENEMIES) return;
     if (bodyLen < (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count)) return;
     const NetEnemyEntry* list = (const NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
+    int entriesLen = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
+    if ((eh->flags & 2) != 0 && bodyLen >= entriesLen + (int)sizeof(ZmYawnBody)) {
+        ZmYawnBody yb;
+        memcpy(&yb, body + entriesLen, sizeof(yb));
+        zm_yawn_body_take(yb, eh->stage, eh->room, origin);
+    }
     static ZmNetEnemy got[ZM_NET_MAX_ENEMIES];
     int n = 0;
     for (int i = 0; i < count; i++) {
@@ -782,14 +843,27 @@ static void net_take_event(const NetEvent& e, int link)
         zm_timeout_take(e.args, e.src);
         return;
     }
+    if (e.kind == ZM_EV_BOSS) {
+        // Only the host decides a boss fight's phases and its entry; a
+        // survivor asks it to enter (3) and answers its question (5), for itself.
+        if (s_role == ZM_NET_ZOMBIE) {
+            if (e.src != link || e.dst != ZM_NET_DIRECTOR || (e.args[0] != 3 && e.args[0] != 5) ||
+                e.args[2] != link) return;
+        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR ||
+                   (e.dst != ZM_NET_ALL && e.dst != s_self) || e.args[0] == 3 || e.args[0] == 5) return;
+        zm_yawn_take(e.args, e.src);
+        return;
+    }
     if (e.kind == ZM_EV_PIANO) {
         // A survivor reports only its own playing: start / stop go on to
         // everybody, the finished tune only to the host. Only the host opens.
         if (s_role == ZM_NET_ZOMBIE) {
             if (e.src != link || e.args[1] != link || e.args[0] < 1 || e.args[0] > 5 || e.args[0] == 4) return;
             if (e.args[0] != 3 && e.dst == ZM_NET_ALL) net_route(e, link);
-        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR ||
-                   (e.args[0] == 4) != (e.src == ZM_NET_DIRECTOR) || e.args[0] == 3) return;
+        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.args[0] == 3 ||
+                   (e.args[0] == 4 && e.src != ZM_NET_DIRECTOR) ||
+                   // The host plays the piano itself only against the AI director.
+                   (e.args[0] != 4 && e.src == ZM_NET_DIRECTOR && zm_net_char(ZM_NET_DIRECTOR) < 0)) return;
         zm_piano_take(e.args, e.src);
         return;
     }
@@ -838,6 +912,7 @@ static void net_take_event(const NetEvent& e, int link)
                 reply.src = ZM_NET_DIRECTOR;
                 reply.dst = (unsigned char)link;
                 reply.args[1] = granted ? (short)-e.args[1] : 0;
+                reply.args[2] = 1;              // a grant, not another reviver's commit
                 net_queue(link, reply);
             }
             return;
@@ -845,6 +920,7 @@ static void net_take_event(const NetEvent& e, int link)
         if (!zm_revive_host_claim(e.args[0], e.args[1], link)) return;
     }
     if (e.kind == ZM_EV_ROSTER && s_role == ZM_NET_ZOMBIE && e.src != link) return;
+    if (e.kind == ZM_EV_VOICE && s_role == ZM_NET_ZOMBIE && e.src != link) return;   // speaks only as itself
     bool mine = (e.dst == ZM_NET_ALL) || (e.dst == s_self);
     if (s_role == ZM_NET_ZOMBIE && (e.dst == ZM_NET_ALL || e.dst != s_self)) {
         net_route(e, link);
@@ -1016,16 +1092,27 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
     }
 
     // The host seats a new survivor on its first hello (lobby only).
+    // Three survivors at most: against the AI director the host plays seat 0
+    // as one of them, so only seats 1-2 take joiners.
     if (link < 0 && s_role == ZM_NET_ZOMBIE && h->type == PKT_HELLO && !s_lobbyGo) {
-        for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+        for (int i = 1; i < zm_net_seat_limit(); i++) {
             if (s_links[i].used) continue;
             memset(&s_links[i], 0, sizeof(s_links[i]));
             s_links[i].used = true;
             s_links[i].addr = *from;
             s_links[i].nextEventId = 1;
             s_links[i].epoch = h->epoch;
-            s_links[i].token[0] = (unsigned int)rand() ^ plat_time_ms() * 2654435761u ^ s_seed;
-            s_links[i].token[1] = (unsigned int)rand() ^ h->epoch * 2246822519u ^ (s_seed >> 1);
+            // The joiner's own match id (its HELLO token) names the seat
+            // from now on; a rejoin presents it again.
+            const NetHelloBody* hello = (len - (int)sizeof(NetHeader) >= (int)sizeof(NetHelloBody) && h->eventCount == 0)
+                ? (const NetHelloBody*)(buf + sizeof(NetHeader)) : NULL;
+            if (hello != NULL && (hello->token[0] || hello->token[1])) {
+                s_links[i].token[0] = hello->token[0];
+                s_links[i].token[1] = hello->token[1];
+            } else {
+                s_links[i].token[0] = (unsigned int)rand() ^ plat_time_ms() * 2654435761u ^ s_seed;
+                s_links[i].token[1] = (unsigned int)rand() ^ h->epoch * 2246822519u ^ (s_seed >> 1);
+            }
             s_links[i].lastHeardMs = plat_time_ms();
             s_chars[i] = ZM_SEAT_FREE;
             s_chars[i] = net_grant_char(i, -1);
@@ -1037,6 +1124,8 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
         }
     }
     if (link < 0) {                        // a stranger, or the table is full
+        // A joiner's hello with every seat taken: tell it the lobby is full.
+        if (s_role == ZM_NET_ZOMBIE && h->type == PKT_HELLO && !s_lobbyGo) net_reject(from, h->epoch);
         net_log_drop(from, s_lobbyGo ? "unknown sender after the game was started"
                                      : "unknown sender (not a hello, or every seat taken)",
                      h->type, (int)s_role);
@@ -1079,6 +1168,20 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
     int origin = (s_role == ZM_NET_ZOMBIE) ? link : h->origin;
 
     switch (h->type) {
+    case PKT_BUMPER:
+        if (s_role == ZM_NET_ZOMBIE && bodyLen == 1 && body[0] <= 2) {
+            if (s_bumperReady[link] < (int)body[0]) s_bumperReady[link] = (signed char)body[0];
+            net_bumper_advance();   // a human director is not at the barrier to run it
+            s_bumperSent = 0; // repeat phase promptly, including after a lost reply
+            unsigned char reply[5] = { s_bumperPhase, s_chars[0], s_chars[1], s_chars[2], s_chars[3] };
+            net_send_link(link, PKT_BUMPER, (unsigned char)s_self, reply, sizeof(reply));
+        } else if (s_role == ZM_NET_SURVIVOR && link == 0 && bodyLen == 5 && body[0] <= 3) {
+            if (body[0] >= s_bumperPhase) {
+                s_bumperPhase = body[0];
+                for (int i = 0; i < ZM_NET_MAX_PLAYERS; ++i) s_chars[i] = body[i+1];
+            }
+        }
+        break;
     case PKT_HELLO:
         if (s_role == ZM_NET_ZOMBIE && bodyLen >= (int)sizeof(NetHelloBody)) {
             const NetHelloBody& hello = *(const NetHelloBody*)body;
@@ -1159,6 +1262,8 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
             } else {
                 net_begin_grace(link);
             }
+        } else if (!s_started) {
+            s_kickText = "THE HOST LEFT THE GAME";
         } else {
             net_begin_grace(0);
         }
@@ -1210,7 +1315,12 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
         }
         break;
     case PKT_REJECT:
-        if (s_role == ZM_NET_SURVIVOR) {
+        if (s_role == ZM_NET_SURVIVOR && s_status == ZM_NET_JOINING && !s_rejoining) {
+            s_failureText = "THE LOBBY IS FULL";
+            s_failureHint = "THE GAME ALREADY HAS ITS SURVIVORS";
+            s_status = ZM_NET_FAILED;
+            L.expired = true;
+        } else if (s_role == ZM_NET_SURVIVOR) {
             s_failureText = "REJOIN NOT AVAILABLE";
             s_failureHint = "THE SAVED MATCH OR REJOIN WINDOW ENDED";
             s_status = zombie_mode_armed() ? ZM_NET_EXPIRED : ZM_NET_FAILED;
@@ -1219,6 +1329,65 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
         }
         break;
     }
+}
+
+// One of the host's own events (s_loopback): what net_take_event does for a
+// remote one, without its link checks - the sender is this copy.
+static void net_take_local(const NetEvent& e)
+{
+    switch (e.kind) {
+    case ZM_EV_SHOTGUN: zm_shotgun_take(e.args, e.src); return;
+    case ZM_EV_TIMEOUT: zm_timeout_take(e.args, e.src); return;
+    case ZM_EV_PIANO:   zm_piano_take(e.args, e.src); return;
+    case ZM_EV_PICKUP:  zm_pickups_take(e.args, e.src); return;
+    case ZM_EV_BOX:     zm_box_take(e.args, e.src); return;
+    case ZM_EV_ROSTER:  zm_world_apply_remote(e.args, e.src); return;
+    case ZM_EV_WIN:
+        if (!zm_match_take_win(e.args, e.src)) { s_pendingWin = e; s_pendingWinHave = true; }
+        return;
+    case ZM_EV_REVIVE:
+        // A reservation or its release; the grant (args[2] 1) is the reply.
+        if (e.args[2] != 1 && e.args[1] <= 0) {
+            bool granted = zm_revive_host_claim(e.args[0], e.args[1], e.src);
+            if (e.args[1] < 0) {
+                NetEvent reply = e;
+                reply.args[1] = granted ? (short)-e.args[1] : 0;
+                reply.args[2] = 1;
+                if (s_loopbackCount < ZM_NET_MAX_PENDING) s_loopback[s_loopbackCount++] = reply;
+            }
+            return;
+        }
+        break;
+    }
+    if (s_inboxCount < (int)(sizeof(s_inbox) / sizeof(s_inbox[0]))) s_inbox[s_inboxCount++].ev = e;
+}
+
+static void net_drain_loopback(void)
+{
+    // Handlers may queue replies to themselves: take a batch at a time.
+    for (int pass = 0; pass < 4 && s_loopbackCount > 0; pass++) {
+        NetEvent batch[ZM_NET_MAX_PENDING];
+        int n = s_loopbackCount;
+        memcpy(batch, s_loopback, sizeof(NetEvent) * n);
+        s_loopbackCount = 0;
+        for (int i = 0; i < n; i++) net_take_local(batch[i]);
+    }
+}
+
+static void net_reset(void);
+
+// The session closes and the lobby's NEW GAME menu shows why (FAILED).
+static void net_kick(void)
+{
+    const char* why = s_kickText;
+    dbg_printf("[net] %s: back to the menu\n", why);
+    plat_net_close();
+    g_bRunInBackground = g_bRunInBackgroundConfig;
+    net_reset();
+    s_role = ZM_NET_OFF;
+    s_status = ZM_NET_FAILED;
+    s_failureText = why;
+    s_failureHint = "";
 }
 
 void zm_net_poll(void)
@@ -1231,7 +1400,10 @@ void zm_net_poll(void)
         int n = plat_net_recv(buf, sizeof(buf), &from);
         if (n <= 0) break;
         net_handle(buf, n, &from);
+        if (s_kickText != NULL) break;
     }
+    if (s_kickText != NULL) { net_kick(); return; }
+    net_drain_loopback();
     unsigned int now = plat_time_ms();
 
     // Time out silent links.
@@ -1249,6 +1421,7 @@ void zm_net_poll(void)
         }
         unsigned int timeout = s_started && (s_role == ZM_NET_SURVIVOR || s_ready[i]) ?
             ZM_NET_GAME_TIMEOUT_MS : ZM_NET_TIMEOUT_MS;
+        if (!s_lobbyGo) timeout = ZM_NET_LOBBY_TIMEOUT_MS;
         if (L.lost || now - L.lastHeardMs <= timeout) continue;
         if (s_status == ZM_NET_JOINING) continue;
         if (s_started && (s_role == ZM_NET_SURVIVOR || s_ready[i])) { net_begin_grace(i); continue; }
@@ -1257,12 +1430,16 @@ void zm_net_poll(void)
             s_states[i].valid = false;
             if (!s_lobbyGo) { L.used = false; s_chars[i] = ZM_SEAT_FREE; }
             dbg_printf("[net] survivor %d timed out\n", i);
+        } else if (!s_started) {
+            s_kickText = "LOST CONTACT WITH THE HOST";
         } else {
             s_status = ZM_NET_LOST;
             for (int k = 0; k < ZM_NET_MAX_PLAYERS; k++) s_states[k].valid = false;
             dbg_printf("[net] connection lost\n");
         }
     }
+
+    if (s_kickText != NULL) { net_kick(); return; }
 
     if (now - s_lastHelloMs > ZM_NET_HELLO_MS) {
         s_lastHelloMs = now;
@@ -1271,9 +1448,8 @@ void zm_net_poll(void)
             // carries the character pick and the map vote.
             NetHelloBody c = {};
             c.character = (unsigned char)s_myChar; c.vote = s_myVote; c.revision = s_lobbyRevision;
-            if (s_rejoining) {
-                c.seed = s_seed; c.token[0] = s_links[0].token[0]; c.token[1] = s_links[0].token[1];
-            }
+            c.token[0] = s_links[0].token[0]; c.token[1] = s_links[0].token[1];
+            if (s_rejoining) c.seed = s_seed;
             net_send_link(0, PKT_HELLO, (unsigned char)(s_self < 0 ? 0 : s_self), &c, sizeof(c));
         } else if (s_role == ZM_NET_ZOMBIE && !s_lobbyGo) {
             for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
@@ -1321,6 +1497,8 @@ void zm_net_poll(void)
 // ---------------------------------------------------------------------------
 static void net_reset(void)
 {
+    s_loopbackCount = 0;
+    s_kickText = NULL;
     s_rejoining = s_downloaded = s_rejoinLoadReady = false;
     s_downloadOffset = s_downloadTotal = s_lastDownloadMs = 0;
     s_localLostAt = s_pauseRemaining = s_pauseReceived = s_pauseSerial = s_pauseMissing = 0;
@@ -1332,6 +1510,8 @@ static void net_reset(void)
     memset(s_links, 0, sizeof(s_links));
     memset(s_states, 0, sizeof(s_states));
     memset(s_ready, 0, sizeof(s_ready));
+    memset(s_bumperReady, -1, sizeof(s_bumperReady));
+    s_bumperPhase = 0; s_bumperSent = 0;
     for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) s_chars[i] = ZM_SEAT_FREE;
     s_inboxCount = 0;
     s_self = -1;
@@ -1370,7 +1550,8 @@ void zm_net_join(const char* address, unsigned short port, int character)
     net_reset();
     g_bRunInBackground = true;
     s_role = ZM_NET_SURVIVOR;
-    s_myChar = (character >= 0 && character < ZM_CHAR_COUNT) ? character : ZM_CHAR_CHRIS;
+    // No wish (-1) until the survivor picks: the host's free character stands.
+    s_myChar = (character >= 0 && character < ZM_CHAR_COUNT) ? character : ZM_SEAT_FREE;
     // The roster starts here: the director places monsters while this
     // survivor is still choosing its character (ZombieWorld.cpp).
     zm_world_reset(true);
@@ -1386,28 +1567,38 @@ void zm_net_join(const char* address, unsigned short port, int character)
     L.epoch = plat_time_ms() * 2654435761u ^ (unsigned int)rand();
     if (!L.epoch) L.epoch = 1;
     L.lastHeardMs = plat_time_ms();
+    // This survivor's match id: drawn here, carried by every HELLO.
+    L.token[0] = plat_time_ms() * 2246822519u ^ (unsigned int)rand() ^ L.epoch;
+    L.token[1] = (unsigned int)rand() * 3266489917u ^ (L.epoch >> 3) ^ 0x9E3779B9u;
+    if (!L.token[0] && !L.token[1]) L.token[1] = 1;
     s_status = ZM_NET_JOINING;
     dbg_printf("[net] joining %s:%u as %s\n", address, (unsigned)port, zm_char_name(s_myChar));
 }
+
+static void net_broadcast_lobby(void);
 
 void zm_net_set_char(int character)
 {
     if (character < 0 || character >= ZM_CHAR_COUNT) return;
     s_myChar = character;
     s_lastHelloMs = 0;              // tell the host now
+    // The host of an AI director's game plays seat 0 itself.
+    if (s_role == ZM_NET_ZOMBIE && zm_net_ai_level() > 0 && !s_lobbyGo) {
+        s_chars[0] = net_grant_char(0, character);
+        net_broadcast_lobby();
+    }
 }
 
-bool zm_net_rejoin_saved(int seat)
+bool zm_net_rejoin_saved(void)
 {
-    if (seat < 1 || seat > 3) return false;
-    char path[512]; net_credential_path(path, sizeof(path), seat);
+    char path[512]; net_credential_path(path, sizeof(path));
     size_t size = 0;
     void* file = plat_file_read_all(path, &size);
     NetRejoinCredential c = {};
     if (file && size == sizeof(c)) memcpy(&c, file, sizeof(c));
     free(file);
-    if (size != sizeof(c) || c.magic != 0x52454A43 || c.seat != seat || c.character >= ZM_CHAR_COUNT) {
-        s_status = ZM_NET_FAILED; s_failureText = "NO SAVED SESSION FOR THIS SEAT";
+    if (size != sizeof(c) || c.magic != 0x52454A43 || c.seat < 1 || c.seat > 3 || c.character >= ZM_CHAR_COUNT) {
+        s_status = ZM_NET_FAILED; s_failureText = "NO SAVED MATCH TO REJOIN";
         s_failureHint = ""; return false;
     }
     unsigned int a = (c.ip >> 24) & 255, b = (c.ip >> 16) & 255, d = c.ip & 255;
@@ -1497,6 +1688,21 @@ void zm_net_set_timeout_enabled(bool on)
     net_broadcast_lobby();
 }
 
+int zm_net_seat_limit(void) { return zm_net_ai_level() > 0 ? 3 : ZM_NET_MAX_PLAYERS; }
+int zm_net_ai_level(void) { return (s_lobbyOptions & ZM_LOBBY_OPT_AI_MASK) >> ZM_LOBBY_OPT_AI_SHIFT; }
+void zm_net_set_ai_level(int level)
+{
+    if (s_role != ZM_NET_ZOMBIE || s_lobbyGo) return;
+    if (level < 0) level = 0;
+    if (level > 5) level = 5;
+    s_lobbyOptions = (unsigned char)((s_lobbyOptions & ~ZM_LOBBY_OPT_AI_MASK) | (level << ZM_LOBBY_OPT_AI_SHIFT));
+    // Seat 0: the host's survivor against the AI, else the human director.
+    if (level == 0) s_chars[0] = ZM_SEAT_DIRECTOR;
+    else if (s_chars[0] >= ZM_CHAR_COUNT) s_chars[0] = net_grant_char(0, s_myChar);
+    dbg_printf("[net] AI director level %d\n", level);
+    net_broadcast_lobby();
+}
+
 void zm_net_set_vote(int vote)
 {
     if (s_role != ZM_NET_SURVIVOR) return;
@@ -1559,5 +1765,47 @@ bool zm_net_start_game(unsigned int timeoutMs)
         }
     }
     dbg_printf("[net] game started; %d survivors seated\n", n);
-    return n > 0;
+    // Against the AI director the host is a survivor too: it may play alone.
+    return n > 0 || zm_net_ai_level() > 0;
+}
+
+// The host's barrier phase from the seats' reports. Against the AI the host
+// is a survivor at the barrier; a human director plays at once
+// (ZombieBumpers.cpp) and only the survivors hold it.
+static void net_bumper_advance(void)
+{
+    signed char ready[ZM_NET_MAX_PLAYERS];
+    memcpy(ready, s_bumperReady, sizeof(ready));
+    unsigned int seats = zm_net_ai_level() > 0 ? 1u : 0u;
+    for (int i = 1; i < ZM_NET_MAX_PLAYERS; ++i) {
+        if (!s_links[i].used || s_links[i].lost) continue;
+        seats |= 1u << i;
+        if (s_chars[i] >= ZM_CHAR_COUNT) ready[i] = -1;
+    }
+    unsigned char phase = zm_bumper_barrier_phase(s_bumperPhase, ready, seats);
+    if (phase != s_bumperPhase) { s_bumperPhase = phase; s_bumperSent = 0; }
+}
+
+bool zm_net_bumper_released(void) { return !zm_net_active() || s_bumperPhase >= 3; }
+
+// Repeated UDP readiness/phase exchange: no gameplay begins until all copies
+// have finished their intro. A reconnect does not replay the original barrier.
+int zm_net_bumper_phase(int progress)
+{
+    if (!zm_net_active()) return 3;
+    unsigned int now = plat_time_ms();
+    if (s_role == ZM_NET_ZOMBIE) {
+        s_bumperReady[0] = (signed char)progress;
+        net_bumper_advance();
+        if (!s_bumperSent || now - s_bumperSent >= 100) {
+            unsigned char body[5] = { s_bumperPhase, s_chars[0], s_chars[1], s_chars[2], s_chars[3] };
+            net_send_all(PKT_BUMPER, (unsigned char)s_self, body, sizeof(body), -1);
+            s_bumperSent = now ? now : 1;
+        }
+    } else if (!s_bumperSent || now - s_bumperSent >= 100) {
+        unsigned char body = (unsigned char)progress;
+        net_send_link(0, PKT_BUMPER, (unsigned char)s_self, &body, 1);
+        s_bumperSent = now ? now : 1;
+    }
+    return s_bumperPhase;
 }

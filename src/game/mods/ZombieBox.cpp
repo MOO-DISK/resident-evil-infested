@@ -62,9 +62,12 @@ void zm_box_take(const short* a, int src)
 {
     unsigned int seed = (unsigned short)a[6] | ((unsigned int)(unsigned short)a[7] << 16);
     if (!zombie_mode_armed() || seed != zm_net_seed() || a[2] < 0 || a[2] >= 48) return;
-    if (zm_game_role() == ZM_NET_SURVIVOR) {
-        if (src != ZM_NET_DIRECTOR) return;
+    // The host's replies and updates (back to the host's own survivor too, in
+    // an AI director's game); everything else is a request for the host.
+    if (a[0] != BOX_REQUEST) {
+        if (zm_game_role() != ZM_NET_SURVIVOR || src != ZM_NET_DIRECTOR) return;
         if (a[0] == BOX_UPDATE) {
+            if (zm_net_role() == ZM_NET_ZOMBIE) return;   // the host's box is the box
             unsigned int revision = (unsigned short)a[1] | ((unsigned int)(unsigned short)a[5] << 16);
             if (s_revisionHave && (int)(revision - s_revision) < 0) return;
             g_itemboxSlots[a[2]].Id = (unsigned char)a[4];
@@ -74,7 +77,7 @@ void zm_box_take(const short* a, int src)
                    (a[0] == BOX_DONE || a[0] == BOX_DENY)) s_reply = a[0];
         return;
     }
-    if (zm_game_role() != ZM_NET_ZOMBIE || src < 1 || src > 3 || a[0] != BOX_REQUEST ||
+    if (zm_net_role() != ZM_NET_ZOMBIE || src < 0 || src > 3 || zm_net_char(src) < 0 ||
         a[5] < 0 || a[5] >= (zm_net_char(src) == ZM_CHAR_JILL ? 8 : 6)) return;
     unsigned short token = (unsigned short)a[1];
     // A delayed semantic retry must never replay an older box update.
@@ -93,7 +96,7 @@ void zm_box_take(const short* a, int src)
     memcpy(s_latest[src], a, sizeof(s_latest[src]));
     int free = -1;
     for (int i = 0; i < 32; i++) if (!s_receipts[src][i].used) { free = i; break; }
-    const ZmNetPeerState* peer = zm_net_player(src);
+    const ZmNetPeerState* peer = zm_seat_state(src);
     ItemSlot& slot = g_itemboxSlots[a[2]];
     bool valid = free >= 0 && !zombie_mode_match_over() && peer && !peer->dead &&
                  !peer->spectating && !peer->transitioning && box_item(slot) == (unsigned short)a[3] &&
@@ -103,6 +106,8 @@ void zm_box_take(const short* a, int src)
     }
     BoxReceipt& receipt = s_receipts[src][free]; receipt.used = true;
     memcpy(receipt.args, a, sizeof(receipt.args));
+    // The host's own survivor never reconnects: no receipt to keep for it.
+    if (src == zm_net_self()) receipt.used = false;
     slot.Id = (unsigned char)a[4]; slot.qty = (unsigned short)a[4] >> 8;
     s_latestDone[src] = true;
     s_revision++;
@@ -115,7 +120,7 @@ bool zombie_mode_box_claim(unsigned int playerSlot, unsigned int boxSlot,
 {
     if (!zombie_mode_box_shared()) return true;
     if (s_waiting || playerSlot >= (unsigned int)zombie_mode_inventory_slots(6) || boxSlot >= 48 ||
-        g_playerEntity.health < 0 || zombie_mode_match_over() || zm_net_status() != ZM_NET_CONNECTED) return false;
+        g_playerEntity.health < 0 || zombie_mode_match_over() || !zm_net_active()) return false;
     const unsigned char* offered = (unsigned char*)g_ItemSlotsPointer + playerSlot * 2;
     short request[8] = { BOX_REQUEST, (short)++s_sequence, (short)boxSlot,
         (short)(*item | (*quantity << 8)), (short)(offered[0] | (offered[1] << 8)),

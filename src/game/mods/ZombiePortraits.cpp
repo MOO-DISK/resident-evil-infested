@@ -93,7 +93,7 @@ void zombie_mode_load_portraits(void)
 int zombie_mode_inventory_portrait(void)
 {
     int original = g_playerEntity.id & 3;
-    if (!g_bPlayAsZombie || zm_net_role() != ZM_NET_SURVIVOR) return original;
+    if (!g_bPlayAsZombie || zm_net_char(zm_net_self()) < 0) return original;
     int ch = zm_net_char(zm_net_self());
     if (ch >= 0 && ch < 6 && s_portraitReady[ch]) return ch;
     // Even if generation/upload failed, Jill and Rebecca's original art exists.

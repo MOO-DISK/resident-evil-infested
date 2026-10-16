@@ -61,6 +61,13 @@ static bool zm_stats_has_survivor(void)
     return zm_game_role() != ZM_NET_ZOMBIE;
 }
 
+// This copy keeps the director's account: its copy, single player's, or the
+// host of an AI director's game.
+static bool zm_stats_has_director(void)
+{
+    return zm_game_role() != ZM_NET_SURVIVOR || zm_ai_hosted();
+}
+
 static int zm_stats_self(void)
 {
     return zm_game_role() == ZM_NET_OFF ? ZM_STATS_SINGLE_SURVIVOR : zm_net_self();
@@ -128,7 +135,7 @@ static void zm_stats_fill_mine(void)
         m.kills = s_myKills;
         m.damage = s_myDamage;
     }
-    if (zm_game_role() != ZM_NET_SURVIVOR) {
+    if (zm_stats_has_director()) {
         zm_econ_stats(&s_director);
         s_directorHave = true;
     }
@@ -147,7 +154,8 @@ void zm_stats_match_over(int reason, int winner, unsigned int elapsedMs)
         const ZmSurvivorStats& m = s_surv[zm_net_self()];
         zm_net_send_event8(ZM_EV_STATS, 0, (short)m.deathSec, (short)m.hits, (short)m.kills,
                            (short)m.damage, 0, 0, 0);
-    } else if (zm_game_role() == ZM_NET_ZOMBIE) {
+    }
+    if (zm_game_role() != ZM_NET_OFF && zm_stats_has_director()) {
         const ZmEconStats& d = s_director;
         zm_net_send_event8(ZM_EV_STATS, 1, (short)(unsigned short)d.spent, (short)(unsigned short)d.earned,
                            (short)d.placed, (short)d.trapsSet, (short)d.lost, (short)d.survivorHits, 0);
@@ -167,7 +175,7 @@ void zm_stats_take(const short* a, int src)
         s_director.lost = a[5];
         s_director.survivorHits = a[6];
         s_directorHave = true;
-    } else if (src > 0 && src < ZM_NET_MAX_PLAYERS) {
+    } else if (src >= 0 && src < ZM_NET_MAX_PLAYERS && zm_net_char(src) >= 0) {
         ZmSurvivorStats& m = s_surv[src];
         m.have = true;
         m.deathSec = a[1];
@@ -237,7 +245,8 @@ void zm_stats_draw(unsigned int sinceMs)
     // The fade to white, then held.
     unsigned int level = sinceMs >= ZM_END_FADE_MS ? 255 : sinceMs * 255 / ZM_END_FADE_MS;
     if (level == 0) level = 1;
-    zm_end_rect(0, 0, 320, 240, 0x50000000u, (unsigned char)level, 40);
+    // Over Wesker's frozen frame (ZombieBumpers.cpp) there is no white.
+    if (!zm_bumpers_backdrop()) zm_end_rect(0, 0, 320, 240, 0x50000000u, (unsigned char)level, 40);
     if (sinceMs < ZM_END_TEXT_MS) return;
 
     char line[48], t[16];
@@ -279,7 +288,7 @@ void zm_stats_draw(unsigned int sinceMs)
 
     zm_end_text(20, 142, 4, "SURVIVOR  FATE        HITS KILLS DMG");
     int y = 158;
-    for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) {
+    for (int i = 0; i < ZM_NET_MAX_PLAYERS; i++) {
         int ch;
         if (zm_game_role() == ZM_NET_OFF) {
             if (i != ZM_STATS_SINGLE_SURVIVOR) continue;

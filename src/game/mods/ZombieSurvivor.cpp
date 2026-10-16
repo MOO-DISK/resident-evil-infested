@@ -164,7 +164,8 @@ static int zm_scan_enemy_slots(const unsigned char* script)
             unsigned char op = *q;
             if (op >= sizeof(kScdOperandWidth)) break;
             if (op == 0x1B) {
-                int slot = q[0x12] & 0x0F;
+                // Yawn takes twelve slots after its own for its body.
+                int slot = zm_yawn_last_slot(q[1], q[0x12] & 0x0F);
                 if (slot > highest) highest = slot;
             }
             q += 1u + kScdOperandWidth[op];
@@ -236,6 +237,11 @@ bool zm_door_usable(const ZmDoor* d, unsigned char stage, unsigned char room)
     if (zm_trap_door_locked(stage, room, d->dest, d->flags0B, NULL)) return false;
     // The unpowered elevator, the keypad door before its pass number (ZombieKeypad.cpp).
     if (zm_access_door_closed(stage, room, d->dest)) return false;
+    // The lesson room's hole before Yawn 2 is beaten, and the attic while
+    // Yawn is in it (ZombieYawn.cpp).
+    if (zm_yawn_hole_shut(stage, room, d->dest)) return false;
+    if (zm_yawn_traps_exit(stage, room)) return false;
+    if (zm_yawn_lesson_sealed(stage, room, d->dest)) return false;
     unsigned char ds, dr;
     zm_decode_dest(d->dest, stage, &ds, &dr);
     return !(ds == stage && dr == room);
@@ -579,13 +585,15 @@ void zm_survivor_start_as_player(void)
     memset(&s_survivor, 0, sizeof(s_survivor));
     memset(s_doorCache, 0, sizeof(s_doorCache));
     s_doorCacheNext = 0;
-    static const int kCorner[3][2] = {
+    static const int kCorner[4][2] = {
         {  0,    -1400 },      // nearest the front door
         { -1212,   700 },      // back left
         {  1212,   700 },      // back right
+        {  0,     2100 },      // back middle: the host's, against the AI director
     };
     int seat = zm_net_self() - 1;
-    if (seat < 0 || seat > 2) seat = 0;
+    if (seat < 0) seat = 3;
+    if (seat > 3) seat = 0;
     int x = 17000 + kCorner[seat][0];
     int z = 8500 + kCorner[seat][1];
     int backX, backZ;
@@ -1277,7 +1285,7 @@ void zm_survivor_frame(void)
         // then put the real pad (the zombie's) back.
         short realHeld = g_PlayerDpadHeld;
         short realPressed = g_PlayerDpadPressed;
-        unsigned int held = zs_think();
+        unsigned int held = zm_bumpers_hold_input() ? 0 : zs_think();
         if (s.present) {
             g_PlayerDpadHeld = (short)held;
             g_PlayerDpadPressed = (short)(held & ~s.prevHeld);
