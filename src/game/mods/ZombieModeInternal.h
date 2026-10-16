@@ -569,6 +569,8 @@ void zm_world_queue_feeding(Entity* e);
 bool zm_world_restore_enemy(Entity* e, unsigned char slot, unsigned char id);
 void zm_world_after_update(Entity* e);
 void zm_world_accept_net_state(Entity* e);
+// A monster whose init has not run yet: its health after the init, from a net snapshot.
+void zm_world_pending_health(Entity* e, short health);
 void zm_world_room_reset(void);
 int  zm_world_spawn_extras(int firstSlot, int endSlot);
 void zm_world_track(const Entity* e);
