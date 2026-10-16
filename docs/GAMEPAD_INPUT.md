@@ -385,6 +385,12 @@ word: `PAD_MOD1` (`0x10000`) and `PAD_MOD2` (`0x20000`, `src/game/Types.h`).
   (`read_sidewinder_pad`, the raw mask).
 - Off the mod, nothing changes: LB / RB stay aim.
 
+A survivor aiming a gun reloads with **cancel / run** (B or LT; keyboard V,
+Ctrl or Esc): the raw `0x40` rising edge in the gun aim hold
+(`player_behavior_13_gun_hold_input`), which in the original switches to the
+next target (behaviour 0x1A). In the mode it plays the empty gun's reload on
+a part-loaded handgun, shotgun or Python instead, and never switches targets.
+
 The director can hold LB (Shift on keyboard) to show a monster shortcut
 D-pad: Up spawns a zombie, Down a dog (Cerberus), Left a hunter, and Right
 a chimera in the current room. Each fresh direction press requests one

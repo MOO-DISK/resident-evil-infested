@@ -1385,7 +1385,7 @@ void PlayEntitySnd(unsigned char soundType) // 0x0047fbf0
 #define EMSND_ROOM_GROUPS 4
 #define EMSND_MOD_GROUPS  4
 static int         s_modEmSndBanks[EMSND_MOD_GROUPS * 10 * 2];
-static const char* s_modEmSndRow[EMSND_MOD_GROUPS];   // each group's first name, NULL = empty
+static const char* const* s_modEmSndRow[EMSND_MOD_GROUPS];   // each group's row, NULL = empty
 
 // ============================================================================
 // Snd_em (0x0047fca0)
@@ -1472,10 +1472,26 @@ static void emsnd_load_slot(int slot, const char* filename)
 // Port-added: give the play-as-zombie mod (mods/ZombieMode.cpp) a sound group
 // holding a monster type's ten cues, and return it (0-7, the value Snd_em reads
 // from bits 4-6 of entity+0x161), or -1 if there is no room for one.
-// A room that already loads the row - a zombie room's group starts with
-// "z_taore" - is used as is; then one of the mod's own groups (4-7) already
-// holding it or still empty; last, a group of the room's four whose ten slots
-// this room leaves empty, filled from `row`.
+// A room group of the same kind - its first four names (fall, steps, bite)
+// as the row's - is used as is, so a coated zombie keeps the room's own voice;
+// then one of the mod's own groups (4-7) already holding the exact row or
+// still empty; last, a group of the room's four whose ten slots this room
+// leaves empty, filled from `row`.
+// Every zombie row starts with "z_taore", the naked zombie's too (its steps
+// and bite are ze_/zep_), so matching on the first name alone gave every
+// zombie type in a room whichever zombie row loaded first.
+static int emsnd_names_match(const char* const* a, const char* const* b, int count)
+{
+    for (int i = 0; i < count; i++) {
+        if (a[i] == NULL || b[i] == NULL) {
+            if (a[i] != b[i]) return 0;
+        } else if (strcmp(a[i], b[i]) != 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 int Room_SetupZombieSoundGroup(const char* const* row)
 {
     const unsigned int roomIdx = get_stage_id() * 29 + (unsigned int)g_roomId;
@@ -1484,12 +1500,12 @@ int Room_SetupZombieSoundGroup(const char* const* row)
             ? g_RoomSoundNameTable[roomIdx] : NULL;
 
     for (int group = 0; group < 4 && names != NULL; group++) {
-        if (names[group * 10] != NULL && strcmp(names[group * 10], row[0]) == 0) {
+        if (names[group * 10] != NULL && emsnd_names_match(&names[group * 10], row, 4)) {
             return group;
         }
     }
     for (int g = 0; g < EMSND_MOD_GROUPS; g++) {
-        if (s_modEmSndRow[g] != NULL && strcmp(s_modEmSndRow[g], row[0]) == 0) {
+        if (s_modEmSndRow[g] != NULL && emsnd_names_match(s_modEmSndRow[g], row, 10)) {
             return EMSND_ROOM_GROUPS + g;
         }
     }
@@ -1498,7 +1514,7 @@ int Room_SetupZombieSoundGroup(const char* const* row)
             for (int i = 0; i < 10; i++) {
                 emsnd_load_record(&s_modEmSndBanks[(g * 10 + i) * 2], row[i]);
             }
-            s_modEmSndRow[g] = row[0];
+            s_modEmSndRow[g] = row;
             return EMSND_ROOM_GROUPS + g;
         }
     }

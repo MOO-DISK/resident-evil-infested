@@ -887,6 +887,14 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 - **Modifier buttons** (`PAD_MOD1` / `PAD_MOD2`, docs/GAMEPAD_INPUT.md 6a):
   in the mode LB / RB (keyboard Shift / Tab) are two new buttons, no longer
   aim, read past the remap tables in `ReadPadBoth`. Untested by the user.
+- **Reload button** (survivors): cancel/run pressed while aiming (pad B / LT,
+  keyboard V / Ctrl / Esc) plays the empty gun's reload (behaviour 0x18,
+  motion 0xE) on a part-loaded handgun, shotgun or Python with its ammo in
+  the inventory; `fire_consume_ammo_stack` tops it up, keeping the rounds in
+  it (`zombie_mode_manual_reload`, `weapon_manual_reload_ready`). In the mode
+  that press no longer switches targets (the original's behaviour 0x1A). The
+  other weapons have no reload motion and still reload through the
+  inventory. Untested by the user.
 - **Voice lines** (`ZombieVoice.cpp`, survivors): hold LB (Shift) and press
   up HELP, down WATCH OUT, left GUARD ME, right LEAD THE WAY; aim (X)
   FOLLOW ME, inventory (Y) STAY HERE, action (A) USE THAT, run (B) RUN AWAY.

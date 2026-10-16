@@ -4089,6 +4089,21 @@ static char weapon_fire_check(void)
     return (char)(get_item_slot(weapon_ammo_item_id(g_playerEntity.equippedWeaponId)) + 1);
 }
 
+// Port-added mod: can the survivor's reload button reload the equipped gun
+// now? Only the guns with a reload motion (b18 is gated on id < 6 - the
+// handgun, the shotgun and the Pythons), short of a full load, with their
+// ammo in the inventory. The DC's endless Python never needs one.
+static bool weapon_manual_reload_ready(void)
+{
+    unsigned char weaponId = g_playerEntity.equippedWeaponId;
+    if (g_EquippedItemId == 0 || weaponId < ITEM_BERETTA || weaponId >= 6) return false;
+    unsigned char* slot = (unsigned char*)g_ItemSlotsPointer + (g_EquippedItemId - 1) * 2;
+    if (dc_is_infinite_colt_python(slot[0])) return false;
+    unsigned char maxQty = g_ItemMaxQty[(unsigned int)weapon_ammo_item_id(weaponId) * 4];
+    if ((slot[1] & 0x7f) >= maxQty) return false;
+    return weapon_fire_check() != 0;
+}
+
 // ============================================================================
 // player_aim_cone_test @ 0x00496be0
 // Does the ray from the player through `delta` cross a sight-blocking room
@@ -4639,8 +4654,19 @@ static void player_behavior_13_gun_hold_input(void)
             }
         }
     }
+    // Port-added mod: in the zombie mode a survivor's cancel/run press (pad B /
+    // LT, keyboard V / Ctrl / Esc) reloads instead - the empty gun's reload
+    // motion, whose ammo step tops a part-loaded gun up (fire_consume_ammo_stack).
+    // Nothing to reload, the press does nothing: it never switches targets.
+    if ((g_PlayerPadHeld & 0x40) != 0 && zombie_mode_manual_reload()) {
+        if (weapon_manual_reload_ready()) {
+            g_playerEntity.action_behavior = 0x18;
+            g_playerEntity.action_state = 0;
+            return;
+        }
+    }
     // Raw pad bit 4 with a target lock starts the special lock-on fire.
-    if ((g_PlayerPadHeld & 0x40) != 0 && player_find_aim_target() != 0) {
+    else if ((g_PlayerPadHeld & 0x40) != 0 && player_find_aim_target() != 0) {
         g_playerEntity.action_behavior = 0x1a;           // 0x00459150 - not yet transcribed
         g_playerEntity.action_state = 0;
         return;
@@ -5264,6 +5290,28 @@ static void fire_consume_ammo_stack(void)
             bestSlot = i;
             bestQty = qty;
         }
+    }
+    // Port-added mod: the survivor's reload button reloads a part-loaded gun
+    // (weapon_manual_reload_ready); the rounds still in it are kept and only
+    // the shortfall comes off the stack. The original only gets here empty,
+    // where this is the same as below. Bit 7 (the volley gate) is dropped.
+    unsigned char* gunQty = (unsigned char*)g_ItemSlotsPointer + g_EquippedItemId * 2 - 1;
+    unsigned char loaded = zombie_mode_armed() ? (unsigned char)(*gunQty & 0x7f) : 0;
+    if (loaded != 0) {
+        unsigned char need = (unsigned char)(maxQty > loaded ? maxQty - loaded : 0);
+        if (bestQty == 0 || need == 0) {
+            *gunQty = loaded;
+            return;
+        }
+        if (need < bestQty) {
+            *gunQty = maxQty;
+            ((unsigned char*)g_ItemSlotsPointer)[bestSlot * 2 + 1] = bestQty - need;
+            return;
+        }
+        *gunQty = (unsigned char)(loaded + bestQty);
+        ((unsigned char*)g_ItemSlotsPointer)[bestSlot * 2] = 0;
+        rearrange_item_slots();
+        return;
     }
     if (maxQty < bestQty) {
         ((unsigned char*)g_ItemSlotsPointer)[g_EquippedItemId * 2 - 1] = maxQty;

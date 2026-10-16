@@ -152,6 +152,10 @@ bool zombie_mode_armed(void);
 // not the PC unlock's endless one (PlayerAnimations.cpp weapon_autoaim_check
 // / the hold-fire, MainMenu.cpp's count).
 bool zombie_mode_ingram_finite(unsigned char itemId);
+// A survivor's reload button (PlayerAnimations.cpp's gun aim hold): the
+// cancel/run press while aiming plays the empty gun's reload (behavior 0x18)
+// on a part-loaded one and tops it up, instead of switching targets.
+bool zombie_mode_manual_reload(void);
 // cmd_scd_event_create: true = this event script is a story scene (a voice
 // line or a movie in it) or a monster's entrance (takes the control and drives
 // an enemy); do not start it - its flag writes are made instead.

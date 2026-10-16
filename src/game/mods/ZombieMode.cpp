@@ -2025,6 +2025,11 @@ bool zombie_mode_ingram_finite(unsigned char itemId)
     return s_zombieModeArmed && itemId == ITEM_INGRAM;
 }
 
+bool zombie_mode_manual_reload(void)
+{
+    return s_zombieModeArmed && s_gameRole == ZM_NET_SURVIVOR;
+}
+
 bool zombie_mode_skip_intro(void)
 {
     // The mode has no story: no logo, opening or prologue movie, single
