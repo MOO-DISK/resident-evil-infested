@@ -187,7 +187,7 @@ static void lobby_draw_players(int x, int y)
 // A screen's menu: Up / Down move, Action picks an available item. Items
 // carry an id (MI_*) so a screen can build its list from what applies.
 enum {
-    MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_TIMEOUT, MI_LEAVE, MI_START, MI_VETO,
+    MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_LEAVE, MI_START, MI_VETO,
     MI_ACCEPT, MI_BACK_LOBBY, MI_CONTINUE, MI_CLOSE, MI_READY, MI_CHANGE_CHAR, MI_VIEW_MAP,
 };
 #define LOBBY_MENU_MAX 8
@@ -1103,7 +1103,6 @@ static void lobby_room(void)
             m.add(MI_GENERATE, zm_net_survivor_count() > 0,
                   zm_net_survivor_count() > 0 ? "GENERATE THE MAP" : "GENERATE THE MAP - NOBODY YET");
         }
-        if (host) m.add(MI_TIMEOUT, true, "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
         m.add(MI_LEAVE, true, "LEAVE");
 
         // The AI level steps with left / right as well as Action.
@@ -1128,9 +1127,6 @@ static void lobby_room(void)
             s_aiLevel = ai >= 5 ? 1 : ai + 1;
             zm_net_set_ai_level(s_aiLevel);
             break;
-        case MI_TIMEOUT:
-            zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
-            break;
         case MI_LEAVE:
             zm_net_stop();
             return;
@@ -1150,9 +1146,6 @@ static void lobby_room(void)
             lobby_draw_players(x, y);
         }
         if (joined) {
-            char option[48];
-            snprintf(option, sizeof(option), "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
-            lobby_print(x, 136, 0x7F, option);
             lobby_print(x, 200, 0x7F, "WAITING FOR THE HOST TO SHOW THE MAP");
         }
         lobby_menu_draw(m, sel, x, host ? 136 : 160);

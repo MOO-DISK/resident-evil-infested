@@ -816,6 +816,11 @@ bool zm_yawn_clock_hold(void)
     return false;
 }
 
+bool zombie_mode_poison_paused(void)
+{
+    return zombie_mode_armed() && zm_yawn_lockdown();
+}
+
 bool zm_yawn_lockdown(void)
 {
     for (int b = 0; b < YW_BOSSES; b++) if (s_phase[b] == YW_LOCKDOWN) return true;

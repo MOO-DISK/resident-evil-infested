@@ -142,7 +142,7 @@ int zm_world_reconnect_export(void* out, int capacity)
             if (slot < 0 || slot >= ZM_FIRST_SURVIVOR_SLOT) continue;
             const Entity& e = g_EnemiesList[slot];
             if (!(e.status_flags & ENTITY_STATUS_ACTIVE) || e.id != r.id) continue;
-            r.health = e.health; r.alive = !zm_monster_dead(&e);
+            r.health = e.health; r.alive = !zm_econ_kill_confirmed(&e);
             r.x = (short)e.scaMatrixData.localMatrix.t[0]; r.y = (short)e.scaMatrixData.localMatrix.t[1];
             r.z = (short)e.scaMatrixData.localMatrix.t[2]; r.angle = e.angle;
             r.behavior = e.behavior_flags; r.feeding = r.alive && e.state == ZOMBIE_STATE_EATING;
@@ -291,7 +291,9 @@ void zm_world_capture_room(const Entity* skip)
         ZmRosterEntry* r = zm_roster_find(g_stageId, g_roomId, uid, e->id, true);
         if (r == NULL) break;
         if (r->departed) continue;
-        r->alive = zm_monster_dead(e) ? 0 : 1;
+        // Keep a revivable fall alive in the roster too: a remote capture
+        // must not award time before the controller commits the corpse.
+        r->alive = zm_econ_kill_confirmed(e) ? 0 : 1;
         r->health = e->health;
         // Dead: a negative health says so on the wire, apart from the body
         // carried out below (the director's refund, zm_world_apply_remote).

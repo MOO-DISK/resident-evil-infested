@@ -4,6 +4,7 @@
 #include "../entities/Zombie.h"
 #include "../FileLoader.h"
 #include "../PrintText.h"
+#include "../SpriteRenderer.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
 #include "../../DebugPrint.h"
@@ -511,6 +512,11 @@ static bool         s_clockRemoteHeld = false;          // ...and standing still
 static unsigned int s_clockAtMs = 0;                    // ...and when it came
 static bool         s_clockHave = false;
 static unsigned int s_clockSentMs = 0;
+static unsigned int s_clockPopupSeconds = 0;
+static unsigned int s_clockPopupAtMs = 0;
+static unsigned short s_clockPopupSequence = 0;
+#define ZM_CLOCK_POPUP_MS 2000
+#define ZM_CLOCK_POPUP_HOLD_MS 500
 static unsigned int s_clockBonusMs = 0;                 // the keeper's: time added
 static unsigned int s_clockHeldMs = 0;                  // ...time stood still, holds over
 static unsigned int s_clockHeldAt = 0;                  // ...the current hold's start
@@ -704,6 +710,9 @@ void zombie_mode_new_game(int isNewGame)
     s_clockHave = false;
     s_clockSentMs = 0;
     s_clockBonusMs = 0;
+    s_clockPopupSeconds = 0;
+    s_clockPopupAtMs = 0;
+    s_clockPopupSequence = 0;
     s_clockHeldMs = 0;
     s_clockHeldAt = 0;
     s_clockHeld = false;
@@ -779,7 +788,6 @@ void zombie_mode_new_game(int isNewGame)
     zm_drops_new_game();
     zm_pickups_reset();
     zm_box_reset();
-    zm_timeout_reset();
 
     if (s_gameRole == ZM_NET_SURVIVOR) {
         zm_survivor_start_as_player();
@@ -2773,7 +2781,10 @@ static unsigned int zm_clock_left_ms(void)
 
 void zm_clock_add_bonus(unsigned int ms)
 {
-    if (!zm_match_authority()) return;
+    if (!zm_match_authority() || ms == 0) return;
+    s_clockPopupSeconds = (ms + 999) / 1000;
+    s_clockPopupAtMs = zm_game_time_ms();
+    s_clockPopupSequence++;
     s_clockBonusMs += ms;
     s_clockSentMs = 0;                  // out at once
     dbg_printf("[zombie] the game clock gains %u s\n", ms / 1000);
@@ -2788,6 +2799,22 @@ void zm_clock_draw(void)
     snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "%s", line);
     zm_text_encode(PRINT_TEXT_BUFFER);
     PrintText8x14((short)(320 - 8 - (int)strlen(line) * 8), 222, 0x8F, 0);
+    unsigned int age = zm_game_time_ms() - s_clockPopupAtMs;
+    if (s_clockPopupSeconds && age < ZM_CLOCK_POPUP_MS) {
+        if (s_clockPopupSeconds < 60)
+            snprintf(line, sizeof(line), "+%u", s_clockPopupSeconds);
+        else
+            snprintf(line, sizeof(line), "+%u:%02u", s_clockPopupSeconds / 60, s_clockPopupSeconds % 60);
+        snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "%s", line);
+        zm_text_encode(PRINT_TEXT_BUFFER);
+        float fade = age <= ZM_CLOCK_POPUP_HOLD_MS ? 1.0f :
+            (float)(ZM_CLOCK_POPUP_MS - age) / (ZM_CLOCK_POPUP_MS - ZM_CLOCK_POPUP_HOLD_MS);
+        int first = g_SpriteQueueCount;
+        PrintText8x14((short)(320 - 8 - (int)strlen(line) * 8),
+                     (short)(204 - (int)((1.0f - fade) * 4)), 0x81, 0);
+        for (int i = first; i < g_SpriteQueueCount; i++)
+            g_SpriteCommandBuffer[i].alpha *= fade;
+    }
     zm_yawn_draw();
 }
 
@@ -2867,7 +2894,6 @@ void zombie_mode_draw_overlay(void)
     }
     zm_piano_draw();
     zm_access_draw();
-    zm_timeout_draw();
     zm_voice_draw();
     if (s_gameRole == ZM_NET_SURVIVOR) zm_room_name_draw();
     zm_clock_draw();
@@ -3019,8 +3045,10 @@ static void zm_clock_frame(void)
     }
     unsigned int left = zm_clock_left_ms();
     if (zm_net_role() == ZM_NET_ZOMBIE && (s_clockSentMs == 0 || now - s_clockSentMs >= ZM_CLOCK_SEND_MS)) {
-        zm_net_send_event(ZM_EV_CLOCK, (short)((left + 999) / 1000), (short)(hold ? 1 : 0),
-                          (short)(zm_match_elapsed_ms() / 1000), 0);
+        unsigned int popupAge = now - s_clockPopupAtMs;
+        zm_net_send_event8(ZM_EV_CLOCK, (short)((left + 999) / 1000), (short)(hold ? 1 : 0),
+                          (short)(zm_match_elapsed_ms() / 1000), (short)s_clockPopupSeconds,
+                          (short)s_clockPopupSequence, (short)(popupAge > 65535 ? 65535 : popupAge), 0, 0);
         s_clockSentMs = now != 0 ? now : 1;
     }
     int reason = left == 0 ? ZM_END_TIME : zm_all_survivors_dead() ? ZM_END_ALL_DEAD : -1;
@@ -7499,6 +7527,12 @@ static void zm_route_events(void)
             zm_drops_take_event(kind, a, src);
             break;
         case ZM_EV_CLOCK:
+            if (src != ZM_NET_DIRECTOR || zm_match_authority()) break;
+            if ((unsigned short)a[4] != s_clockPopupSequence) {
+                s_clockPopupSequence = (unsigned short)a[4];
+                s_clockPopupSeconds = (unsigned short)a[3];
+                s_clockPopupAtMs = zm_game_time_ms() - (unsigned short)a[5];
+            }
             s_clockLeftMs = (unsigned int)(unsigned short)a[0] * 1000u;
             s_clockRemoteHeld = a[1] != 0;
             s_clockRunMs = (unsigned int)(unsigned short)a[2] * 1000u;
@@ -7520,6 +7554,9 @@ static void zm_route_events(void)
             break;
         case ZM_EV_ROOMSYNC:
             zm_roomsync_take(a, src);
+            break;
+        case ZM_EV_TIME_PICKUP:
+            zm_time_pickups_take(a, src);
             break;
         case ZM_EV_VOICE:
             zm_voice_take(a, src);
@@ -7724,6 +7761,7 @@ void zombie_mode_net_frame(void)
     zm_greenhouse_frame();
     zm_roomsync_frame();
     zm_statue_frame();
+    zm_time_pickups_frame();
     zm_yawn_frame();
     zm_end_frame();
     zm_voice_frame();      // after the music's owners: its duck is the last volume set

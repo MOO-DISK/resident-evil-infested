@@ -6,7 +6,7 @@
 // loaded guns, all four crests in the main hall and every locked door (key
 // doors, the crest door, the elevator's power, the keypad) open. Comment out to disable; rebuild
 // every multiplayer copy after changing it.
-#define QUICK_DEBUG
+//#define QUICK_DEBUG
 
 // ============================================================================
 // ZombieModeInternal.h - what ZombieMode.cpp (the possessed zombie) and
@@ -213,7 +213,8 @@ enum {
                          //   a trap set on that room (ZombieTraps.cpp)
     ZM_EV_BOX = 16,      // private atomic box request/receipt; host -> all updates
                          //   changed; the box is shared (ZombieWorld.cpp)
-    ZM_EV_CLOCK = 17,    // director -> all: { seconds left, standing still, seconds run } - the game
+    ZM_EV_CLOCK = 17,    // director -> all: { seconds left, standing still, seconds run, latest bonus seconds,
+                         //   bonus sequence, bonus age ms (saturated), 0, 0 } - the game
                          //   clock, every 5 s and on every hold or bonus;
                          //   at zero the director sends ZM_EV_WIN { player, 1 } (it won)
     ZM_EV_DROP = 18,     // survivor -> all: { uid, item | qty << 8, x, y, z, angle,
@@ -234,15 +235,14 @@ enum {
     ZM_EV_ROOMSYNC = 33, // survivor -> all: {1 object, stage|room<<8, slot, x, z, orig x, orig z} /
                          //   {2 flags, stage|room<<8, byte, set, cleared} / {3 reset, stage|room<<8} -
                          //   a room's pushed objects and puzzle flags (ZombieRoomSync.cpp)
-    ZM_EV_TIMEOUT = 34,  // survivor -> host {1 request, player, seed low, seed high}; host -> all
-                         //   {2 start, player, seed low, seed high, duration / 100 ms} / {4 end, ...};
-                         //   host -> requester {3 refused, reason, ...} (ZombieTimeout.cpp)
+    // Event 34 retired (survivor timeout); keep subsequent IDs stable.
     ZM_EV_BOSS = 35,     // host -> all: {1 lockdown, boss, tenths of a second, seed low, seed high} /
                          //   {2 done, boss, 0, seed low, seed high} - a Yawn fight's phases; the
                          //   entry vote (ZombieYawn.cpp): survivor -> host {3 request, boss, player,
                          //   seed, seed} / {5 answer, boss, player, seed, seed, token, yes}; host -> all
                          //   {4 ask, boss, 0, seed, seed, token, voters} / {6 go, ...token} /
                          //   {7 called off, ...token}; host -> requester {8 refused, boss, player, ...}
+    ZM_EV_TIME_PICKUP = 37, // host -> all: {independent sphere index, seed low, seed high}
     ZM_EV_VOICE = 36,    // survivor -> all: { line, take, character, stage | room << 8, x, y, z, 0 } -
                          //   a voice line; each copy hears it in that room or through a door
                          //   from a neighbouring one (ZombieVoice.cpp)
@@ -279,15 +279,6 @@ void zm_match_progression_lost(void);
 void zm_shotgun_reset(void);
 // The bar's piano (ZombiePiano.cpp).
 void zm_piano_reset(void);
-// The survivors' timeout (ZombieTimeout.cpp).
-void zm_timeout_reset(void);
-void zm_timeout_take(const short* args, int src);
-bool zm_timeout_active(unsigned int now);   // plat_time_ms; the match is held
-void zm_timeout_poll(void);
-bool zm_timeout_pause_frame(void);
-const char* zm_timeout_map_line(void);
-void zm_timeout_map_input(unsigned int edge);
-void zm_timeout_draw(void);
 unsigned int zm_match_elapsed_ms(void);     // ms on the game clock since every survivor came in
 // A room's puzzle state among the survivors in it (ZombieRoomSync.cpp).
 void zm_roomsync_reset(void);
@@ -450,7 +441,7 @@ void zm_random_door_lock(unsigned char stage, unsigned char room, unsigned char 
                          unsigned char* lock, unsigned char* need);
 // The key-locked doors of a room: destination room and the key it needs now.
 int  zm_random_room_locks(unsigned char stage, unsigned char room, unsigned char* toRoom,
-                          unsigned char* key, int max);
+                          unsigned char* key, int max, bool lockedOnly = false);
 unsigned int zm_random_seed(void);
 // What the scenario puts in a room (the director's route map).
 int  zm_random_room_items(unsigned char stage, unsigned char room, unsigned char* ids,
@@ -748,6 +739,7 @@ bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id
                        const char* name, char* why, int whyLen);
 void zm_econ_pay(unsigned char id);
 void zm_econ_refund(unsigned char id, unsigned short uid);
+bool zm_econ_kill_confirmed(const Entity* e);
 void zm_econ_after_update(const Entity* e, int slot, unsigned short uid);
 void zm_econ_room_reset(void);
 void zm_econ_hit(void);
@@ -891,3 +883,6 @@ inline int zm_setup_x(int x) { return 16 + x * 9 / 10; }
 inline int zm_setup_y(int y) { return 16 + y * 13 / 15; }
 void zm_setup_text(int x, int y, unsigned char color, const char* text);
 void zm_map_set_setup(bool on); // inset the pregame map; gameplay maps keep their layout
+
+void zm_time_pickups_frame(void);
+void zm_time_pickups_take(const short* args, int src);
