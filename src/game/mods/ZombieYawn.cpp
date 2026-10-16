@@ -407,6 +407,7 @@ static void yw_send(int op, int b, int tenths)
 
 static void yw_lockdown(int b, unsigned int ms)
 {
+    zm_econ_points();               // the income up to now is earned; none from here
     s_phase[b] = YW_LOCKDOWN;
     s_lockEnd[b] = zm_game_time_ms() + ms;
     dbg_printf("[yawn] %s beaten: lockdown %u ms\n", kBoss[b].name, ms);
@@ -414,6 +415,7 @@ static void yw_lockdown(int b, unsigned int ms)
 
 static void yw_done(int b)
 {
+    zm_econ_points();               // the lockdown's time stays unpaid
     s_phase[b] = YW_DONE;
     s_freeRevives[b] = 0;
     zm_revive_reset_counts();
@@ -798,7 +800,7 @@ static unsigned int yw_lock_left(int b)
 
 bool zm_yawn_clock_hold(void)
 {
-    for (int b = 0; b < YW_BOSSES; b++) if (s_phase[b] == YW_LOCKDOWN) return true;
+    if (zm_yawn_lockdown()) return true;
     ZmSurvivorInfo surv[ZM_NET_MAX_PLAYERS];
     int n = zm_survivor_list(surv, ZM_NET_MAX_PLAYERS);
     for (int b = 0; b < YW_BOSSES; b++) {
@@ -812,6 +814,19 @@ bool zm_yawn_clock_hold(void)
         if (alive > 0 && in == alive) return true;
     }
     return false;
+}
+
+bool zm_yawn_lockdown(void)
+{
+    for (int b = 0; b < YW_BOSSES; b++) if (s_phase[b] == YW_LOCKDOWN) return true;
+    return false;
+}
+
+int zm_yawn_beaten_count(void)
+{
+    int n = 0;
+    for (int b = 0; b < YW_BOSSES; b++) if (s_phase[b] != YW_WAITING) n++;
+    return n;
 }
 
 bool zm_yawn_director_closed(unsigned char stage, unsigned char room)
@@ -934,6 +949,8 @@ static int yw_fight_room(void)
     }
     return -1;
 }
+
+bool zm_yawn_fight_on(void) { return yw_fight_room() >= 0; }
 
 bool zm_yawn_director_bound(const Entity* e)
 {

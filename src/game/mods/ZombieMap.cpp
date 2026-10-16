@@ -218,6 +218,10 @@ static bool        s_routeMonsters = false;    // Richard's radio: monster count
 static bool        s_routePlayers = false;     // in the game: this survivor's room, the others'
 static const char* s_routeStatus = "";
 static const char* s_routeHelp = "";
+// The pregame lobby's popup over the route map (zm_map_set_menu).
+static const char* const* s_menuItems = NULL;
+static const bool* s_menuEnabled = NULL;
+static int         s_menuCount = 0, s_menuSel = 0;
 
 void zm_map_set_read_only(bool on) { s_readOnly = on; s_route = false; }
 void zm_map_set_route(int level, bool monsters, bool players, const char* status, const char* help)
@@ -229,6 +233,15 @@ void zm_map_set_route(int level, bool monsters, bool players, const char* status
     s_routePlayers = players;
     s_routeStatus = status != NULL ? status : "";
     s_routeHelp = help != NULL ? help : "";
+    s_menuCount = 0;
+}
+
+void zm_map_set_menu(const char* const* items, const bool* enabled, int count, int sel)
+{
+    s_menuItems = items;
+    s_menuEnabled = enabled;
+    s_menuCount = items != NULL ? count : 0;
+    s_menuSel = sel;
 }
 
 static bool map_is_key_item(unsigned char id)
@@ -678,9 +691,24 @@ static const char* map_room_name(unsigned char stage, unsigned char room, char* 
 
 // The monster type list, a panel over the right of the map: one line per
 // type, the current one with the arrow, then its price - or, while it is
-// locked, how long until it unlocks. The panel sits one layer in front of
+// locked, the Yawn that unlocks it ("YAWN 2": both beaten). The panel sits one layer in front of
 // the rooms and behind the text (dim text sorts at 612, the panel at 980).
 #define MAP_DEPTH_PANEL 30       // 980
+// The lobby's popup: a panel in the middle of the map, one item a line,
+// the highlighted one with the arrow, unavailable ones dim.
+static void map_draw_popup(void)
+{
+    const int lineH = 12, w = 176, x = (320 - w) / 2, y = 70;
+    const int h = 10 + s_menuCount * lineH;
+    map_fill(x, y, w, h, 0x18, 0x18, 0x28, MAP_DEPTH_PANEL);
+    for (int i = 0; i < s_menuCount; i++) {
+        char line[48];
+        bool on = s_menuEnabled == NULL || s_menuEnabled[i];
+        snprintf(line, sizeof(line), "%s%s", i == s_menuSel ? "> " : "  ", s_menuItems[i]);
+        map_text(x + 8, y + 5 + i * lineH, !on ? 0x2F : i == s_menuSel ? 0x71 : 0x7F, line);
+    }
+}
+
 static void map_draw_type_menu(void)
 {
     const int x = 128, y = 24, w = 184, lineH = 11;
@@ -689,10 +717,10 @@ static void map_draw_type_menu(void)
     map_text(x + 8, y + 4, 0x7F, "MONSTER TYPE     COST");
     for (int i = 0; i < MAP_MONSTER_TYPES; i++) {
         char line[40], price[12];
-        int left = zm_econ_unlock_left_ms(kMonsters[i].id);
-        if (left == 0) left = zm_trap_cooldown_ms(kMonsters[i].id);     // a trap cooling down
-        if (left < 0) {
-            snprintf(price, sizeof(price), "WAIT");
+        int locked = zm_econ_locked(kMonsters[i].id);
+        int left = zm_trap_cooldown_ms(kMonsters[i].id);                // a trap cooling down
+        if (locked > 0) {
+            snprintf(price, sizeof(price), "YAWN %d", zm_econ_unlock_bosses(kMonsters[i].id));
         } else if (left > 0) {
             int sec = (left + 999) / 1000;
             snprintf(price, sizeof(price), "%d:%02d", sec / 60, sec % 60);
@@ -853,6 +881,7 @@ void zm_map_draw(void)
         // The survivor's files: the keypad's pass number, once its note is read.
         const char* files = s_routePlayers ? zm_access_files_line() : NULL;
         if (files != NULL) map_text(312 - (int)strlen(files) * 6, 226, 0x8F, files);
+        if (s_menuCount > 0) map_draw_popup();
         return;
     }
 

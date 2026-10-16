@@ -569,7 +569,9 @@ static bool zm_hall_closed(unsigned int* leftMs)
             const ZmNetPeerState* p = zm_seat_state(i);
             if (p == NULL || !p->valid) all = false;
         }
-        if ((all && seated > 0) || now - s_gameStartMs > ZM_SPAWN_WAIT_MS) {
+        // In once their intro has released them too: the director has been
+        // playing since GO, the survivors only start at the barrier.
+        if ((all && seated > 0 && zm_net_bumper_released()) || now - s_gameStartMs > ZM_SPAWN_WAIT_MS) {
             s_allSpawnedMs = now;
             dbg_printf("[zombie] all survivors are in; the hall opens in %d s\n", ZM_HALL_GRACE_MS / 1000);
         }

@@ -124,14 +124,14 @@ int bgm_channel(int bank)
     return -1;
 }
 // The intro is over (played, skipped or never due): the clock starts, and the
-// music held back starts now.
-void intro_released()
+// music held back starts now. `fanfare`: "SURVIVE!" and its sound.
+void intro_released(bool fanfare = true)
 {
     zm_bumper_intro_clock_release();
     if (s_introReleased) return;
     s_introReleased = true;
     unsigned int now = plat_time_ms();
-    s_surviveAt = now ? now : 1;
+    if (fanfare) s_surviveAt = now ? now : 1;
     unsigned int held = s_heldBgm;
     s_heldBgm = 0;
     for (int i = 0; i < 3; ++i) {
@@ -139,8 +139,18 @@ void intro_released()
         SetSndSlot(g_SndBank[i].handle, g_SndBank[i].slot);
     }
     if (held) dbg_printf("[bumper] room music released (channels %X)\n", held);
+    if (!fanfare) return;
     tail_free();
     s_introTail = play_asset_sound("audio/survive.wav");
+}
+
+// A human director's copy waits for nobody: it plays from the moment its
+// room is up (setting up while the survivors pick, watch the narration and
+// the intro). The host still runs the survivors' barrier as their reports
+// come in (ZombieNet.cpp, PKT_BUMPER).
+bool director_plays_at_once()
+{
+    return g_bPlayAsZombie && zm_net_role() == ZM_NET_ZOMBIE && zm_net_ai_level() == 0 && zm_net_active();
 }
 
 void close_panels()
@@ -276,6 +286,12 @@ void zombie_mode_bumper_intro(void)
     s_introDone = true;
     // A recovered match is already running, including its original roster/clock.
     if (s_recovered || zm_net_rejoining()) { capture_roster(); s_introReleased = true; return; }
+    if (director_plays_at_once()) {
+        capture_roster();
+        intro_released(false);
+        dbg_printf("[bumper] director: no intro, playing at once\n");
+        return;
+    }
     s_waitAt = plat_time_ms();
     // The roster as this copy knows it now; refreshed from the host's frozen
     // one at the release, for the ending's slices.
@@ -540,6 +556,7 @@ static bool s_narrationHeld = false;
 void zombie_mode_narration_wait(void)
 {
     if (!g_bPlayAsZombie || zm_net_rejoining() || !zm_net_active()) return;
+    if (director_plays_at_once()) return;
     s_narrationHeld = true;
     unsigned int begin = plat_time_ms();
     while (zm_net_bumper_phase(0) < 1 && plat_time_ms() - begin < kBarrierMs &&
@@ -551,6 +568,10 @@ void zombie_mode_narration_wait(void)
     }
     dbg_printf("[bumper] roster settled after %u ms\n", plat_time_ms() - begin);
     s_narrationHeld = false;
+}
+bool zombie_mode_narration_skip(void)
+{
+    return director_plays_at_once();
 }
 bool zombie_mode_narration_held(void)
 {

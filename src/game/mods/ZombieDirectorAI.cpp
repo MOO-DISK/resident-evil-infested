@@ -64,7 +64,6 @@ int g_zmAiDirector = 0;
 struct ZmAiLevel {
     const char*  name;
     int          incomePct;      // income and starting points
-    int          unlockPct;      // unlock times
     int          lookahead;      // doors ahead of a survivor it places
     unsigned int thinkMs;        // between decisions
     int          threatBase;     // the threat target ahead (x10: a zombie is 10) at the start
@@ -88,13 +87,13 @@ static const ZmAiLevel kLevels[6] = {
     // survivors) is sized for a player who also earns by hitting with the
     // body it possesses; the AI never does, so its levels start higher.
     //                                                                         march      hop
-    { "OFF",       100, 100, 0,    0,   0,  0,   0,     0, false, false,    0,   0,     0, 0, 100, false },
-    { "EASY",      100, 125, 2, 6000,  30,  6, 120,     0, false, false,  600,  50,     0, 0, 100, false },
-    { "NORMAL",    150, 100, 2, 4000,  40, 10, 200, 75000, false, false,  900,  70, 60000, 2, 100, false },
-    { "HARD",      225,  80, 3, 2500,  50, 14, 280, 45000, true,  false, 1600,  85, 40000, 3,  80, true  },
+    { "OFF",       100, 0,    0,   0,  0,   0,     0, false, false,    0,   0,     0, 0, 100, false },
+    { "EASY",      100, 2, 6000,  30,  6, 120,     0, false, false,  600,  50,     0, 0, 100, false },
+    { "NORMAL",    150, 2, 4000,  40, 10, 200, 75000, false, false,  900,  70, 60000, 2, 100, false },
+    { "HARD",      225, 3, 2500,  50, 14, 280, 45000, true,  false, 1600,  85, 40000, 3,  80, true  },
     // Nightmare and Hell on Earth use 2.2x / 3x NORMAL income and starting points.
-    { "NIGHTMARE", 330,  60, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
-    { "HELL ON EARTH", 450,  60, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
+    { "NIGHTMARE", 330, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
+    { "HELL ON EARTH", 450, 3, 1500,  60, 20, 380, 30000, true,  true,  2400, 100, 20000, 4,  60, true  },
 };
 
 // What one monster adds to the threat on a route (x10: the zombie is 10).
@@ -126,7 +125,6 @@ static const struct { unsigned char id; unsigned int ms; } kHop[] = {
 #define AI_MAX_LINKS   ZM_MAX_DOORS
 #define AI_FAR         0x7F
 #define AI_LOW_HEALTH  45          // a survivor this hurt is "weak" (Jill has 96, Chris 140)
-#define AI_SAVE_AHEAD_MS 60000     // hold points for a monster unlocking this soon
 
 static const struct { unsigned char id; const char* name; } kNames[] = {
     { ENEMY_ZOMBIE, "ZOMBIE" }, { ENEMY_ZOMBIE_VARIANT, "GREEN ZOMBIE" },
@@ -353,7 +351,6 @@ const char* zm_ai_level_name(int level)
 }
 
 int zm_ai_income_pct(void) { return kLevels[zm_ai_level()].incomePct; }
-int zm_ai_unlock_pct(void) { return kLevels[zm_ai_level()].unlockPct; }
 
 void zm_ai_new_game(void)
 {
@@ -571,8 +568,8 @@ static bool ai_best_room(unsigned char* outStage, unsigned char* outRoom, unsign
     return best > 0;
 }
 
-// Points to keep back: the price of a big monster unlocking within a minute
-// that has not been bought yet (normal and above).
+// Points to keep back: the price of a big monster the Yawn the survivors are
+// fighting now will unlock, not bought yet (normal and above).
 static int ai_reserve(void)
 {
     if (s_level->incomePct < 100) return 0;
@@ -580,8 +577,7 @@ static int ai_reserve(void)
     int reserve = 0;
     for (unsigned int i = 0; i < sizeof(big); i++) {
         if (big[i] == ENEMY_TYRANT_2 && s_tyrantPlaced) continue;
-        int left = zm_econ_unlock_left_ms(big[i]);
-        if (left <= 0 || left > AI_SAVE_AHEAD_MS) continue;
+        if (zm_econ_locked(big[i]) != 1 || !zm_yawn_fight_on()) continue;
         int cost = zm_econ_cost(big[i]);
         if (cost > reserve) reserve = cost;
     }
@@ -618,7 +614,7 @@ static bool ai_pick_monster(unsigned char stage, unsigned char room, bool openin
     for (unsigned int i = 0; i < sizeof(base) / sizeof(base[0]); i++) {
         if (base[i].weight <= 0) continue;
         // Unlocked and fitting; the price is the saving's business (ai_place_one).
-        if (zm_econ_unlock_left_ms(base[i].id) != 0 || !zm_director_move_allowed(stage, room, base[i].id)) continue;
+        if (zm_econ_locked(base[i].id) != 0 || !zm_director_move_allowed(stage, room, base[i].id)) continue;
         int cost = zm_econ_cost(base[i].id);
         // Small fry would eat the savings for a big one about to unlock.
         if (reserve > 0 && cost < reserve && points - cost < reserve) continue;
@@ -956,7 +952,7 @@ static bool ai_reinforce(unsigned int now)
         if (zm_random_room_safe(v.stage, v.room) || zm_yawn_director_closed(v.stage, v.room)) continue;
         v.pressedMs = now;
         unsigned char id = ENEMY_ZOMBIE;
-        if (s_level->traps && zm_econ_unlock_left_ms(ENEMY_HUNTER) == 0 &&
+        if (s_level->traps && zm_econ_locked(ENEMY_HUNTER) == 0 &&
             zm_econ_points() >= zm_econ_cost(ENEMY_HUNTER)) id = ENEMY_HUNTER;
         char why[48];
         if (zm_reinforce_request(v.stage, v.room, id, why, sizeof(why))) {

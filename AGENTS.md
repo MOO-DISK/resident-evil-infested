@@ -502,11 +502,15 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   downward only (`kDoorGates`); every seed verified to lead from the lesson
   room back to the main hall and the exit. Untested by the user.
 - **Boss lockdown** (`ZombieYawn.cpp`): a Yawn beaten (its death flag up),
-  its room stays shut 30 s (`YW_LOCKDOWN_MS`, "REGROUP - DOORS OPEN IN n"); a
+  its room stays shut 60 s (`YW_LOCKDOWN_MS`, "REGROUP - DOORS OPEN IN n"); a
   revive there needs no healing item and ignores the limit
   (`zm_yawn_free_revive` in ZombieSpectate.cpp). At its end every survivor's
   revives are counted afresh (`zm_revive_reset_counts`) and the clock gains
-  5:00. The director cannot place, jump, trap or send reinforcements into a
+  5:00. Elsewhere the director plays on through the lockdown (places,
+  possesses, jumps, traps) but earns nothing - no income, hit bonus or
+  refund (`zm_yawn_lockdown` in ZombieEconomy.cpp; settled at the
+  lockdown's start and end; the HUD reads "HELD n PTS"). Untested by the
+  user. The director cannot place, jump, trap or send reinforcements into a
   boss room until it is done (`zm_yawn_director_closed` in
   `zm_director_safe_room`, the AI director, reinforcements, the map - "BOSS",
   dark). The host decides: BOSS=35 `{1 lockdown, boss, tenths, seed low,
@@ -632,8 +636,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   without gameplay packets starts a 30-second grace period. All copies pause
   simulation and gameplay timers while continuing network polling. The original
   client reconnects automatically; a crashed survivor uses New Game → REJOIN
-  SURVIVOR 1/2/3 on the same computer/save directory. Saved seat credentials
-  reclaim only that seat in that seeded match. A new connection epoch rejects
+  THE LAST MATCH on the same computer/save directory: `infestation-rejoin.dat`
+  holds the host, the seed and the survivor's match id, and the host gives
+  back the seat that id was seated under, in that seeded match only. A new connection epoch rejects
   delayed packets from the old process. The host sends a retried chunked snapshot
   with the player's last received inventory, room/position, health/death, stats,
   rescue usage, shared flags/box, monsters and drops. Pending committed pickups,
@@ -650,27 +655,40 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
     PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34, BOSS=35, VOICE=36. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 70) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 72) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
     troubleshooting guidance. Quick debug remains developer-only.
   - WELCOME / GO carry the host's scenario seed (`zm_net_seed`), the lobby
     phase, the veto flags and the survivors' votes; a survivor's HELLO carries
-    its character, its vote and the seed's low byte (a vote counts only for
-    the map it was cast on). Picks stay open after GO until that survivor
+    its character, its vote, the lobby revision (a vote counts only for the
+    map it was cast on) and its match id - two words the survivor draws when
+    it joins; the host seats it under that id and a rejoin's HELLO presents
+    it again to reclaim the seat. Picks stay open after GO until that survivor
     sends READY; the host no longer waits at the start barrier.
-- **Game start flow** (`ZombieLobby.cpp`): the host hosts and the survivors
-  join; the host advances (Enter) to the map review - every copy builds the
-  seed's scenario and shows the route map: key doors (blue) and where the
-  keys and crests lie (purple); the director's also shows every new pickup
-  (teal). Each side may veto once (Aim; the
-  survivors' veto needs every survivor), which re-rolls the seed. The host
-  can press Enter to start when every survivor has accepted (Action), or after
-  90 s even without all acceptances. The
-  director plays at once; the survivors get the character select screen and
-  all spawn in the main hall when its two minutes run out (a pick can change
-  until then).
+- **Game start flow** (`ZombieLobby.cpp`): every choice is a menu item
+  picked with Action (Cancel backs out); Aim is not used. The host hosts and
+  the survivors join; the join screen lists the director and the survivor
+  seats; the host picks GENERATE THE MAP (or, against the AI director,
+  CONTINUE TO THE MAP - also the AI level and the timeout switch there).
+  The map review: every copy builds the seed's scenario and shows the route
+  map: key doors (blue) and where the keys and crests lie (purple); the
+  director's also shows every new pickup (teal). The arrows browse rooms,
+  Action opens a popup menu (`zm_map_set_menu`). Against a human director
+  each side may veto once (the survivors' veto needs every survivor), which
+  re-rolls the seed, and the director's START THE GAME is open once every
+  survivor accepted or after 90 s; the director plays at once - no
+  narration, intro or barrier wait on its copy (`director_plays_at_once` in
+  ZombieBumpers.cpp); the host runs the survivors' intro barrier from their
+  reports, and the clock starts once they are all in and released. The survivors
+  then get the character select and the pregame lobby: the survivors and
+  their characters, CHANGE CHARACTER, VIEW THE MAP and the countdown; all
+  spawn in the main hall when its two minutes run out. Against the AI there
+  are no votes: everyone (the host too) goes from the map to the character
+  select and the pregame lobby, where survivors toggle READY and the host
+  has START THE GAME (asked twice with someone not ready) and BACK TO THE
+  LOBBY. Untested by the user.
 - **Survivors' timeout** (`ZombieTimeout.cpp`, multiplayer): once a match,
   from 5:00 on the game clock, a living survivor calls it from its map
   (OPTIONS, then Run twice within 3 s) while every living survivor stands in
@@ -802,8 +820,12 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Prices: zombie 100, green 125, naked 150 (+25% health, on every copy, in
     `zm_world_after_update`), Cerberus 200, web spinner 150,
     Chimera 400, Hunter 500, Tyrant 1800.
-  - Unlocks after every survivor is in (`zm_survivors_in_ms`): Cerberus 3 min,
-    Hunter 10, Chimera 12, Tyrant 15.
+  - Unlocks by Yawns beaten (`kPrices` `bosses`, `zm_econ_locked`, counted by
+    `zm_yawn_beaten_count` from the boss phases - a lockdown counts): zombies
+    and Cerberus from the start; Hunter, Chimera and web spinner after the
+    first Yawn; the Tyrant after both. The map's type list shows "YAWN n" for
+    a locked type; the AI director saves for the next tier only while the
+    survivors fight the Yawn that unlocks it. Untested by the user.
   - Room caps: the generated `cap` in `ZombieSpawnSpots.cpp` (main hall 5,
     1-4 elsewhere, 2 for a room not in the table), +1 at 6 min and +1 at 10 -
     except a cap set by hand (gen_spawn_spots.py `CAP_OVERRIDES`,

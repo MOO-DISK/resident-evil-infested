@@ -338,6 +338,12 @@ bool zm_yawn_prompt_input(void);
 // A body-sized spot of the loaded room clear of its walls (ZombieMode.cpp).
 bool zm_spot_free(int x, int z);
 bool zm_yawn_clock_hold(void);                  // the game clock stands still
+// Yawns beaten this match (lockdown or done; the host's word on a survivor's
+// copy) - the director's monster unlocks - and whether survivors are in a
+// fight with the next one now.
+int  zm_yawn_beaten_count(void);
+bool zm_yawn_lockdown(void);    // a beaten Yawn's 60 s: the director earns no points
+bool zm_yawn_fight_on(void);
 bool zm_yawn_director_closed(unsigned char stage, unsigned char room);
 bool zm_yawn_free_revive(int player, unsigned char stage, unsigned char room);
 void zm_yawn_revived(int player);
@@ -725,14 +731,14 @@ struct ZmPlaceSpots {
 extern const ZmPlaceSpots g_zmPlaceSpots[];
 extern const int g_zmPlaceSpotCount;
 
-// The director's points (ZombieEconomy.cpp): prices, unlock times and the
-// rooms' monster caps.
+// The director's points (ZombieEconomy.cpp): prices, the Yawns beaten that
+// unlock each monster, and the rooms' monster caps.
 void zm_econ_new_game(bool on);
 bool zm_econ_on(void);
 int  zm_econ_points(void);
 int  zm_econ_cost(unsigned char id);
-unsigned int zm_econ_unlock_ms(unsigned char id); // normal rules, without debug bypass
-int  zm_econ_unlock_left_ms(unsigned char id);      // 0 now, -1 survivors not in yet
+int  zm_econ_unlock_bosses(unsigned char id);   // Yawns to beat first; normal rules, without debug bypass
+int  zm_econ_locked(unsigned char id);          // Yawns still to beat for it: 0 now
 int  zm_econ_room_cap(unsigned char stage, unsigned char room);
 int  zm_econ_monster_slots(unsigned char id);
 bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id);
@@ -755,14 +761,12 @@ void zm_econ_stats(ZmEconStats* out);
 // The AI director (ZombieDirectorAI.cpp) runs only in AI DIRECTOR matches.
 // [Mods] AiDirector sets the lobby's default difficulty.
 // _level: 0 off for this copy, else 1 easy .. 5 hell on earth. The economy scales
-// the income and starting points (_income_pct) and unlock times
-// (_unlock_pct) by it.
+// the income and starting points (_income_pct) by it.
 void zm_ai_new_game(void);
 void zm_ai_frame(void);
 void zm_ai_draw(void);
 int  zm_ai_level(void);
 int  zm_ai_income_pct(void);
-int  zm_ai_unlock_pct(void);
 // A lobby "AI DIRECTOR" game, on its host: the AI plays the director there
 // while the host's own player is the survivor in seat 0.
 bool zm_ai_hosted(void);
@@ -871,6 +875,9 @@ void zm_map_set_read_only(bool on);
 // are the caller's two bottom lines.
 enum { ZM_ROUTE_DOORS = 0, ZM_ROUTE_KEYS = 1, ZM_ROUTE_ALL = 2 };
 void zm_map_set_route(int level, bool monsters, bool players, const char* status, const char* help);
+// A popup menu over the route map (the pregame lobby's), until the next
+// zm_map_set_route. `enabled` may be NULL (all on).
+void zm_map_set_menu(const char* const* items, const bool* enabled, int count, int sel);
 
 // Title guide shares the lobby character-preview scene. Negative closes it.
 void zm_guide_profile(int survivor, int monster);

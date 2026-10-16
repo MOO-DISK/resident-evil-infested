@@ -34,6 +34,14 @@ escaped into the mansion...") starts and plays out on its own; `survive.wav`
 plays when the intro releases the match, with the "SURVIVE!" banner, and plays
 out into the match. The intro clips themselves are silent.
 
+A human director's copy takes no part in any of this: it skips the opening
+narration, the intro and both waits and plays from the moment its room is up,
+so it can set up while the survivors pick their characters. The host still
+runs the survivors' barrier, advancing it as their reports arrive; the match
+clock and the director's unlock timers start only once every survivor is in
+and released (`zm_net_bumper_released`). Against the AI director the host is
+a survivor and waits like the others.
+
 The roster settles before the opening narration: in multiplayer each copy
 holds on the loading screen ("WAITING FOR SURVIVORS" after a second) until
 every seated survivor has picked and reported in. Nothing waits after the

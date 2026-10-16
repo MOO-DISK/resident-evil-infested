@@ -127,9 +127,10 @@ host-arbitrated; the host may itself be a survivor (see below).
 
 ## Monsters / economy
 
-- Hunters and Chimeras unlock on **Yawn 1's death** instead of on a timer
-  (`kPrices` unlock times in `ZombieEconomy.cpp`; `zm_econ_unlock_left_ms`).
-  Cerberus keeps its time unlock unless the user says otherwise.
+- Hunters, Chimeras and web spinners unlock on the **first Yawn's death**
+  instead of on a timer; zombies and Cerberus are open from the start, the
+  Tyrant after both Yawns (`kPrices` `bosses` in `ZombieEconomy.cpp`;
+  `zm_econ_locked`). Done.
 - The **Tyrant leaves the mansion shop** (map list `kMonsters` in
   `ZombieMap.cpp`, `kPrices`, and the AI's candidates in
   `ZombieDirectorAI.cpp` — its `s_tyrantPlaced` logic and Tyrant weight).

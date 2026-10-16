@@ -15,9 +15,13 @@
 //     for three - three are much harder to hold back), ZM_ECON_HIT_BONUS for each hit its possessed monster lands
 //     on a survivor, ZM_ECON_MONSTER_HIT for each hit of its other monsters
 //     (from whichever copy runs the room: ZM_EV_CREDIT), and a quarter of a
-//     monster's price back when it dies;
-//   * the bigger monsters unlock some minutes after the survivors have come
-//     into the game (zm_survivors_in_ms, ZombieMode.cpp);
+//     monster's price back when it dies - none of it while a Yawn's
+//     lockdown holds (zm_yawn_lockdown: the survivors regroup, the director
+//     plays on but earns nothing);
+//   * the bigger monsters unlock as the Yawns fall (zm_yawn_beaten_count,
+//     ZombieYawn.cpp): zombies and Cerberus from the start, the Hunter,
+//     Chimera and web spinner once the first Yawn is beaten, the Tyrant
+//     once both are;
 //   * each room holds a few monsters, by its floor area (the cap in
 //     ZombieSpawnSpots.cpp), one more at 6 and again at 10 minutes.
 // Only the director's copy (and single player) keeps the account; the
@@ -35,18 +39,18 @@
 struct ZmPrice {
     unsigned char id;
     short         cost;
-    unsigned int  unlockMs;    // after the survivors are in; 0 from the start
+    unsigned char bosses;      // Yawns beaten before it may be bought; 0 from the start
 };
 
 static const ZmPrice kPrices[] = {
     { ENEMY_ZOMBIE,         100, 0 },
     { ENEMY_ZOMBIE_VARIANT, 125, 0 },             // green coat
     { ENEMY_ZOMBIE_NAKED,   150, 0 },             // +25% health (zm_world_after_update)
-    { ENEMY_CERBERUS,       200, 3 * 60000 },
-    { ENEMY_WEB_SPINNER,    150, 0 },
-    { ENEMY_HUNTER,        500, 10 * 60000 },
-    { ENEMY_CHIMERA,       400, 12 * 60000 },
-    { ENEMY_TYRANT_2,     1800, 15 * 60000 },
+    { ENEMY_CERBERUS,       200, 0 },
+    { ENEMY_WEB_SPINNER,    150, 1 },
+    { ENEMY_HUNTER,        500, 1 },
+    { ENEMY_CHIMERA,       400, 1 },
+    { ENEMY_TYRANT_2,     1800, 2 },
     { ZM_TRAP_LOCK_DOORS,   100, 0 },             // a trap (ZombieTraps.cpp), not a monster
 };
 
@@ -123,6 +127,7 @@ int zm_econ_points(void)
 {
     if (!s_on) return 0;
     unsigned int now = zm_game_time_ms();
+    if (zm_yawn_lockdown()) s_earnedAtMs = now;     // no income until the doors open
     s_earnedMilli += (now - s_earnedAtMs) * (unsigned int)zm_econ_rate() * (unsigned int)zm_ai_income_pct() / 100;
     s_earnedAtMs = now;
     return s_startPoints + (int)(s_earnedMilli / 1000) + s_bonus - s_spent;
@@ -134,27 +139,23 @@ int zm_econ_cost(unsigned char id)
     return p != NULL ? p->cost : 0;
 }
 
-// Normal match rules for the guide, independent of QUICK_DEBUG and match time.
-unsigned int zm_econ_unlock_ms(unsigned char id)
+// Normal match rules for the guide, independent of QUICK_DEBUG: the Yawns
+// to beat before `id` may be bought.
+int zm_econ_unlock_bosses(unsigned char id)
 {
     const ZmPrice* p = zm_econ_price(id);
-    return p != NULL ? p->unlockMs : 0;
+    return p != NULL ? p->bosses : 0;
 }
 
-// How long until `id` may be placed: 0 now, -1 while the survivors are still
-// choosing their characters (the clock has not started).
-int zm_econ_unlock_left_ms(unsigned char id)
+// How many more Yawns must fall before `id` may be placed: 0 now.
+int zm_econ_locked(unsigned char id)
 {
 #ifdef QUICK_DEBUG
     // Testing: every monster is available, even before survivors spawn.
     return 0;
 #else
-    const ZmPrice* p = zm_econ_price(id);
-    if (p == NULL || p->unlockMs == 0) return 0;
-    int in = zm_survivors_in_ms();
-    if (in < 0) return -1;
-    unsigned int unlock = p->unlockMs * (unsigned int)zm_ai_unlock_pct() / 100;
-    return (unsigned int)in >= unlock ? 0 : (int)(unlock - (unsigned int)in);
+    int left = zm_econ_unlock_bosses(id) - zm_yawn_beaten_count();
+    return left > 0 ? left : 0;
 #endif
 }
 
@@ -181,12 +182,6 @@ int zm_econ_room_cap(unsigned char stage, unsigned char room)
     return cap;
 }
 
-static void zm_econ_mmss(char* out, int len, int ms)
-{
-    int s = (ms + 999) / 1000;
-    snprintf(out, len, "%d:%02d", s / 60, s % 60);
-}
-
 // Is there room in (stage, room) for a monster of type `id` (its slots under
 // the cap; a Tyrant always fits an empty room)?
 bool zm_econ_room_fits(unsigned char stage, unsigned char room, unsigned char id)
@@ -208,15 +203,9 @@ bool zm_econ_can_place(unsigned char stage, unsigned char room, unsigned char id
         snprintf(why, whyLen, "MONSTERS CANNOT ENTER THE ELEVATOR");
         return false;
     }
-    int left = zm_econ_unlock_left_ms(id);
-    if (left < 0) {
-        snprintf(why, whyLen, "%s: WAIT FOR THE SURVIVORS", name);
-        return false;
-    }
-    if (left > 0) {
-        char t[16];
-        zm_econ_mmss(t, sizeof(t), left);
-        snprintf(why, whyLen, "%s UNLOCKS IN %s", name, t);
+    if (zm_econ_locked(id) > 0) {
+        if (zm_econ_unlock_bosses(id) >= 2) snprintf(why, whyLen, "%s: BEAT BOTH YAWNS FIRST", name);
+        else snprintf(why, whyLen, "%s: BEAT A YAWN FIRST", name);
         return false;
     }
     if (!zm_econ_room_fits(stage, room, id)) {
@@ -254,7 +243,7 @@ void zm_econ_refund(unsigned char id, unsigned short uid)
         s_refunded[s_refundedCount % 256] = uid;
         s_refundedCount++;
     }
-    int back = zm_econ_cost(id) / ZM_ECON_REFUND_DIV;
+    int back = zm_yawn_lockdown() ? 0 : zm_econ_cost(id) / ZM_ECON_REFUND_DIV;
     s_bonus += back;
     s_lost++;
     dbg_printf("[econ] id %02X (%04X) died: +%d\n", (unsigned)id, (unsigned)uid, back);
@@ -289,7 +278,7 @@ void zm_econ_hit(void)
     unsigned int now = zm_game_time_ms();
     if (s_lastHitMs != 0 && now - s_lastHitMs < ZM_ECON_HIT_GAP_MS) return;
     s_lastHitMs = now;
-    s_bonus += ZM_ECON_HIT_BONUS;
+    if (!zm_yawn_lockdown()) s_bonus += ZM_ECON_HIT_BONUS;
     s_survivorHits++;
     dbg_printf("[econ] hit: +%d\n", ZM_ECON_HIT_BONUS);
 }
@@ -299,7 +288,7 @@ void zm_econ_hit(void)
 void zm_econ_monster_hit(void)
 {
     if (!s_on) return;
-    s_bonus += ZM_ECON_MONSTER_HIT;
+    if (!zm_yawn_lockdown()) s_bonus += ZM_ECON_MONSTER_HIT;
     s_survivorHits++;
     dbg_printf("[econ] monster hit: +%d\n", ZM_ECON_MONSTER_HIT);
 }
@@ -324,7 +313,7 @@ void zm_econ_draw(void)
     if (!s_on) return;
     int pts = zm_econ_points();
     if (pts > 99999) pts = 99999;
-    snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), "%d PTS", pts);
+    snprintf(PRINT_TEXT_BUFFER, sizeof(PRINT_TEXT_BUFFER), zm_yawn_lockdown() ? "HELD %d PTS" : "%d PTS", pts);
     int width = (int)strlen(PRINT_TEXT_BUFFER) * 8;
     zm_text_encode(PRINT_TEXT_BUFFER);
     PrintText8x14((short)(320 - 4 - width), 8, 0x8F, 0);

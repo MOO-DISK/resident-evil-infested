@@ -36,12 +36,14 @@ static unsigned char g_stageId=5, g_roomId=1;
 static bool s_worldOn=true, s_on=true;
 static int cap=3, money=2000, unlock;
 static int zm_world_slot_of_uid(unsigned short uid) { return uid == 256 ? 0 : -1; }
-static int zm_econ_unlock_left_ms(unsigned char) { return unlock; }
+static int zm_econ_locked(unsigned char) { return unlock; }
+static int zm_econ_unlock_bosses(unsigned char) { return 1; }
+static bool zombie_mode_armed() { return true; }
+static bool zm_access_room_elevator(unsigned char, unsigned char) { return false; }
 static int zm_econ_room_cap(unsigned char, unsigned char) { return cap; }
 static int zm_econ_cost(unsigned char) { return 100; }
 static int zm_econ_points() { return money; }
 static bool zm_yawn_entity(const Entity*) { return false; }
-static void zm_econ_mmss(char* out, int len, int) { snprintf(out,len,"1:00"); }
 int zm_world_room_extra_count(unsigned char, unsigned char, bool slots=false);
 int zm_world_room_unspawned(bool slots=false);
 '''
@@ -81,7 +83,7 @@ int main() {
     memset(g_EnemiesList,0,sizeof(g_EnemiesList)); cap=1;
     assert(zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
     money=0; assert(!zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
-    money=2000; unlock=1000;
+    money=2000; unlock=1;
     assert(!zm_econ_can_place(5,1,ENEMY_TYRANT_2,"TYRANT",why,sizeof(why)));
     unlock=0;
     s_roster[0] = {true,true,257,5,1,0};

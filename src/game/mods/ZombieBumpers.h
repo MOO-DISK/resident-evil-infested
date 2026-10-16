@@ -25,6 +25,9 @@ void zombie_mode_bumper_leave(void);
 // Before the opening narration: wait until every survivor has picked, so the
 // intro's roster is settled; game_loop waits while this is in progress.
 void zombie_mode_narration_wait(void);
+// A human director's copy skips the new game's opening narration: it plays
+// at once (display_game_loading_message leaves before showing it).
+bool zombie_mode_narration_skip(void);
 bool zombie_mode_narration_held(void);
 // The opening narration starts: helicopter.wav under it.
 void zombie_mode_narration_sound(void);
