@@ -598,7 +598,7 @@ static void rnd_read_room(unsigned char stage, unsigned char room)
         // The small key opens nothing in the mode (check_desk lets every
         // survivor in), so its spots - the terrace passage's - take items too.
         bool wanted = rnd_is_key(s.origId) || rnd_is_crest(s.origId) ||
-                      ITEM_IS_MAP(s.origId) || s.origId == ITEM_DESK_KEY ||
+                      ITEM_IS_MAP(s.origId) || s.origId == ITEM_DESK_KEY || s.origId == ITEM_LIGHTER ||
                       (rnd_is_weapon_or_ammo(s.origId) && s.origId != ITEM_BROKEN_SHOTGUN);
         if (touched[s.id] || !wanted) s.pool = false;
         // These otherwise-unused scenario items are optional reward spots.
@@ -1253,7 +1253,7 @@ static int rnd_pick_back_spot(const bool* reach, const bool* taken)
 
 // The puzzles' and the shotgun trap's items, after the keys and crests: the
 // broken shotgun and the pick axe at a medium distance (RND_TOOL_NEAR..FAR
-// crossings), then the sheet music and the chemical, each in a key-item room
+// crossings), then the sheet music, chemical and lighter, each in a key-item room
 // of its own. None of them is needed to escape.
 #define RND_TOOL_NEAR 5
 #define RND_TOOL_FAR  9
@@ -1261,7 +1261,8 @@ static bool rnd_place_key_items(bool* taken)
 {
     bool reach[RND_ROOMS * 2];
     rnd_reach(0, true, reach);
-    const unsigned char items[4] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL };
+    const unsigned char items[] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL, ITEM_LIGHTER };
+    const int itemCount = sizeof(items) / sizeof(items[0]);
     // Exactly one of them in exactly one safe room (none needed to escape, so
     // the director's keeping out of it costs nothing): which at random, in a
     // safe room reached with everything; the others keep out of the safe rooms.
@@ -1271,7 +1272,7 @@ static bool rnd_place_key_items(bool* taken)
         notSafe[r] = !safeOnly[r];
     }
     rnd_reach(0xFF, true, all);
-    int safeTool = rnd_below(4);
+    int safeTool = rnd_below(itemCount);
     {
         // The safe room first, each alike however many spots it has.
         int rooms[RND_ROOMS * 2], nr = 0;
@@ -1292,7 +1293,7 @@ static bool rnd_place_key_items(bool* taken)
         s.qty = 1;
         taken[rnd_room_index(s.stage, s.room)] = true;
     }
-    for (int t = 0; t < 4; t++) {
+    for (int t = 0; t < itemCount; t++) {
         if (t == safeTool) continue;
         int i = t < 2 ? rnd_pick_key_spot(reach, taken, RND_TOOL_NEAR, RND_TOOL_FAR, false, notSafe)
                       : rnd_pick_key_spot(reach, taken, -1, -1, items[t] == ITEM_CHEMICAL, notSafe);
@@ -1524,7 +1525,8 @@ static bool rnd_party(int* survivors, bool* barry)
 static bool rnd_is_key_item(unsigned char id)
 {
     return rnd_is_key(id) || rnd_is_crest(id) || id == ITEM_BROKEN_SHOTGUN || id == ITEM_PICK_AXE ||
-           id == ITEM_MUSIC_NOTES || id == ITEM_CHEMICAL || id == ITEM_BATTERY || id == ITEM_ZM_PASS_NOTE;
+           id == ITEM_MUSIC_NOTES || id == ITEM_CHEMICAL || id == ITEM_LIGHTER ||
+           id == ITEM_BATTERY || id == ITEM_ZM_PASS_NOTE;
 }
 
 // ROOM70F0 (2F small dining room): the shells its frame script arms only
@@ -1642,7 +1644,8 @@ static void rnd_place_weapons(bool barry)
             s.id = ITEM_BLUE_HERB; s.qty = 1;           // the safe room's blue herb
         }
         else if (rnd_main_hall_beretta(s) || rnd_trimmed_spot(s)) { s.id = 0; s.qty = 0; }
-        else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL || s.origId == ITEM_INK_RIBBONS) {
+        else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL ||
+                 s.origId == ITEM_LIGHTER || s.origId == ITEM_INK_RIBBONS) {
             rnd_supply(&s.id, &s.qty);
         }
         else if (rnd_is_key(s.origId) || rnd_is_crest(s.origId) || rnd_is_tier3(s.origId)) rnd_supply(&s.id, &s.qty);
@@ -2555,13 +2558,14 @@ bool zm_random_room_safe(unsigned char stage, unsigned char room)
 }
 
 int zm_random_room_items(unsigned char stage, unsigned char room, unsigned char* ids,
-                         unsigned char* qtys, bool* isNew, int max)
+                         unsigned char* qtys, bool* isNew, int max, bool remainingOnly)
 {
     if (!s_built) return 0;
     int n = 0;
     for (int i = 0; i < s_spotCount && n < max; i++) {
         const RndSpot& s = s_spots[i];
         if (s.stage != stage || s.room != room || !s.overridden || s.id == 0) continue;
+        if (remainingOnly && Flg_ck((int)g_roomItemsFlags, s.flag) == 0) continue;
         ids[n] = s.id;
         qtys[n] = s.qty;
         isNew[n] = s.isNew;
@@ -2711,7 +2715,8 @@ static TimePoint time_view_point(TimePoint p)
     TimePoint result = {view[0], view[1], view[2]};
     return result;
 }
-static void time_tri(TimePoint a, TimePoint b, TimePoint c, float light, float alpha, bool depthWrite)
+static void time_tri(TimePoint a, TimePoint b, TimePoint c, float light, float alpha, bool depthWrite,
+                     float alphaB = -1.0f, float alphaC = -1.0f)
 {
     TimePoint p[3] = {a,b,c}; float v[30];
     for (int k = 0; k < 3; k++) {
@@ -2721,14 +2726,34 @@ static void time_tri(TimePoint a, TimePoint b, TimePoint c, float light, float a
         o[0] = (g_SubpixelOffsetX + view.x*g_sceneRenderParam/view.z)*timeScaleX;
         o[1] = (g_SubpixelOffsetY + view.y*g_sceneRenderParam/view.z)*timeScaleY;
         o[2] = (view.z-1.0f)/131071.0f; o[3] = view.z; o[4] = o[5] = 0;
-        o[6] = light; o[7] = light*0.72f; o[8] = light*0.12f; o[9] = alpha;
+        o[6] = light; o[7] = light*0.72f; o[8] = light*0.12f;
+        o[9] = k == 1 && alphaB >= 0 ? alphaB : (k == 2 && alphaC >= 0 ? alphaC : alpha);
     }
     if (timeTris == 1024) time_flush(depthWrite);
     memcpy(timeVerts + timeTris++*30, v, sizeof(v));
 }
+// A soft circular shadow on the spawn floor, independent of the sphere's
+// spin. Vertex alpha fades to zero at the edge; leave the depth buffer alone.
+static void time_shadow(const RndSpot& s, float opacity)
+{
+    const float radius = 800.0f;
+    TimePoint centre = {(float)s.x, s.y - 8.0f, (float)s.z};
+    for (int i = 0; i < 32; i++) {
+        float a = i * 6.2831853f / 32;
+        float b = (i + 1) * 6.2831853f / 32;
+        TimePoint edgeA = {s.x + std::cos(a)*radius, centre.y, s.z + std::sin(a)*radius};
+        TimePoint edgeB = {s.x + std::cos(b)*radius, centre.y, s.z + std::sin(b)*radius};
+        time_tri(centre, edgeA, edgeB, 0.0f, opacity, false, 0.0f, 0.0f);
+    }
+    time_flush(false);
+}
+
 static TimePoint time_point(const RndSpot& s, float x, float y, float z, float angle)
 {
-    TimePoint p = {s.x + x*std::cos(angle) + z*std::sin(angle), s.y - 1000 + y,
+    // Centre the sphere and its number at chest height above the spawn floor.
+    // Keep the pickup position on the floor for survivor proximity checks.
+    const float chestHeight = 1600.0f;
+    TimePoint p = {s.x + x*std::cos(angle) + z*std::sin(angle), s.y - chestHeight + y,
                    s.z - x*std::sin(angle) + z*std::cos(angle)};
     return p;
 }
@@ -2757,6 +2782,7 @@ void zombie_mode_draw_time_pickups(void)
         bool live=Flg_ck((int)g_roomItemsFlags,s.flag)!=0;
         float burst=s_timeBurst[i] ? (now-(s_timeBurst[i]-1))/1000.0f : 2.0f;
         if(!live && burst>0.9f) continue;
+        time_shadow(s, live ? 0.32f : 0.32f*(1.0f-burst/0.9f));
         float angle=(now%8000)*6.2831853f/8000;
         if(live) {
             // Five columns per glyph, seven rows, solid extruded gold blocks.

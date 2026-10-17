@@ -689,6 +689,68 @@ static const struct { unsigned char key, r, g, b; } kDoorColors[] = {
     { ITEM_HELMET_KEY, 0x60, 0xE0, 0x70 },
 };
 
+// Tiny code-drawn pictograms: nine pixels square, with a dark outline so
+// they remain readable over room stripes and the white selection.
+static const struct MapItemIcon {
+    unsigned char item;
+    unsigned short rows[9];
+} kMapItemIcons[] = {
+    { ITEM_SWORD_KEY,   { 0x010, 0x038, 0x038, 0x038, 0x038, 0x0FE, 0x010, 0x010, 0x038 } },
+    { ITEM_SHIELD_KEY,  { 0x0FE, 0x082, 0x092, 0x0BA, 0x092, 0x082, 0x044, 0x028, 0x010 } },
+    { ITEM_HELMET_KEY,  { 0x038, 0x07C, 0x0FE, 0x0FE, 0x082, 0x0FE, 0x092, 0x092, 0x06C } },
+    { ITEM_ARMOR_KEY,   { 0x0C6, 0x1EF, 0x0FE, 0x07C, 0x07C, 0x07C, 0x07C, 0x06C, 0x0C6 } },
+    { ITEM_WIND_CREST,  { 0x000, 0x00C, 0x002, 0x0FE, 0x000, 0x1FC, 0x080, 0x060, 0x000 } },
+    { ITEM_MOON_CREST,  { 0x038, 0x064, 0x0C0, 0x0C0, 0x0C0, 0x0C0, 0x0C2, 0x066, 0x03C } },
+    { ITEM_STAR_CREST,  { 0x010, 0x010, 0x038, 0x1FF, 0x0FE, 0x07C, 0x06C, 0x0C6, 0x082 } },
+    { ITEM_SUN_CREST,   { 0x092, 0x054, 0x038, 0x07C, 0x1FF, 0x07C, 0x038, 0x054, 0x092 } },
+};
+
+static void map_draw_item_icon(int x, int y, const MapItemIcon& icon)
+{
+    int r = 0xFF, g = 0xE0, b = 0x90;
+    for (int k = 0; k < 4; k++) {
+        if (kDoorColors[k].key != icon.item) continue;
+        r = kDoorColors[k].r; g = kDoorColors[k].g; b = kDoorColors[k].b;
+    }
+    for (int row = 0; row < 9; row++) {
+        for (int col = 0; col < 9; col++) {
+            if (!(icon.rows[row] & (1 << (8 - col)))) continue;
+            map_fill(x + col - 1, y + row - 1, 3, 3, 8, 8, 16, 29);
+            map_fill(x + col, y + row, 1, 1, r, g, b, 28);
+        }
+    }
+}
+
+static void map_draw_items(const MapLayout& L)
+{
+    // Follow the same disclosure rules as the room highlights. Richard's
+    // monster-only radio and survivors' door-only maps reveal no items.
+    if (s_route ? s_routeLevel < ZM_ROUTE_KEYS : s_readOnly) return;
+    for (int home = 0; home < MAP_SHEETS; home++) {
+        for (int room = 0; room < MAP_ROOMS; room++) {
+            int cx, cy;
+            if (!map_room_centre(L, home, room, &cx, &cy)) continue;
+            unsigned char ids[32], qtys[32];
+            bool isNew[32];
+            int n = zm_random_room_items(map_stage_of_sheet(home), (unsigned char)room,
+                                         ids, qtys, isNew, 32, !s_route);
+            const MapItemIcon* icons[8];
+            int count = 0;
+            for (unsigned int k = 0; k < sizeof(kMapItemIcons) / sizeof(kMapItemIcons[0]); k++) {
+                for (int i = 0; i < n; i++) {
+                    if (ids[i] != kMapItemIcons[k].item) continue;
+                    icons[count++] = &kMapItemIcons[k];
+                    break;
+                }
+            }
+            // Centre the group if several progression items share a room.
+            for (int i = 0; i < count; i++)
+                map_draw_item_icon(cx / 2 - (count * 11 - 2) / 2 + i * 11,
+                                   cy / 2 - 4, *icons[i]);
+        }
+    }
+}
+
 // Locate a connection in the gap between the closest drawn sections of its
 // rooms. Use sections rather than room centres (the bar and gallery wrap
 // around other rooms). Coordinates here are twice the map grid coordinates.
@@ -934,6 +996,7 @@ void zm_map_draw(void)
     }
 
     if (s_route) map_draw_doors(L);
+    map_draw_items(L);
 
     char line[96], nameBuf[24];
     for (int s = 0; s < MAP_SHEETS; s++) {

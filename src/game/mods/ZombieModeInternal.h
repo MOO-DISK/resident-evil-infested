@@ -445,7 +445,7 @@ int  zm_random_room_locks(unsigned char stage, unsigned char room, unsigned char
 unsigned int zm_random_seed(void);
 // What the scenario puts in a room (the director's route map).
 int  zm_random_room_items(unsigned char stage, unsigned char room, unsigned char* ids,
-                          unsigned char* qtys, bool* isNew, int max);
+                          unsigned char* qtys, bool* isNew, int max, bool remainingOnly = false);
 // A key or crest of the scenario not yet taken in (stage, room).
 bool zm_random_room_key_left(unsigned char stage, unsigned char room);
 // Item looks and free roomItems flags, for the dropped items (ZombieDrops.cpp).
