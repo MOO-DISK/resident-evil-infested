@@ -1,0 +1,5 @@
+# Only the match server is built with Docker (server/rendezvous/Dockerfile);
+# send it nothing else - assets/ and build/ would be gigabytes of context.
+*
+!server/rendezvous/rendezvous.c
+!src/game/mods/ZombieRendezvousWire.h

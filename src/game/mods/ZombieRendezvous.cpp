@@ -14,6 +14,12 @@
 // the host by the same code. A survivor talks to the server only until the
 // punch lands; after that ZombieNet owns the socket and the punches still in
 // flight come in through net_handle.
+//
+// The relay, when the punch fails: the server carries the link. ZombieNet
+// never knows - a relayed peer has a made-up address in 0.0.0.0/8 (never a
+// real one), zm_rdv_net_send wraps whatever goes to it in RELAY_DATA for the
+// server, and zm_rdv_take hands what comes back to net_handle as if from
+// that address.
 // ============================================================================
 
 char g_zmRdvServer[96] = ZM_RDV_DEFAULT_SERVER;
@@ -31,6 +37,11 @@ bool g_zmRdvPublic = true;
 #define RDV_PUNCH_TIMEOUT_MS   10000
 #define RDV_HOST_PUNCH_MS      12000  // how long the host punches at one survivor
 #define RDV_PUNCH_SLOTS        8
+#define RDV_RELAY_REQ_MS       1000
+#define RDV_RELAY_TIMEOUT_MS   5000
+#define RDV_RELAY_STALE_MS     120000 // the host forgets a relayed survivor silent this long
+#define RDV_RELAY_SLOTS        8
+#define RDV_VIRTUAL_BASE       0x00000100u   // 0.0.1.x: one per relay slot
 
 static PlatNetAddr s_server;
 static bool        s_serverOk;
@@ -49,14 +60,25 @@ static RdvRegister  s_lastRegister;
 static PlatNetAddr  s_hostLocal;          // asked once: it opens a socket to find out
 static RdvPunchTarget s_targets[RDV_PUNCH_SLOTS];
 
+// ---- relayed links (either side) ----
+struct RdvRelay {
+    bool         used;
+    unsigned int session, lastInMs;
+    PlatNetAddr  virt;                    // what ZombieNet sees as the peer's address
+};
+static RdvRelay       s_relays[RDV_RELAY_SLOTS];
+static unsigned short s_relayGen;
+
 // ---- a survivor ----
-enum { C_IDLE, C_ASK, C_PUNCH, C_DONE, C_FAILED };
+enum { C_IDLE, C_ASK, C_PUNCH, C_RELAY, C_DONE, C_FAILED };
 static bool         s_ownSocket;          // opened here, not yet ZombieNet's
 static int          s_cState = C_IDLE;
 static unsigned int s_cCode, s_cNonce, s_cBeganMs, s_cLastJoinMs, s_cLastPunchMs, s_cPunchBeganMs;
 static bool         s_cRejoin;
 static PlatNetAddr  s_cLocal;
 static PlatNetAddr  s_peerSeen, s_peerLocal;
+static unsigned int s_cRelayBeganMs, s_cLastRelayMs;
+static bool         s_cRelayed;           // this survivor's link goes through the server
 static ZmRdvGame    s_list[ZM_RDV_LIST_MAX];
 static int          s_listCount;
 static bool         s_listHeard;
@@ -140,6 +162,72 @@ static PlatNetAddr rdv_local(void)
     return local;
 }
 
+// ---------------------------------------------------------------------------
+// The relay's made-up addresses
+// ---------------------------------------------------------------------------
+static bool rdv_virtual(const PlatNetAddr* a)
+{
+    return a->ip != 0 && (a->ip >> 24) == 0;
+}
+
+static RdvRelay* rdv_relay_of_session(unsigned int session)
+{
+    for (int i = 0; i < RDV_RELAY_SLOTS; i++)
+        if (s_relays[i].used && s_relays[i].session == session) return &s_relays[i];
+    return NULL;
+}
+
+static RdvRelay* rdv_relay_add(unsigned int session)
+{
+    RdvRelay* r = rdv_relay_of_session(session);
+    if (r != NULL) return r;
+    int pick = -1;
+    for (int i = 0; i < RDV_RELAY_SLOTS && pick < 0; i++) if (!s_relays[i].used) pick = i;
+    if (pick < 0) {                       // full: the longest silent goes
+        pick = 0;
+        for (int i = 1; i < RDV_RELAY_SLOTS; i++)
+            if (s_relays[i].lastInMs - s_relays[pick].lastInMs >= 0x80000000u) pick = i;
+    }
+    r = &s_relays[pick];
+    r->used = true;
+    r->session = session;
+    r->lastInMs = plat_time_ms();
+    r->virt.ip = RDV_VIRTUAL_BASE + (unsigned int)pick;
+    if (++s_relayGen == 0) s_relayGen = 1;
+    r->virt.port = s_relayGen;            // a new address each time: a stale link never matches
+    return r;
+}
+
+static void rdv_relay_drop(RdvRelay* r)
+{
+    if (s_serverOk) rdv_send(&s_server, ZM_RDV_RELAY_CLOSE, &r->session, sizeof(r->session));
+    r->used = false;
+}
+
+static void rdv_relays_close(void)
+{
+    for (int i = 0; i < RDV_RELAY_SLOTS; i++) if (s_relays[i].used) rdv_relay_drop(&s_relays[i]);
+}
+
+BOOL zm_rdv_net_send(const PlatNetAddr* to, const void* data, int length)
+{
+    if (!rdv_virtual(to)) return plat_net_send(to, data, length);
+    if (!s_serverOk || length < 0 || length > ZM_RDV_GAME_DATAGRAM_MAX) return FALSE;
+    RdvRelay* r = NULL;
+    for (int i = 0; i < RDV_RELAY_SLOTS && r == NULL; i++)
+        if (s_relays[i].used && s_relays[i].virt.ip == to->ip && s_relays[i].virt.port == to->port) r = &s_relays[i];
+    if (r == NULL) return FALSE;
+    unsigned char buf[ZM_RDV_GAME_DATAGRAM_MAX + ZM_RDV_RELAY_OVERHEAD];
+    RdvHeader h = {};
+    h.magic = ZM_RDV_MAGIC; h.protocol = ZM_RDV_PROTOCOL; h.type = ZM_RDV_RELAY_DATA;
+    memcpy(buf, &h, sizeof(h));
+    memcpy(buf + sizeof(h), &r->session, sizeof(r->session));
+    memcpy(buf + ZM_RDV_RELAY_OVERHEAD, data, length);
+    return plat_net_send(&s_server, buf, ZM_RDV_RELAY_OVERHEAD + length);
+}
+
+bool zm_rdv_relayed(void) { return s_cRelayed; }
+
 bool zm_rdv_is_packet(const unsigned char* buf, int len)
 {
     if (len < (int)sizeof(RdvHeader)) return false;
@@ -151,7 +239,7 @@ bool zm_rdv_is_packet(const unsigned char* buf, int len)
 static void rdv_fail(const char* text, const char* hint);
 static void rdv_connected(const PlatNetAddr* host);
 
-void zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from)
+static void rdv_take_control(const unsigned char* buf, int len, const PlatNetAddr* from)
 {
     const RdvHeader* h = (const RdvHeader*)buf;
     if (len < (int)sizeof(RdvHeader) || h->magic != ZM_RDV_MAGIC || h->protocol != ZM_RDV_PROTOCOL) return;
@@ -204,12 +292,13 @@ void zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from)
                     (s_cState != C_IDLE && s_cState != C_FAILED && p.code == s_cCode);
         if (!ours) return;
         rdv_send(from, ZM_RDV_PUNCH_ACK, &p, sizeof(p));
-        // The host's own punch got through: its NAT already lets us in.
-        if (s_cState == C_PUNCH && p.code == s_cCode) rdv_connected(from);
+        // The host's own punch got through: its NAT already lets us in. Late
+        // (asking for the relay already) is still better than relayed.
+        if ((s_cState == C_PUNCH || s_cState == C_RELAY) && p.code == s_cCode) rdv_connected(from);
         return;
     }
     case ZM_RDV_PUNCH_ACK: {
-        if (bytes < (int)sizeof(RdvPunch) || s_cState != C_PUNCH) return;
+        if (bytes < (int)sizeof(RdvPunch) || (s_cState != C_PUNCH && s_cState != C_RELAY)) return;
         const RdvPunch& p = *(const RdvPunch*)body;
         if (p.code == s_cCode && p.nonce == s_cNonce) rdv_connected(from);
         return;
@@ -257,9 +346,65 @@ void zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from)
         s_listHeard = true;
         return;
     }
+    case ZM_RDV_RELAY_OPEN: {
+        if (!s_hostOn || !fromServer || bytes < (int)sizeof(RdvRelayOpen)) return;
+        const RdvRelayOpen& o = *(const RdvRelayOpen*)body;
+        if (o.code != s_code) return;
+        if (rdv_relay_of_session(o.session) == NULL)
+            dbg_printf("[rdv] survivor at %u.%u.%u.%u:%u relayed through the server (session %08x)\n",
+                       o.seen.ip >> 24, (o.seen.ip >> 16) & 255, (o.seen.ip >> 8) & 255, o.seen.ip & 255,
+                       (unsigned)o.seen.port, o.session);
+        rdv_relay_add(o.session);
+        return;
+    }
+    case ZM_RDV_RELAY_OK: {
+        if (!fromServer || s_cState != C_RELAY || bytes < (int)sizeof(RdvRelayOk)) return;
+        const RdvRelayOk& ok = *(const RdvRelayOk*)body;
+        if (ok.code != s_cCode) return;
+        RdvRelay* r = rdv_relay_add(ok.session);
+        dbg_printf("[rdv] game %06u: relayed through the server (session %08x)\n", s_cCode, ok.session);
+        s_cRelayed = true;
+        rdv_connected(&r->virt);
+        return;
+    }
+    case ZM_RDV_RELAY_FAIL: {
+        if (!fromServer || s_cState != C_RELAY || bytes < (int)sizeof(RdvRelayFail)) return;
+        const RdvRelayFail& f = *(const RdvRelayFail*)body;
+        if (f.code != s_cCode) return;
+        switch (f.reason) {
+        case ZM_RDV_FAIL_NOT_FOUND: rdv_fail("THE GAME HAS CLOSED", ""); break;
+        case ZM_RDV_FAIL_VERSION:   rdv_fail("GAME VERSION MISMATCH", "UPDATE EVERY PLAYER TO THE SAME BUILD"); break;
+        case ZM_RDV_FAIL_BUSY:      rdv_fail("TOO MANY TRIES - WAIT A MINUTE", ""); break;
+        default:                    rdv_fail("COULD NOT REACH THE HOST", "THE SERVER'S RELAY IS FULL - TRY A VPN"); break;
+        }
+        return;
+    }
     default:
         return;
     }
+}
+
+bool zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from,
+                 const unsigned char** inner, int* innerLen, PlatNetAddr* innerFrom)
+{
+    const RdvHeader* h = (const RdvHeader*)buf;
+    if (len < (int)sizeof(RdvHeader) || h->magic != ZM_RDV_MAGIC || h->protocol != ZM_RDV_PROTOCOL) return false;
+    if (h->type != ZM_RDV_RELAY_DATA) {
+        rdv_take_control(buf, len, from);
+        return false;
+    }
+    // A relayed datagram: only from the server, only for a session we hold.
+    if (!s_serverOk || from->ip != s_server.ip || from->port != s_server.port) return false;
+    if (len < ZM_RDV_RELAY_OVERHEAD) return false;
+    unsigned int session;
+    memcpy(&session, buf + sizeof(RdvHeader), sizeof(session));
+    RdvRelay* r = rdv_relay_of_session(session);
+    if (r == NULL) return false;
+    r->lastInMs = plat_time_ms();
+    *inner = buf + ZM_RDV_RELAY_OVERHEAD;
+    *innerLen = len - ZM_RDV_RELAY_OVERHEAD;
+    *innerFrom = r->virt;
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +430,8 @@ void zm_rdv_host_begin(void)
 
 void zm_rdv_host_end(void)
 {
+    rdv_relays_close();                   // either side's: the session is over
+    s_cRelayed = false;
     if (!s_hostOn) return;
     unsigned int token = s_token;
     for (int i = 0; i < 2; i++) rdv_send(&s_server, ZM_RDV_UNREGISTER, &token, sizeof(token));
@@ -323,6 +470,14 @@ static void rdv_host_frame(unsigned int now)
     }
     if (!s_code && now - s_hostBeganMs > RDV_NO_ANSWER_MS) s_hostState = ZM_RDV_HOST_NO_ANSWER;
 
+    for (int i = 0; i < RDV_RELAY_SLOTS; i++) {
+        RdvRelay& r = s_relays[i];
+        if (r.used && now - r.lastInMs >= RDV_RELAY_STALE_MS) {
+            dbg_printf("[rdv] relay session %08x went quiet: closed\n", r.session);
+            rdv_relay_drop(&r);
+        }
+    }
+
     for (int i = 0; i < RDV_PUNCH_SLOTS; i++) {
         RdvPunchTarget& t = s_targets[i];
         if (!t.used) continue;
@@ -358,7 +513,8 @@ static void rdv_pump(void)
     for (int i = 0; i < 64 && s_ownSocket; i++) {
         int n = plat_net_recv(buf, sizeof(buf), &from);
         if (n <= 0) break;
-        if (zm_rdv_is_packet(buf, n)) zm_rdv_take(buf, n, &from);
+        const unsigned char* inner; int innerLen; PlatNetAddr innerFrom;
+        if (zm_rdv_is_packet(buf, n)) zm_rdv_take(buf, n, &from, &inner, &innerLen, &innerFrom);
     }
 }
 
@@ -425,6 +581,8 @@ static void rdv_connected(const PlatNetAddr* host)
 void zm_rdv_connect_begin(unsigned int code, bool rejoin)
 {
     s_cState = C_IDLE;
+    s_cRelayed = false;
+    for (int i = 0; i < RDV_RELAY_SLOTS; i++) s_relays[i].used = false;
     if (!rdv_open_socket()) {
         zm_rdv_close();
         s_cState = C_FAILED;
@@ -468,7 +626,11 @@ int zm_rdv_connect_frame(void)
         break;
     case C_PUNCH:
         if (now - s_cPunchBeganMs >= RDV_PUNCH_TIMEOUT_MS) {
-            rdv_fail("COULD NOT REACH THE HOST", "A NETWORK BLOCKS DIRECT LINKS - TRY A VPN SUCH AS TAILSCALE");
+            // No direct way through: ask the server to carry the link.
+            dbg_printf("[rdv] game %06u: no direct link; asking for the relay\n", s_cCode);
+            s_cState = C_RELAY;
+            s_cRelayBeganMs = now;
+            s_cLastRelayMs = 0;
             break;
         }
         if (now - s_cLastJoinMs >= RDV_REJOIN_PUNCH_MS) {
@@ -481,6 +643,25 @@ int zm_rdv_connect_frame(void)
             rdv_send(&s_peerSeen, ZM_RDV_PUNCH, &p, sizeof(p));
             if (s_peerLocal.ip && !rdv_same(s_peerLocal, s_peerSeen))
                 rdv_send(&s_peerLocal, ZM_RDV_PUNCH, &p, sizeof(p));
+        }
+        break;
+    case C_RELAY:
+        if (now - s_cRelayBeganMs >= RDV_RELAY_TIMEOUT_MS) {
+            rdv_fail("COULD NOT REACH THE HOST", "TRY A VPN SUCH AS TAILSCALE");
+            break;
+        }
+        if (!s_cLastRelayMs || now - s_cLastRelayMs >= RDV_RELAY_REQ_MS) {
+            s_cLastRelayMs = now ? now : 1;
+            RdvRelayReq q = {};
+            q.code = s_cCode;
+            q.version = (unsigned char)zm_net_protocol_version();
+            rdv_send(&s_server, ZM_RDV_RELAY_REQ, &q, sizeof(q));
+        }
+        // Still punching: a late direct link wins over the relay.
+        if (!s_cLastPunchMs || now - s_cLastPunchMs >= RDV_PUNCH_MS) {
+            s_cLastPunchMs = now ? now : 1;
+            RdvPunch p = { s_cCode, s_cNonce };
+            rdv_send(&s_peerSeen, ZM_RDV_PUNCH, &p, sizeof(p));
         }
         break;
     default:
@@ -496,6 +677,7 @@ const char* zm_rdv_connect_text(void)
     switch (s_cState) {
     case C_ASK:   return "ASKING THE MATCH SERVER";
     case C_PUNCH: return "OPENING A DIRECT LINK TO THE HOST";
+    case C_RELAY: return "NO DIRECT LINK - ASKING THE SERVER TO RELAY";
     case C_DONE:  return "CONNECTED";
     default:      return "";
     }

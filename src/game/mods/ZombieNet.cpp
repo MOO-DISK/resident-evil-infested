@@ -515,7 +515,7 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
             f->pad = 0;
             f->bytes = (unsigned short)bodyLen;
             memcpy(data, (const unsigned char*)body + off, n);
-            plat_net_send(&L.addr, buf, (int)(sizeof(NetHeader) + sizeof(NetFragHeader)) + n);
+            zm_rdv_net_send(&L.addr, buf, (int)(sizeof(NetHeader) + sizeof(NetFragHeader)) + n);
         }
         return;
     }
@@ -533,7 +533,7 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
         memcpy(buf + len, body, bodyLen);
         len += bodyLen;
     }
-    plat_net_send(&L.addr, buf, len);
+    zm_rdv_net_send(&L.addr, buf, len);
     // Events that did not fit: a PING of their own, so a burst (a room exit's
     // roster) is not held back behind a few frames of large bodies.
     if (n < L.pendingCount && bodyLen > 0) {
@@ -543,7 +543,7 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
         h->type = PKT_PING;
         h->eventCount = (unsigned char)more;
         memcpy(buf + sizeof(NetHeader), L.pending + n, sizeof(NetEvent) * more);
-        plat_net_send(&L.addr, buf, (int)sizeof(NetHeader) + (int)sizeof(NetEvent) * more);
+        zm_rdv_net_send(&L.addr, buf, (int)sizeof(NetHeader) + (int)sizeof(NetEvent) * more);
     }
 }
 
@@ -1165,7 +1165,7 @@ static void net_reject(const PlatNetAddr* addr, unsigned int epoch)
 {
     NetHeader h = {};
     h.magic = ZM_NET_MAGIC; h.version = ZM_NET_VERSION; h.type = PKT_REJECT; h.epoch = epoch;
-    plat_net_send(addr, &h, sizeof(h));
+    zm_rdv_net_send(addr, &h, sizeof(h));
 }
 
 static void net_expire_link(int link)
@@ -1230,9 +1230,14 @@ static void net_take_fragment(int link, unsigned int epoch, int origin, const un
 
 static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* from)
 {
-    // The rendezvous server's packets, and punches still arriving after the
-    // link is up (ZombieRendezvous.cpp).
-    if (zm_rdv_is_packet(buf, len)) { zm_rdv_take(buf, len, from); return; }
+    // The rendezvous server's packets, punches still arriving after the link
+    // is up, and relayed datagrams (ZombieRendezvous.cpp).
+    if (zm_rdv_is_packet(buf, len)) {
+        const unsigned char* inner; int innerLen; PlatNetAddr innerFrom;
+        if (zm_rdv_take(buf, len, from, &inner, &innerLen, &innerFrom) && !zm_rdv_is_packet(inner, innerLen))
+            net_handle(inner, innerLen, &innerFrom);    // a relayed peer's datagram
+        return;
+    }
     // Older protocols share magic/version/type, but may have shorter headers.
     // Diagnose incompatibility before decoding their version-specific layout.
     if (len >= 6) {
@@ -1249,7 +1254,7 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
             if (s_role == ZM_NET_ZOMBIE && incompatible && buf[5] == PKT_HELLO) {
                 NetHeader reply = {};
                 reply.magic = ZM_NET_MAGIC; reply.version = ZM_NET_VERSION; reply.type = PKT_VERSION_REJECT;
-                plat_net_send(from, &reply, sizeof(reply));
+                zm_rdv_net_send(from, &reply, sizeof(reply));
             }
         }
     }

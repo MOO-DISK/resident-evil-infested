@@ -82,7 +82,7 @@ of guessed. Run them from the repo root.
 - `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
 
 **Match server**
-- `rendezvous_probe.py` — check a deployed rendezvous server (`server/rendezvous/`) answers from the address it was sent to, which hole punching needs; prints this machine's public address.
+- `rendezvous_probe.py` — check a deployed rendezvous server (`server/rendezvous/rendezvous.c`) answers from the address it was sent to, which hole punching needs; prints this machine's public address.
 
 **Zombie mod assets**
 - `convert_bumper_videos.py` — convert a folder of videos to the match bumpers' format (`docs/INFESTED_BUMPERS.md`): H.264 yuv420p MP4s at a constant 24 fps, silent except `wesker_victory` (or `--keep-audio`); clips in an `intro` folder are made exactly 72 frames, the rest are cut to 30 s.
@@ -679,13 +679,22 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     address, both send PUNCH, and the first PUNCH / PUNCH_ACK to arrive is
     the address ZombieNet joins - all on the one game socket
     (`zm_net_join_peer` keeps it open). Rendezvous packets carry magic
-    "RE1R" and are routed by `net_handle` before the game header. No relay:
-    two symmetric NATs fail ("COULD NOT REACH THE HOST"). The rejoin file
+    "RE1R" and are routed by `net_handle` before the game header. A punch
+    that fails for 10 s asks for the server's relay (RELAY_REQ): that link
+    gets a made-up peer address in 0.0.0.0/8, every ZombieNet send goes
+    through `zm_rdv_net_send` (wraps it in RELAY_DATA for the server), and
+    `zm_rdv_take` hands relayed datagrams to `net_handle` from that address -
+    ZombieNet itself does not know. The server caps sessions, KB/s per
+    session, total Mbit/s and GB a month (its command line). The survivor's
+    lobby shows "RELAYED BY THE MATCH SERVER". The rejoin file
     keeps the code, and REJOIN goes through the server again. The server
     keeps the game's code while its heartbeat lasts, so it also lists only
-    games of the same `ZM_NET_VERSION`. CPU test
-    `tests/test_zombie_rendezvous.py` (the client built twice, the real
-    server, simulated NATs). Untested by the user.
+    games of the same `ZM_NET_VERSION`. The server is C
+    (`server/rendezvous/rendezvous.c`, no dependencies); the wire format is
+    `ZombieRendezvousWire.h`, plain C, compiled into both - change it there
+    only. CPU test `tests/test_zombie_rendezvous.py` (the client built
+    twice, the C server as a library, simulated NATs, a sanitizer fuzz
+    pass, the binary on a socket). Untested by the user.
   - **Bump `ZM_NET_VERSION` (currently 77) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
@@ -1113,7 +1122,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieSurvivor.cpp` | the AI survivor, the RDT door/spawn cache, `zs_net_frame` / `zs_ride_frame`, survivor start positions, HUD |
 | `ZombieWorld.cpp` | the roster, extras and uid↔slot mapping, flag merge |
 | `ZombieNet.cpp/.h` | the 4-player link |
-| `ZombieRendezvous.cpp/.h` | the match server's side: the host's game code and heartbeat, the public list, joining by code, the NAT punch |
+| `ZombieRendezvous.cpp/.h`, `ZombieRendezvousWire.h` | the match server's side (the wire header is shared with `server/rendezvous/rendezvous.c`): the host's game code and heartbeat, the public list, joining by code, the NAT punch |
 | `ZombieLobby.cpp` | the menu (Single / Host / Join / Address / Port) and the lobby screen. A survivor presses Action for the character select screen: the list, the highlighted character's name, toughness, description, items and perk (`zm_perk_describe`), and its model turning on the right, drawn like the options menu's player (`options_render_entity`, the player entity borrowed through `zombie_mode_preview_skin` - no game is loaded yet). The host presses Enter to start, which calls `lobby_start_game` → `game_start` |
 | `ZombieMap.cpp` | the director's map overlay; areas come from the map TIM palettes |
 | `ZombiePerks.cpp` | the survivors' per-character perks and starting kits |

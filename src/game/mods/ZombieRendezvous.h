@@ -1,65 +1,30 @@
 #pragma once
 #include "../../platform/platform.h"
+#include "ZombieRendezvousWire.h"
 
 // ============================================================================
 // ZombieRendezvous - finding a match without port forwarding (port-added).
 //
-// A small UDP server (server/rendezvous/rendezvous.py) introduces players and
+// A small UDP server (server/rendezvous/rendezvous.c) introduces players and
 // carries nothing else. The host registers from its game socket and gets a
 // six-digit game code; a survivor lists the public games or types a code.
 // The server hands each side the other's public address (as it saw it) and
 // LAN address, both send PUNCH packets at the other at once, and each NAT
 // lets the other's packets in. The first PUNCH or PUNCH_ACK to arrive names
 // the address the survivor's normal HELLO then goes to - the match itself is
-// the plain ZombieNet link, peer to peer.
+// the plain ZombieNet link, peer to peer. When no punch gets through, the
+// server relays that one link (the others stay direct).
 //
 // Everything here runs on ZombieNet's one socket: the port the server sees
 // must be the port the game plays on.
 //
-// Wire format, little-endian, mirrored in rendezvous.py:
-//   RdvHeader, then the body for its type. Never over 1200 bytes.
+// The wire format is ZombieRendezvousWire.h, shared with the server
+// (server/rendezvous/rendezvous.c).
 // ============================================================================
 
-#define ZM_RDV_MAGIC         0x52314552u    // "RE1R" (ZombieNet's is "RE1Z")
-#define ZM_RDV_PROTOCOL      1
-#define ZM_RDV_DEFAULT_PORT  27961
 // The server players use when config.ini sets none ([Net] Rendezvous=host:port;
 // Rendezvous=off turns it off). Empty: no default server yet.
 #define ZM_RDV_DEFAULT_SERVER ""
-#define ZM_RDV_LIST_MAX      64
-
-enum {
-    ZM_RDV_REGISTER = 1,     // host -> server: RdvRegister (every 5 s; the heartbeat)
-    ZM_RDV_REGISTERED = 2,   // server -> host: RdvRegistered
-    ZM_RDV_LIST_REQ = 3,     // survivor -> server: RdvListReq
-    ZM_RDV_LIST = 4,         // server -> survivor: RdvListHead + RdvListEntry[count]
-    ZM_RDV_JOIN = 5,         // survivor -> server: RdvJoin
-    ZM_RDV_PEER = 6,         // server -> survivor: RdvIntro (the host's addresses)
-    ZM_RDV_INTRO = 7,        // server -> host: RdvIntro (the survivor's addresses)
-    ZM_RDV_JOIN_FAIL = 8,    // server -> survivor: RdvJoinFail
-    ZM_RDV_PUNCH = 9,        // peer <-> peer: RdvPunch
-    ZM_RDV_PUNCH_ACK = 10,   // peer <-> peer: RdvPunch, answering one
-    ZM_RDV_PROBE = 11,       // tools/rendezvous_probe.py
-    ZM_RDV_PROBE_REPLY = 12,
-    ZM_RDV_UNREGISTER = 13,  // host -> server: { token } - the game closed
-};
-
-enum { ZM_RDV_PUBLIC = 1, ZM_RDV_STARTED = 2, ZM_RDV_AI = 4 };
-enum { ZM_RDV_FAIL_NOT_FOUND = 1, ZM_RDV_FAIL_VERSION = 2, ZM_RDV_FAIL_FULL = 3, ZM_RDV_FAIL_BUSY = 4 };
-
-#pragma pack(push, 1)
-struct RdvHeader   { unsigned int magic; unsigned char protocol, type; unsigned short reserved; };
-struct RdvAddr     { unsigned int ip; unsigned short port, reserved; };
-struct RdvRegister { unsigned int token; unsigned char version, flags, survivors, capacity; RdvAddr local; };
-struct RdvRegistered { unsigned int code; RdvAddr seen; };
-struct RdvListReq  { unsigned char version, pad[3]; };
-struct RdvListHead { unsigned char count, pad[3]; };
-struct RdvListEntry { unsigned int code; unsigned char survivors, capacity, flags, version; };
-struct RdvJoin     { unsigned int code; unsigned char version, pad[3]; RdvAddr local; };
-struct RdvIntro    { unsigned int code; RdvAddr seen, local; };
-struct RdvJoinFail { unsigned int code; unsigned char reason, pad[3]; };
-struct RdvPunch    { unsigned int code, nonce; };
-#pragma pack(pop)
 
 // ---- configuration (config.ini [Net] Rendezvous / Public) ----
 extern char g_zmRdvServer[96];       // "host" or "host:port"; "" or "off" = none
@@ -68,9 +33,16 @@ bool zm_rdv_available(void);
 
 // ---- ZombieNet's side ----
 bool zm_rdv_is_packet(const unsigned char* buf, int len);
-void zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from);
+// A rendezvous packet from the socket. TRUE: it was a relayed game datagram -
+// *inner / *innerLen is that datagram and *innerFrom the relayed peer's
+// made-up address, for net_handle.
+bool zm_rdv_take(const unsigned char* buf, int len, const PlatNetAddr* from,
+                 const unsigned char** inner, int* innerLen, PlatNetAddr* innerFrom);
+// ZombieNet's every send: a relayed peer's address goes through the server.
+BOOL zm_rdv_net_send(const PlatNetAddr* to, const void* data, int length);
+bool zm_rdv_relayed(void);           // this survivor joined through the relay
 void zm_rdv_host_begin(void);        // the host's socket is open
-void zm_rdv_host_end(void);          // ... and about to close
+void zm_rdv_host_end(void);          // ... and about to close (also closes any relay session)
 void zm_rdv_frame(void);             // from zm_net_poll
 
 // ---- the host's lobby ----

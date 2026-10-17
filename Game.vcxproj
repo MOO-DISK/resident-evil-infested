@@ -261,6 +261,7 @@
     <ClInclude Include="src\game\mods\ZombieModeInternal.h" />
     <ClInclude Include="src\game\mods\ZombieNet.h" />
     <ClInclude Include="src\game\mods\ZombieRendezvous.h" />
+    <ClInclude Include="src\game\mods\ZombieRendezvousWire.h" />
     <ClInclude Include="src\system\PngImage.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

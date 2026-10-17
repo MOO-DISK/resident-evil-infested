@@ -99,7 +99,7 @@ static unsigned char* g_ItemSlotsPointer;
 static int zm_net_char(int) { return -1; }   // seat 0 is the human director here
 static void net_log_drop(const PlatNetAddr*,const char*,int,int) {}
 static bool zm_rdv_is_packet(const unsigned char*,int) { return false; }
-static void zm_rdv_take(const unsigned char*,int,const PlatNetAddr*) {}
+static bool zm_rdv_take(const unsigned char*,int,const PlatNetAddr*,const unsigned char**,int*,PlatNetAddr*) { return false; }
 static void zm_rdv_frame() {}
 static std::vector<unsigned char> enemiesGot;
 static void net_take_enemies(int,const unsigned char* b,int n) { enemiesGot.assign(b,b+n); }
@@ -109,6 +109,7 @@ static std::deque<Datagram> incoming;
 static void plat_net_send(const PlatNetAddr* addr,const void* data,int bytes) {
     const unsigned char* p=(const unsigned char*)data; wire.push_back({*addr,{p,p+bytes}});
 }
+static bool zm_rdv_net_send(const PlatNetAddr* a,const void* d,int n) { plat_net_send(a,d,n); return true; }
 static int plat_net_recv(void* out,int cap,PlatNetAddr* from) {
     if(incoming.empty()) return 0;
     Datagram d=incoming.front(); incoming.pop_front(); assert(d.bytes.size()<=cap);

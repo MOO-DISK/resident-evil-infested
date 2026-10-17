@@ -1159,6 +1159,8 @@ static void lobby_room(void)
         }
         if (joined) {
             lobby_print(x, 200, 0x7F, "WAITING FOR THE HOST TO SHOW THE MAP");
+            // No direct link could be made: the match server carries this one.
+            if (zm_rdv_relayed()) lobby_print(x, 214, 0x2F, "RELAYED BY THE MATCH SERVER - EXPECT MORE LAG");
         }
         if (host) {
             char line[64];
