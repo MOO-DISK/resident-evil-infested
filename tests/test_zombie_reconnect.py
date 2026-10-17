@@ -33,7 +33,7 @@ enum { ZM_NET_IDLE, ZM_NET_HOSTING, ZM_NET_JOINING, ZM_NET_CONNECTED, ZM_NET_LOS
 enum { ZM_NET_MAX_PLAYERS=4, ZM_NET_DIRECTOR=0, ZM_NET_ALL=255, ZM_NET_JOINTS=15,
        ZM_CHAR_CHRIS=0, ZM_CHAR_COUNT=6, ZM_VOTE_NONE=0, ZM_VOTE_ACCEPT=1, ZM_LOBBY_JOIN=0,
        ZM_EV_WIN=9, ZM_EV_REVIVE=21, ZM_EV_PICKUP=30, ZM_EV_SHOTGUN=31, ZM_EV_PIANO=32, ZM_EV_TIMEOUT=34, ZM_EV_BOSS=35, ZM_EV_DROP=18, ZM_EV_DROP_TAKE=19,
-       ZM_EV_ROSTER=4, ZM_EV_BOX=16, ZM_END_ESCAPE=0, ITEM_SHOTGUN=3, ZM_RECONNECT_BLOB_MAX=65536 };
+       ZM_EV_ROSTER=4, ZM_EV_BOX=16, ZM_EV_VOICE=36, ZM_EV_TIME_PICKUP=37, ZM_END_ESCAPE=0, ITEM_SHOTGUN=3, ZM_RECONNECT_BLOB_MAX=65536 };
 struct BioCardLayout { unsigned char totalHeldItems, stageId, roomId, equippedItemId; };
 struct ItemSlot { unsigned char Id,qty; };
 struct ZmReconnectPlayer { unsigned int sequence; BioCardLayout card; int x,y,z; short health; unsigned short boxToken; unsigned char inventory[16]; };
@@ -83,6 +83,9 @@ static void zm_shotgun_take(const short*,int) {}
 static void zm_piano_take(const short*,int) {}
 static void zm_yawn_take(const short*,int) {}
 static void zm_timeout_take(const short*,int) {}
+static void zm_time_pickups_take(const short*,int) {}
+static int zm_net_seat_limit() { return ZM_NET_MAX_PLAYERS; }
+static void net_kick() {}
 static bool zm_timeout_active(unsigned int) { return false; }
 static void zm_drops_reconnect_abandon(const ZmReconnectPlayer*) { abandoned++; }
 static int zm_world_pack_flags(unsigned char* out) { memset(out,255,72); return 72; }
@@ -95,7 +98,8 @@ static void zm_world_apply_remote(const short*,int) {}
 static unsigned char* g_ItemSlotsPointer;
 static int zm_net_char(int) { return -1; }   // seat 0 is the human director here
 static void net_log_drop(const PlatNetAddr*,const char*,int,int) {}
-static void net_take_enemies(int,const unsigned char*,int) {}
+static std::vector<unsigned char> enemiesGot;
+static void net_take_enemies(int,const unsigned char* b,int n) { enemiesGot.assign(b,b+n); }
 struct Datagram { PlatNetAddr addr; std::vector<unsigned char> bytes; };
 static std::vector<Datagram> wire;
 static std::deque<Datagram> incoming;
@@ -220,6 +224,40 @@ int main() {
     s_links[0].used=true;s_links[0].addr=addr2;s_links[0].lastHeardMs=now;
     now+=10001;zm_net_poll();assert(s_status==ZM_NET_FAILED);
     assert(!strcmp(zm_net_status_hint(),"CHECK ADDRESS, PORT AND GAME VERSION"));
+    // No datagram goes over ZM_NET_DATAGRAM_MAX (VPN MTUs): a full event queue
+    // splits across packets, and a large body travels as FRAG pieces that the
+    // other end reassembles - in any order, duplicates ignored.
+    reset_host(); wire.clear();
+    for(int i=0;i<ZM_NET_MAX_PENDING;i++){NetEvent ev={};ev.kind=5;ev.dst=1;net_queue(1,ev);}
+    net_send_link(1,PKT_PING,0,nullptr,0);
+    for(auto& d:wire) assert(d.bytes.size()<=ZM_NET_DATAGRAM_MAX);
+    std::vector<unsigned char> big(5000); for(int i=0;i<5000;i++) big[i]=(unsigned char)(i*13+1);
+    wire.clear(); net_send_link(1,PKT_ENEMIES,0,big.data(),(int)big.size());
+    assert(wire.size()==(5000+ZM_NET_FRAG_DATA-1)/ZM_NET_FRAG_DATA);
+    for(auto& d:wire) assert(d.bytes.size()<=ZM_NET_DATAGRAM_MAX && ((NetHeader*)d.bytes.data())->type==PKT_FRAG);
+    std::vector<Datagram> pieces=wire;
+    net_reset(); now=1000; s_role=ZM_NET_SURVIVOR; s_status=ZM_NET_CONNECTED; s_self=1; s_started=s_lobbyGo=true;
+    s_links[0].used=true; s_links[0].addr=addr1; s_links[0].epoch=11; s_links[0].lastHeardMs=now;
+    for(auto& d:pieces) d.addr=addr1;
+    enemiesGot.clear();
+    for(int i=(int)pieces.size()-1;i>0;i--) deliver(pieces[i]);
+    deliver(pieces[2]); assert(enemiesGot.empty());
+    deliver(pieces[0]); assert(enemiesGot==big);
+    // A piece whose count disagrees with its length never completes a body.
+    enemiesGot.clear();
+    Datagram bad=pieces[0]; ((NetFragHeader*)(bad.bytes.data()+sizeof(NetHeader)))->count=1;
+    ((NetFragHeader*)(bad.bytes.data()+sizeof(NetHeader)))->serial=999; deliver(bad);
+    assert(enemiesGot.empty());
+    // A survivor's checkpoint comes on its own packet; the host keeps the newest.
+    reset_host();
+    ZmReconnectPlayer cp={}; cp.sequence=101; cp.card.stageId=5; cp.card.roomId=2; cp.inventory[0]=7;
+    deliver(packet(PKT_CHECKPOINT,11,addr1,&cp,sizeof(cp)));
+    assert(s_links[1].checkpoint.sequence==101 && s_links[1].checkpoint.card.roomId==2);
+    cp.sequence=100; cp.card.roomId=3;
+    deliver(packet(PKT_CHECKPOINT,11,addr1,&cp,sizeof(cp)));
+    assert(s_links[1].checkpoint.sequence==101 && s_links[1].checkpoint.card.roomId==2);
+    assert(sizeof(NetHeader)+sizeof(NetStateBody)+4*sizeof(NetEvent)<=ZM_NET_DATAGRAM_MAX);
+    puts("Datagram cap, fragment reassembly and checkpoint packet checks passed.");
     puts("Reconnect transport, expiry, version-mismatch diagnostics and timeout guidance checks passed.");
 }
 '''
@@ -234,10 +272,12 @@ def main():
     types = net[net.index("#pragma pack(push"):net.index("#define ZM_NET_MAX_PENDING")]
     globals_ = net[net.index("#define ZM_NET_MAX_PENDING"):net.index("const char* zm_char_name")]
     source = FIXTURE + constants + types + globals_
+    source += "static void net_take_fragment(int,unsigned int,int,const unsigned char*,int);\n"
+    source += "static void net_bumper_advance(void) {}\n"   # the intro barrier is not under test
     for name in ["zm_net_status_text", "zm_net_status_hint", "zm_net_active", "net_grant_char", "net_send_link", "net_send_all", "net_queue",
                  "net_route", "net_send_lobby", "net_take_state", "net_take_event", "net_link_of",
                  "net_pause_broadcast", "net_begin_grace", "net_reject", "net_expire_link",
-                 "net_accept_rejoin", "net_handle", "net_take_local", "net_drain_loopback",
+                 "net_accept_rejoin", "net_take_checkpoint", "net_dispatch", "net_take_fragment", "net_handle", "net_take_local", "net_drain_loopback",
                  "zm_net_poll", "net_reset"]:
         source += function(net, name)
     with tempfile.TemporaryDirectory(prefix="re1-reconnect-") as temp:

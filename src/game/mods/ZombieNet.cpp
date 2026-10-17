@@ -45,7 +45,17 @@ unsigned short g_zmNetPort = 27960;
 // Version 74: the clock carries the latest time bonus for its fading HUD popup.
 // Version 75: independent time spheres in leaf rooms without keys or crests.
 // Version 76: survivor timeouts removed; poison pauses during boss regrouping.
-#define ZM_NET_VERSION    76
+// Version 77: no datagram over ZM_NET_DATAGRAM_MAX - STATE without the
+// reconnect checkpoint (its own CHECKPOINT packet), variable-length ENEMIES
+// entries, and FRAG pieces for any body still too large.
+#define ZM_NET_VERSION    77
+// The largest datagram sent. Under every virtual LAN's MTU (Hamachi 1404,
+// Tailscale 1280, ZeroTier 2800) less the IP and UDP headers, so the system
+// never splits one into IP fragments - Hamachi loses those.
+#define ZM_NET_DATAGRAM_MAX 1200
+#define ZM_NET_MESSAGE_MAX  16384       // a whole body, before FRAG pieces
+#define ZM_NET_CHECKPOINT_MS      1000  // the reconnect checkpoint's refresh
+#define ZM_NET_CHECKPOINT_MIN_MS  100   // ... and its fastest, when it changes
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -70,6 +80,8 @@ enum {
     PKT_REJECT = 15,
     PKT_BUMPER = 17,           // intro readiness / host phase + frozen roster
     PKT_VERSION_REJECT = 16,    // diagnostic only; decoded before the full header
+    PKT_FRAG = 18,              // one piece of a body over ZM_NET_DATAGRAM_MAX: NetFragHeader + data
+    PKT_CHECKPOINT = 19,        // survivor -> host: ZmReconnectPlayer (not relayed)
 };
 
 #pragma pack(push, 1)
@@ -113,18 +125,31 @@ struct NetStateBody {
     unsigned char  viewStage, viewRoom;              // the room this copy has loaded (a
                                                      // spectator's is not its corpse's)
     unsigned char  camera, entranceDoor;            // camera and survivor's entry door index
-    ZmReconnectPlayer checkpoint;
     unsigned int boxRevision;
     ItemSlot box[48];              // host-only authoritative snapshot
 };
 
+// One ENEMIES entry; variable length. After it: rot[jointCount][3], then
+// ZmDeathPlayback (flags 4), then the appearance (flags 8): hiddenMask,
+// tintMask and one colour per set tintMask bit.
 struct NetEnemyEntry {
-    unsigned char  slot, id, state, flags;           // flags: 1 dead
+    unsigned char  slot, id, state, flags;           // flags: 1 dead, 2 death settled,
+                                                     // 4 death block, 8 appearance block
     short          health;
     unsigned short uid;                              // ZombieWorld uid (ZM_WORLD_UID_*)
-    NetPoseBody    pose;
-    ZmDeathPlayback death;
-    ZmMonsterAppearance appearance;
+    int            x, y, z;
+    short          angle;
+    unsigned char  jointCount, pad;
+    short          root[3];
+};
+// The most one entry can take: every joint, the death block and every tint.
+#define ZM_NET_ENEMY_MAX_BYTES ((int)(sizeof(NetEnemyEntry) + sizeof(short) * 3 * ZM_NET_JOINTS + \
+    sizeof(ZmDeathPlayback) + sizeof(unsigned int) * (2 + ZM_NET_JOINTS)))
+// A FRAG piece's own header; `type` and `bytes` are the whole body's.
+struct NetFragHeader {
+    unsigned short serial;
+    unsigned char  index, count, type, pad;
+    unsigned short bytes;
 };
 
 struct NetEnemiesHeader {
@@ -149,6 +174,12 @@ struct NetHelloBody { unsigned char character, vote; unsigned int revision, seed
 struct NetPauseBody { unsigned int serial, remainingMs; unsigned char missing, present; };
 struct NetRecoveryChunk { unsigned int offset, total; unsigned short bytes; unsigned char data[900]; };
 #pragma pack(pop)
+#define ZM_NET_FRAG_DATA ((int)(ZM_NET_DATAGRAM_MAX - sizeof(NetHeader) - sizeof(NetFragHeader)))
+// The bodies sent every frame or every second go whole, never as FRAG pieces.
+static_assert(sizeof(NetHeader) + sizeof(NetStateBody) <= ZM_NET_DATAGRAM_MAX, "STATE over a datagram");
+static_assert(sizeof(NetHeader) + sizeof(ZmReconnectPlayer) <= ZM_NET_DATAGRAM_MAX, "CHECKPOINT over a datagram");
+static_assert(sizeof(NetHeader) + sizeof(NetRecoveryChunk) <= ZM_NET_DATAGRAM_MAX, "RECOVERY_CHUNK over a datagram");
+static_assert(sizeof(NetHeader) + sizeof(NetLobbyBody) <= ZM_NET_DATAGRAM_MAX, "WELCOME over a datagram");
 
 #define ZM_NET_MAX_PENDING 96          // a room exit sends one roster event per monster
 #define ZM_NET_MAX_ENEMIES 30
@@ -173,6 +204,23 @@ struct NetLink {
     unsigned char recovery[ZM_RECONNECT_BLOB_MAX];
     int recoveryBytes;
 };
+
+// A body coming in as FRAG pieces, one per link: the pieces of one body go
+// out back to back, so a piece of a newer body drops an unfinished older one.
+struct NetFragIn {
+    unsigned int   epoch;
+    unsigned short serial;
+    unsigned char  count, type;
+    unsigned int   have;                             // bit per piece received
+    int            bytes;
+    unsigned char  data[ZM_NET_MESSAGE_MAX];
+};
+static NetFragIn      s_fragIn[ZM_NET_MAX_PLAYERS];
+static unsigned short s_fragSerial = 0;
+// The reconnect checkpoint last sent to the host (a survivor's copy).
+static ZmReconnectPlayer s_checkpointSent;
+static bool           s_checkpointSentHave = false;
+static unsigned int   s_checkpointSentMs = 0;
 
 static int            s_role = ZM_NET_OFF;
 static int            s_status = ZM_NET_IDLE;
@@ -430,18 +478,44 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
 {
     NetLink& L = s_links[link];
     if (!L.used) return;
-    static unsigned char buf[sizeof(NetHeader) + sizeof(NetEvent) * ZM_NET_MAX_PENDING +
-                             sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
-                             sizeof(ZmYawnBody)];
+    if (body == NULL || bodyLen < 0) bodyLen = 0;
+    static unsigned char buf[ZM_NET_DATAGRAM_MAX];
     NetHeader* h = (NetHeader*)buf;
     h->magic = ZM_NET_MAGIC;
     h->version = ZM_NET_VERSION;
-    h->type = type;
     h->origin = origin;
     h->ack = L.lastReceived;
     h->epoch = L.epoch;
+    if ((int)sizeof(NetHeader) + bodyLen > ZM_NET_DATAGRAM_MAX) {
+        // Too large for one datagram: FRAG pieces, reassembled by the other
+        // end. They carry no events; the next packet does.
+        if (bodyLen > ZM_NET_MESSAGE_MAX) {
+            dbg_printf("[net] body of type %d too large (%d bytes), dropped\n", (int)type, bodyLen);
+            return;
+        }
+        int count = (bodyLen + ZM_NET_FRAG_DATA - 1) / ZM_NET_FRAG_DATA;
+        unsigned short serial = ++s_fragSerial;
+        h->type = PKT_FRAG;
+        h->eventCount = 0;
+        NetFragHeader* f = (NetFragHeader*)(buf + sizeof(NetHeader));
+        unsigned char* data = buf + sizeof(NetHeader) + sizeof(NetFragHeader);
+        for (int i = 0; i < count; i++) {
+            int off = i * ZM_NET_FRAG_DATA;
+            int n = bodyLen - off < ZM_NET_FRAG_DATA ? bodyLen - off : ZM_NET_FRAG_DATA;
+            f->serial = serial;
+            f->index = (unsigned char)i;
+            f->count = (unsigned char)count;
+            f->type = type;
+            f->pad = 0;
+            f->bytes = (unsigned short)bodyLen;
+            memcpy(data, (const unsigned char*)body + off, n);
+            plat_net_send(&L.addr, buf, (int)(sizeof(NetHeader) + sizeof(NetFragHeader)) + n);
+        }
+        return;
+    }
+    h->type = type;
     // Events first, as many as leave room for the body (the rest go next time).
-    int room = (int)sizeof(buf) - (int)sizeof(NetHeader) - (bodyLen > 0 ? bodyLen : 0);
+    int room = ZM_NET_DATAGRAM_MAX - (int)sizeof(NetHeader) - bodyLen;
     int n = L.pendingCount;
     if (n * (int)sizeof(NetEvent) > room) n = room / (int)sizeof(NetEvent);
     if (n < 0) n = 0;
@@ -449,11 +523,22 @@ static void net_send_link(int link, unsigned char type, unsigned char origin,
     int len = sizeof(NetHeader);
     memcpy(buf + len, L.pending, sizeof(NetEvent) * n);
     len += (int)sizeof(NetEvent) * n;
-    if (body != NULL && bodyLen > 0 && len + bodyLen <= (int)sizeof(buf)) {
+    if (bodyLen > 0) {
         memcpy(buf + len, body, bodyLen);
         len += bodyLen;
     }
     plat_net_send(&L.addr, buf, len);
+    // Events that did not fit: a PING of their own, so a burst (a room exit's
+    // roster) is not held back behind a few frames of large bodies.
+    if (n < L.pendingCount && bodyLen > 0) {
+        int more = L.pendingCount - n;
+        int fit = (ZM_NET_DATAGRAM_MAX - (int)sizeof(NetHeader)) / (int)sizeof(NetEvent);
+        if (more > fit) more = fit;
+        h->type = PKT_PING;
+        h->eventCount = (unsigned char)more;
+        memcpy(buf + sizeof(NetHeader), L.pending + n, sizeof(NetEvent) * more);
+        plat_net_send(&L.addr, buf, (int)sizeof(NetHeader) + (int)sizeof(NetEvent) * more);
+    }
 }
 
 // To every link (the host: each survivor; a survivor: the host), except one.
@@ -583,6 +668,30 @@ void zm_net_freeze_state(bool on)
     s_frozenHave = false;
 }
 
+// A survivor's reconnect checkpoint (the host keeps the newest per seat for a
+// rejoin, the seat's loot and its inventory checks), in a packet of its own
+// rather than every STATE: at once when anything but the position changed,
+// else once a second.
+static void net_send_checkpoint(const ZmReconnectPlayer& cp)
+{
+    unsigned int now = plat_time_ms();
+    bool changed = !s_checkpointSentHave;
+    if (!changed) {
+        ZmReconnectPlayer a = cp, was = s_checkpointSent;
+        a.sequence = was.sequence = 0;
+        a.x = was.x = 0; a.y = was.y = 0; a.z = was.z = 0;
+        a.angle = was.angle = 0;
+        changed = memcmp(&a, &was, sizeof(a)) != 0;
+    }
+    unsigned int since = now - s_checkpointSentMs;
+    unsigned int wait = changed ? ZM_NET_CHECKPOINT_MIN_MS : ZM_NET_CHECKPOINT_MS;
+    if (s_checkpointSentHave && since < wait) return;
+    s_checkpointSent = cp;
+    s_checkpointSentHave = true;
+    s_checkpointSentMs = now;
+    net_send_link(0, PKT_CHECKPOINT, (unsigned char)s_self, &cp, sizeof(cp));
+}
+
 void zm_net_send_state(const Entity* ch, bool inGame, const Entity* zombieOverride, int overrideSlot, bool departing)
 {
     if (!zm_net_active()) return;
@@ -641,13 +750,15 @@ void zm_net_send_state(const Entity* ch, bool inGame, const Entity* zombieOverri
     b.camera = g_roomCameraId;
     b.entranceDoor = zm_survivor_entrance_door();
     if (s_role == ZM_NET_SURVIVOR && inGame && !s_departing && zombie_mode_armed()) {
-        zm_reconnect_capture(&b.checkpoint);
+        ZmReconnectPlayer cp;
+        zm_reconnect_capture(&cp);
         if (s_freezeOn) {
-            b.checkpoint.card.stageId = b.stage; b.checkpoint.card.roomId = b.room;
-            b.checkpoint.card.roomCameraId = 0;
-            b.checkpoint.x = b.x; b.checkpoint.y = b.y; b.checkpoint.z = b.z;
-            b.checkpoint.angle = b.angle; b.checkpoint.health = b.health;
+            cp.card.stageId = b.stage; cp.card.roomId = b.room;
+            cp.card.roomCameraId = 0;
+            cp.x = b.x; cp.y = b.y; cp.z = b.z;
+            cp.angle = b.angle; cp.health = b.health;
         }
+        net_send_checkpoint(cp);
     }
     if (s_role == ZM_NET_ZOMBIE) b.boxRevision = zm_box_snapshot(b.box);
     net_send_all(PKT_STATE, (unsigned char)s_self, &b, sizeof(b), -1);
@@ -656,29 +767,42 @@ void zm_net_send_state(const Entity* ch, bool inGame, const Entity* zombieOverri
 void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, int count, bool adopt)
 {
     if (!zm_net_active()) return;
-    static unsigned char body[sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * ZM_NET_MAX_ENEMIES +
+    static unsigned char body[sizeof(NetEnemiesHeader) + ZM_NET_ENEMY_MAX_BYTES * ZM_NET_MAX_ENEMIES +
                               sizeof(ZmYawnBody)];
+    static_assert(sizeof(body) <= ZM_NET_MESSAGE_MAX, "a full room's ENEMIES over FRAG's limit");
     NetEnemiesHeader* h = (NetEnemiesHeader*)body;
-    NetEnemyEntry* out = (NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
     if (count > ZM_NET_MAX_ENEMIES) count = ZM_NET_MAX_ENEMIES;
     h->count = (unsigned char)count;
     h->flags = adopt ? 1 : 0;
     h->stage = g_stageId;
     h->room = g_roomId;
+    int len = (int)sizeof(NetEnemiesHeader);
     for (int i = 0; i < count; i++) {
         const Entity* e = list[i];
-        memset(&out[i], 0, sizeof(out[i]));
-        out[i].slot = (unsigned char)(e - g_EnemiesList);
-        out[i].id = e->id;
-        out[i].state = e->state;
-        out[i].flags = zm_monster_dead(e) ? 1 : 0;
-        if (zm_monster_death_settled(e)) out[i].flags |= 2;
-        out[i].health = e->health;
-        out[i].uid = uids[i];
-        net_fill_pose(&out[i].pose, e);
-        zm_monster_appearance_capture(e, &out[i].appearance);
+        NetEnemyEntry* out = (NetEnemyEntry*)(body + len);
+        memset(out, 0, sizeof(*out));
+        out->slot = (unsigned char)(e - g_EnemiesList);
+        out->id = e->id;
+        out->state = e->state;
+        out->flags = zm_monster_dead(e) ? 1 : 0;
+        if (zm_monster_death_settled(e)) out->flags |= 2;
+        out->health = e->health;
+        out->uid = uids[i];
+        NetPoseBody pose;
+        memset(&pose, 0, sizeof(pose));
+        net_fill_pose(&pose, e);
+        out->x = pose.x; out->y = pose.y; out->z = pose.z;
+        out->angle = pose.angle;
+        out->jointCount = pose.jointCount;
+        memcpy(out->root, pose.root, sizeof(out->root));
+        len += (int)sizeof(NetEnemyEntry);
+        // Only the joints it has.
+        memcpy(body + len, pose.rot, sizeof(short) * 3 * pose.jointCount);
+        len += (int)sizeof(short) * 3 * pose.jointCount;
         if (e->health < 0) {
-            ZmDeathPlayback& d = out[i].death;
+            out->flags |= 4;
+            ZmDeathPlayback d;
+            memset(&d, 0, sizeof(d));
             const unsigned char* raw = (const unsigned char*)e;
             d.status = e->status_flags;
             d.behavior = e->behavior_flags;
@@ -688,9 +812,24 @@ void zm_net_send_enemies(const Entity* const* list, const unsigned short* uids, 
             memcpy(d.phase, raw + 0x16C, sizeof(d.phase));
             memcpy(d.extra, raw + 0x170, zm_death_extra_bytes(e->id));
             memcpy(d.tail, raw + 0x178, sizeof(d.tail));
+            memcpy(body + len, &d, sizeof(d));
+            len += (int)sizeof(d);
+        }
+        ZmMonsterAppearance app;
+        zm_monster_appearance_capture(e, &app);
+        if (app.hiddenMask != 0 || app.tintMask != 0) {
+            // The masks, then a colour for each tinted joint only.
+            out->flags |= 8;
+            memcpy(body + len, &app.hiddenMask, sizeof(app.hiddenMask));
+            memcpy(body + len + 4, &app.tintMask, sizeof(app.tintMask));
+            len += 8;
+            for (int j = 0; j < ZM_NET_JOINTS; j++) {
+                if ((app.tintMask & (1u << j)) == 0) continue;
+                memcpy(body + len, &app.color[j], sizeof(app.color[j]));
+                len += (int)sizeof(app.color[j]);
+            }
         }
     }
-    int len = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
     // Yawn's body, which its head's pose cannot carry (ZombieYawn.cpp).
     bool yawn = false;
     for (int i = 0; i < count && !yawn; i++) yawn = zm_yawn_head(list[i]);
@@ -730,17 +869,6 @@ static void net_take_state(int origin, const unsigned char* body, int bodyLen)
     const NetStateBody* b = (const NetStateBody*)body;
     if (s_role == ZM_NET_SURVIVOR && origin == ZM_NET_DIRECTOR)
         zm_box_snapshot_take(b->boxRevision, b->box);
-    if (s_role == ZM_NET_ZOMBIE && origin > 0 && b->checkpoint.sequence) {
-        NetLink& L = s_links[origin];
-        if (L.checkpointHave && (int)(b->checkpoint.sequence - L.checkpoint.sequence) <= 0) return;
-        if (!L.recovering && !L.expired && (b->flags & 0x20) == 0 &&
-            b->checkpoint.card.totalHeldItems <= 8 && b->checkpoint.card.stageId <= 6 &&
-            b->checkpoint.card.roomId < 58) {
-            L.checkpoint = b->checkpoint;
-            L.checkpointHave = true;
-            zm_box_checkpoint(origin, b->checkpoint.boxToken);
-        }
-    }
     ZmNetPeerState& p = s_states[origin];
     // Only a peer crossing into our loaded room counts as an arrival. Repeated
     // STATEs, first sightings and spectators do not produce a door cue.
@@ -749,6 +877,9 @@ static void net_take_state(int origin, const unsigned char* body, int bodyLen)
         (p.stage != b->stage || p.room != b->room)) {
         zombie_mode_room_entry_sound();
     }
+    // In-game STATE getting through (the lobby's small packets can, alone).
+    if (!p.valid && (b->flags & 1) != 0)
+        dbg_printf("[net] STATE from player %d: in game, stage %d room %02X\n", origin, (int)b->stage, (int)b->room);
     p.valid = (b->flags & 1) != 0;
     p.dead = (b->flags & 2) != 0;
     p.spectating = (b->flags & 0x10) != 0;
@@ -782,44 +913,84 @@ static void net_take_state(int origin, const unsigned char* body, int bodyLen)
     }
 }
 
+// The host: a survivor's reconnect checkpoint (PKT_CHECKPOINT).
+static void net_take_checkpoint(int link, const unsigned char* body, int bodyLen)
+{
+    if (s_role != ZM_NET_ZOMBIE || link <= 0 || link >= ZM_NET_MAX_PLAYERS) return;
+    if (bodyLen != (int)sizeof(ZmReconnectPlayer)) return;
+    ZmReconnectPlayer cp;
+    memcpy(&cp, body, sizeof(cp));
+    if (!cp.sequence) return;
+    NetLink& L = s_links[link];
+    if (L.checkpointHave && (int)(cp.sequence - L.checkpoint.sequence) <= 0) return;
+    // (A departing survivor sends none: its card is mid-door.)
+    if (!L.recovering && !L.expired &&
+        cp.card.totalHeldItems <= 8 && cp.card.stageId <= 6 && cp.card.roomId < 58) {
+        L.checkpoint = cp;
+        L.checkpointHave = true;
+        zm_box_checkpoint(link, cp.boxToken);
+    }
+}
+
 static void net_take_enemies(int origin, const unsigned char* body, int bodyLen)
 {
     if (bodyLen < (int)sizeof(NetEnemiesHeader)) return;
     const NetEnemiesHeader* eh = (const NetEnemiesHeader*)body;
     int count = eh->count;
     if (count > ZM_NET_MAX_ENEMIES) return;
-    if (bodyLen < (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count)) return;
-    const NetEnemyEntry* list = (const NetEnemyEntry*)(body + sizeof(NetEnemiesHeader));
-    int entriesLen = (int)(sizeof(NetEnemiesHeader) + sizeof(NetEnemyEntry) * count);
-    if ((eh->flags & 2) != 0 && bodyLen >= entriesLen + (int)sizeof(ZmYawnBody)) {
+    static ZmNetEnemy got[ZM_NET_MAX_ENEMIES];
+    int off = (int)sizeof(NetEnemiesHeader);
+    for (int i = 0; i < count; i++) {
+        if (off + (int)sizeof(NetEnemyEntry) > bodyLen) return;
+        NetEnemyEntry in;
+        memcpy(&in, body + off, sizeof(in));
+        off += (int)sizeof(NetEnemyEntry);
+        if (in.jointCount > ZM_NET_JOINTS) return;
+        ZmNetEnemy& g = got[i];
+        memset(&g, 0, sizeof(g));
+        int rotBytes = (int)sizeof(short) * 3 * in.jointCount;
+        if (off + rotBytes > bodyLen) return;
+        memcpy(g.pose.rot, body + off, rotBytes);
+        off += rotBytes;
+        if ((in.flags & 4) != 0) {
+            if (off + (int)sizeof(ZmDeathPlayback) > bodyLen) return;
+            memcpy(&g.death, body + off, sizeof(g.death));
+            off += (int)sizeof(ZmDeathPlayback);
+        }
+        if ((in.flags & 8) != 0) {
+            if (off + 8 > bodyLen) return;
+            memcpy(&g.appearance.hiddenMask, body + off, 4);
+            memcpy(&g.appearance.tintMask, body + off + 4, 4);
+            off += 8;
+            for (int j = 0; j < ZM_NET_JOINTS; j++) {
+                if ((g.appearance.tintMask & (1u << j)) == 0) continue;
+                if (off + 4 > bodyLen) return;
+                memcpy(&g.appearance.color[j], body + off, 4);
+                off += 4;
+            }
+        }
+        g.uid = in.uid;
+        g.slot = in.slot;
+        g.id = in.id;
+        g.state = in.state;
+        g.dead = (in.flags & 1) != 0;
+        g.settled = (in.flags & 2) != 0;
+        g.health = in.health;
+        g.pose.x = in.x;
+        g.pose.y = in.y;
+        g.pose.z = in.z;
+        if (s_role == ZM_NET_ZOMBIE) zm_world_reconnect_enemy(eh->stage, eh->room, g.uid,
+            g.id, g.health, !g.dead, g.pose.x, g.pose.y, g.pose.z, in.angle);
+        g.pose.angle = in.angle;
+        g.pose.jointCount = in.jointCount;
+        memcpy(g.pose.root, in.root, sizeof(g.pose.root));
+    }
+    if ((eh->flags & 2) != 0 && bodyLen >= off + (int)sizeof(ZmYawnBody)) {
         ZmYawnBody yb;
-        memcpy(&yb, body + entriesLen, sizeof(yb));
+        memcpy(&yb, body + off, sizeof(yb));
         zm_yawn_body_take(yb, eh->stage, eh->room, origin);
     }
-    static ZmNetEnemy got[ZM_NET_MAX_ENEMIES];
-    int n = 0;
-    for (int i = 0; i < count; i++) {
-        ZmNetEnemy& g = got[n++];
-        g.uid = list[i].uid;
-        g.slot = list[i].slot;
-        g.id = list[i].id;
-        g.state = list[i].state;
-        g.dead = (list[i].flags & 1) != 0;
-        g.settled = (list[i].flags & 2) != 0;
-        g.death = list[i].death;
-        g.appearance = list[i].appearance;
-        g.health = list[i].health;
-        g.pose.x = list[i].pose.x;
-        g.pose.y = list[i].pose.y;
-        g.pose.z = list[i].pose.z;
-        if (s_role == ZM_NET_ZOMBIE) zm_world_reconnect_enemy(eh->stage, eh->room, g.uid,
-            g.id, g.health, !g.dead, g.pose.x, g.pose.y, g.pose.z, list[i].pose.angle);
-        g.pose.angle = list[i].pose.angle;
-        g.pose.jointCount = list[i].pose.jointCount;
-        memcpy(g.pose.root, list[i].pose.root, sizeof(g.pose.root));
-        memcpy(g.pose.rot, list[i].pose.rot, sizeof(g.pose.rot));
-    }
-    zm_shared_receive_enemies(got, n, (eh->flags & 1) != 0, eh->stage, eh->room, origin);
+    zm_shared_receive_enemies(got, count, (eh->flags & 1) != 0, eh->stage, eh->room, origin);
 }
 
 // A new event off link `link`: for this copy, for others (the host passes it
@@ -1048,6 +1219,9 @@ static int net_accept_rejoin(const NetHeader* h, const unsigned char* body, int 
     return -1;
 }
 
+static void net_dispatch(int link, unsigned char type, int origin, const unsigned char* body, int bodyLen);
+static void net_take_fragment(int link, unsigned int epoch, int origin, const unsigned char* body, int bodyLen);
+
 static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* from)
 {
     // Older protocols share magic/version/type, but may have shorter headers.
@@ -1163,7 +1337,58 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
     // A survivor's packets are about itself; the host's relays say whose.
     int origin = (s_role == ZM_NET_ZOMBIE) ? link : h->origin;
 
-    switch (h->type) {
+    if (h->type == PKT_FRAG) {
+        net_take_fragment(link, h->epoch, origin, body, bodyLen);
+        return;
+    }
+    net_dispatch(link, h->type, origin, body, bodyLen);
+}
+
+// A piece of a body too large for one datagram: once every piece of it is in,
+// the whole body goes to net_dispatch as its own type.
+static void net_take_fragment(int link, unsigned int epoch, int origin, const unsigned char* body, int bodyLen)
+{
+    if (bodyLen < (int)sizeof(NetFragHeader)) return;
+    NetFragHeader f;
+    memcpy(&f, body, sizeof(f));
+    const unsigned char* data = body + sizeof(NetFragHeader);
+    int n = bodyLen - (int)sizeof(NetFragHeader);
+    if (f.count == 0 || f.count > 32 || f.index >= f.count || f.bytes > ZM_NET_MESSAGE_MAX ||
+        f.count != ((int)f.bytes + ZM_NET_FRAG_DATA - 1) / ZM_NET_FRAG_DATA || f.type == PKT_FRAG) return;
+    int at = f.index * ZM_NET_FRAG_DATA;
+    int want = (int)f.bytes - at < ZM_NET_FRAG_DATA ? (int)f.bytes - at : ZM_NET_FRAG_DATA;
+    if (want <= 0 || n != want) return;
+    NetFragIn& in = s_fragIn[link];
+    if (in.epoch != epoch || in.serial != f.serial || in.count != f.count ||
+        in.type != f.type || in.bytes != (int)f.bytes) {
+        // A newer body (or a new connection): the unfinished one is lost.
+        in.epoch = epoch;
+        in.serial = f.serial;
+        in.count = f.count;
+        in.type = f.type;
+        in.bytes = f.bytes;
+        in.have = 0;
+    }
+    unsigned int bit = 1u << f.index;
+    if (in.have & bit) return;
+    memcpy(in.data + at, data, n);
+    in.have |= bit;
+    unsigned int all = f.count == 32 ? 0xFFFFFFFFu : (1u << f.count) - 1;
+    if (in.have != all) return;
+    in.have = 0;
+    in.serial = 0;
+    in.count = 0;
+    net_dispatch(link, in.type, origin, in.data, in.bytes);
+}
+
+// A whole packet body (or a reassembled one) from link `link`.
+static void net_dispatch(int link, unsigned char type, int origin, const unsigned char* body, int bodyLen)
+{
+    NetLink& L = s_links[link];
+    switch (type) {
+    case PKT_CHECKPOINT:
+        net_take_checkpoint(link, body, bodyLen);
+        break;
     case PKT_BUMPER:
         if (s_role == ZM_NET_ZOMBIE && bodyLen == 1 && body[0] <= 2) {
             if (s_bumperReady[link] < (int)body[0]) s_bumperReady[link] = (signed char)body[0];
@@ -1224,7 +1449,7 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
             s_lobbyOptions = w->options;
             for (int i = 1; i < ZM_NET_MAX_PLAYERS; i++) s_votes[i] = (unsigned char)((w->votes >> ((i - 1) * 2)) & 3);
             if (s_status == ZM_NET_JOINING) s_status = ZM_NET_CONNECTED;
-            if (h->type == PKT_GO) s_lobbyGo = true;
+            if (type == PKT_GO) s_lobbyGo = true;
         }
         break;
     case PKT_READY:
@@ -1493,6 +1718,9 @@ void zm_net_poll(void)
 static void net_reset(void)
 {
     s_loopbackCount = 0;
+    memset(s_fragIn, 0, sizeof(s_fragIn));
+    s_checkpointSentHave = false;
+    s_checkpointSentMs = 0;
     s_kickText = NULL;
     s_rejoining = s_downloaded = s_rejoinLoadReady = false;
     s_downloadOffset = s_downloadTotal = s_lastDownloadMs = 0;

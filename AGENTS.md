@@ -651,11 +651,22 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   `tests/test_zombie_reconnect_snapshot.py`. User play-testing still required.
 - **Networking** (`ZombieNet.cpp`) is a UDP star through the host. Per-link
   reliable events carry a source and a destination, and the host relays them.
-  - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START.
+  - Packets: HELLO, WELCOME, GO, STATE, PING, BYE, FLAGS, ENEMIES, READY, START,
+    CHECKPOINT (a survivor's reconnect checkpoint to the host, on change at
+    most every 100 ms, else once a second - not in STATE), FRAG.
+  - No datagram is over `ZM_NET_DATAGRAM_MAX` (1200): virtual LANs (Hamachi
+    MTU 1404, Tailscale 1280) lose IP-fragmented UDP, which left the lobby
+    working but nobody seen in game. `net_send_link` gives events only the
+    room left after the body (the rest in a PING of their own) and splits a
+    larger body into FRAG pieces (`NetFragHeader`), reassembled per link by
+    `net_take_fragment` and handed to `net_dispatch` as their own type.
+    ENEMIES entries are variable length: only the monster's joints, the
+    death block only when dead, tint colours only for tinted joints.
+    Untested by the user over Hamachi.
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
     PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34, BOSS=35, VOICE=36. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
-  - **Bump `ZM_NET_VERSION` (currently 72) whenever a packet layout changes.**
+  - **Bump `ZM_NET_VERSION` (currently 77) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
     MISMATCH with an update hint; a nonresponding host shows address/port/version
