@@ -7,6 +7,7 @@
 #include "../SFXIds.h"
 #include "../../system/AssetPath.h"
 #include "../OptionsMenu.h"            // options_render_entity
+#include "../entities/EntityCommon.h"  // ENEMY_YAWN_1
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
@@ -186,7 +187,7 @@ static void lobby_draw_players(int x, int y)
 // A screen's menu: Up / Down move, Action picks an available item. Items
 // carry an id (MI_*) so a screen can build its list from what applies.
 enum {
-    MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_TIMEOUT, MI_LEAVE, MI_START, MI_VETO,
+    MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_LEAVE, MI_START, MI_VETO,
     MI_ACCEPT, MI_BACK_LOBBY, MI_CONTINUE, MI_CLOSE, MI_READY, MI_CHANGE_CHAR, MI_VIEW_MAP,
 };
 #define LOBBY_MENU_MAX 8
@@ -536,6 +537,7 @@ extern void Entity_SetJoints(Entity*, unsigned int);
 extern void InitAnimStructure(void*);
 extern unsigned int SetupJointStructures(unsigned int);
 extern void ResetJointTransforms(void);
+extern void yawn_preview_pose(void);
 static unsigned int s_guideModelArena[256 * 1024];
 static Entity s_guideMonster;
 static int s_guideProfile = -1;
@@ -548,7 +550,7 @@ struct MonsterProfile {
     const char* abilities;
 };
 // Attack values follow Zombie.cpp, Cerberus.cpp, Hunter.cpp, Chimera.cpp
-// and tyrant_damage_player; paired values are normal / second playthrough.
+// Yawn.cpp and tyrant_damage_player; paired values are normal / second playthrough.
 static const MonsterProfile kGuideMonsters[] = {
     {0x00, 0, "WHITE COAT ZOMBIE", "A CLOSE RANGE AMBUSHER. PLAY DEAD TO CATCH SURVIVORS OFF GUARD.",
      "ACTION: GRAB AND BITE. 10 / 12 HP EVERY 19 FRAMES. AIM: LIE DOWN OR RISE. FLOOR BITE: 6 / 9 HP. RUN: FASTER SHAMBLE. OTHER MONSTERS: SWIPE 30 HP; ZOMBIE BITE 15 HP PER TICK."},
@@ -563,8 +565,60 @@ static const MonsterProfile kGuideMonsters[] = {
     {0x09, 0, "CHIMERA", "A QUICK FLOOR FIGHTER WITH TWO CLAW ATTACKS. CONTROL BRINGS IT OFF THE CEILING.",
      "ACTION: DOUBLE CLAW, 20 HP. AIM AND ACTION: GRAB CLAW, 10 / 30 HP. CONTACT: 5 / 10 HP. IN PVP THE GRAB BECOMES A HIT. RUN: FAST CHASE."},
     {0x10, 0, "TYRANT", "A 600 HP HEAVY HITTER. USE ITS SPRINT TO CLOSE IN AND SWEEP THE ROOM.",
-     "ACTION: SWIPE, 50 HP. AIM AND ACTION: SLASH, 40 HP. RUN AND FORWARD: SPRINT. ADD ACTION: WIDE SWEEP, 60 HP. A FATAL SLASH CAN CHAIN INTO AN IMPALE."}
+     "ACTION: SWIPE, 50 HP. AIM AND ACTION: SLASH, 40 HP. RUN AND FORWARD: SPRINT. ADD ACTION: WIDE SWEEP, 60 HP. A FATAL SLASH CAN CHAIN INTO AN IMPALE."},
+    {ENEMY_YAWN_1, 2, "YAWN", "500 HP, DOUBLED PER EXTRA SURVIVOR. THE ATTIC YAWN FLEES; THE LESSON ROOM YAWN DIES.",
+     "FORWARD: CRAWL; TURN TO STEER. RUN: FASTER CRAWL. ACTION: LUNGE AND BITE AHEAD; YAWN 1 CAN POISON. AIM + ACTION: THRASH TWICE, HITTING EVERYONE ALONG THE WHOLE BODY FOR 20 HP PER SWING. RUN + ACTION: REAR UP, THEN SLAM DOWN FOR 30 HP TO EVERYONE NEAR THE HEAD AND FRONT BODY."}
 };
+
+// A presentation-only coil. Yawn's body needs its own skeleton composition;
+// running its gameplay initializer would also create twelve room enemies.
+// Use the grown Yawn's raised crawl, following a fixed circular path. Keep
+// the circle's centre fixed so the head travels rather than spinning in place.
+static void guide_pose_yawn(void)
+{
+    Entity* e = &s_guideMonster;
+    short spin = e->angle;
+    e->angle = 0;
+    e->scaMatrixData.localMatrix = g_identityMatrixData;
+    EntityComputeJointWorldMatrices(0);
+    yawn_preview_pose();
+    e->angle = spin;
+    JointStruct* joints = e->jointsStructs;
+    double span = std::fabs((double)joints[e->jointCount - 1].world.t[0] - joints[0].world.t[0]);
+    double radius = span / 4.5;
+    if (radius < 1000.0) radius = 1000.0;
+    double origin = joints[0].world.t[0];
+    double turn = spin * (6.283185307179586 / 4096.0);
+    double c = std::cos(turn), s = std::sin(turn);
+    for (int k = 0; k < e->jointCount; ++k) {
+        MATRIX& m = joints[k].world;
+        double arc = (m.t[0] - origin) / radius;
+        double ca = std::cos(arc), sa = std::sin(arc);
+        double x = (radius - m.t[2]) * sa;
+        double z = (m.t[2] - radius) * ca;
+        m.t[0] = (int)(c * x - s * z);
+        m.t[2] = (int)(s * x + c * z);
+        // Rotate each mesh with the tangent of the curve, retaining its
+        // animated pitch and roll instead of stretching its geometry.
+        double bc = std::cos(arc + turn), bs = std::sin(arc + turn);
+        for (int col = 0; col < 3; ++col) {
+            short mx = m.m[0][col], mz = m.m[2][col];
+            m.m[0][col] = (short)(bc * mx - bs * mz);
+            m.m[2][col] = (short)(bs * mx + bc * mz);
+        }
+    }
+    double scale = 0.35;
+    if (radius * scale > 1150.0) scale = 1150.0 / radius;
+    for (int k = 0; k < e->jointCount; ++k) {
+        MATRIX& m = joints[k].world;
+        for (int row = 0; row < 3; ++row)
+            for (int col = 0; col < 3; ++col)
+                m.m[row][col] = (short)(m.m[row][col] * scale);
+        m.t[0] = -3000 + (int)(m.t[0] * scale);
+        m.t[1] = 1300 + (int)(m.t[1] * scale);
+        m.t[2] = -1000 + (int)(m.t[2] * scale);
+    }
+}
 void zm_guide_profile(int survivor, int monster)
 {
     int profile = survivor >= 0 ? survivor : monster >= 0 ? ZM_CHAR_COUNT + monster : -1;
@@ -606,7 +660,7 @@ void zm_guide_profile(int survivor, int monster)
                 e->scaMatrixData.localMatrix = g_identityMatrixData;
                 e->scaMatrixData.localMatrix.t[0] = -2400;
                 e->scaMatrixData.localMatrix.t[1] = info.id == 0x02 ? 1600 : 2100;
-                e->scaMatrixData.localMatrix.t[2] = info.id == 0x10 ? -2000 : -700;
+                e->scaMatrixData.localMatrix.t[2] = info.id == ENEMY_YAWN_1 ? -6000 : info.id == 0x10 ? -2000 : -700;
                 e->animationId = info.idle;
                 e->angle = 0xce4;
                 g_loadDataDestPointer = savedDest;
@@ -641,12 +695,17 @@ void zm_guide_profile(int survivor, int monster)
         ENTITY = &s_guideMonster;
         s_guideMonster.angle = (short)((s_guideMonster.angle + 12) & 0xfff);
         Joint_move(0, s_guideMonster.animHeader, s_guideMonster.animBase, 0x400);
-        EntityComputeJointWorldMatrices(0);
+        if (info.id == ENEMY_YAWN_1) guide_pose_yawn();
+        else EntityComputeJointWorldMatrices(0);
+        // The guide is 320 pixels wide: shift only Yawn's preview left 5%.
+        if (info.id == ENEMY_YAWN_1) SetSubpixelOffset(144, 120);
         options_render_entity((int)&s_guideMonster);
+        if (info.id == ENEMY_YAWN_1) SetSubpixelOffset(160, 120);
         lobby_print(8, 16, 0x8F, info.name);
         char buying[64];
         int unlock = zm_econ_unlock_bosses(info.id);
-        if (unlock >= 2) snprintf(buying, sizeof(buying), "%d POINTS - AFTER BOTH YAWNS", zm_econ_cost(info.id));
+        if (info.id == ENEMY_YAWN_1) snprintf(buying, sizeof(buying), "BOSS - POSSESS IN ITS ROOM");
+        else if (unlock >= 2) snprintf(buying, sizeof(buying), "%d POINTS - AFTER BOTH YAWNS", zm_econ_cost(info.id));
         else if (unlock) snprintf(buying, sizeof(buying), "%d POINTS - AFTER THE FIRST YAWN", zm_econ_cost(info.id));
         else snprintf(buying, sizeof(buying), "%d POINTS - AVAILABLE AT START", zm_econ_cost(info.id));
         lobby_print(8, 32, 0x7F, buying);
@@ -1044,7 +1103,6 @@ static void lobby_room(void)
             m.add(MI_GENERATE, zm_net_survivor_count() > 0,
                   zm_net_survivor_count() > 0 ? "GENERATE THE MAP" : "GENERATE THE MAP - NOBODY YET");
         }
-        if (host) m.add(MI_TIMEOUT, true, "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
         m.add(MI_LEAVE, true, "LEAVE");
 
         // The AI level steps with left / right as well as Action.
@@ -1069,9 +1127,6 @@ static void lobby_room(void)
             s_aiLevel = ai >= 5 ? 1 : ai + 1;
             zm_net_set_ai_level(s_aiLevel);
             break;
-        case MI_TIMEOUT:
-            zm_net_set_timeout_enabled(!zm_net_timeout_enabled());
-            break;
         case MI_LEAVE:
             zm_net_stop();
             return;
@@ -1091,9 +1146,6 @@ static void lobby_room(void)
             lobby_draw_players(x, y);
         }
         if (joined) {
-            char option[48];
-            snprintf(option, sizeof(option), "SURVIVOR TIMEOUT: %s", zm_net_timeout_enabled() ? "ON" : "OFF");
-            lobby_print(x, 136, 0x7F, option);
             lobby_print(x, 200, 0x7F, "WAITING FOR THE HOST TO SHOW THE MAP");
         }
         lobby_menu_draw(m, sel, x, host ? 136 : 160);

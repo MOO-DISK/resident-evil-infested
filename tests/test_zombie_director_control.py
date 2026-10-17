@@ -51,6 +51,7 @@ static bool zm_survivor_role() { return s_gameRole==ZM_NET_SURVIVOR; }
 static bool zm_is_zombie_id(unsigned char id) { return id==0 || id==1 || id==17; }
 static void dbg_printf(const char*,...) {}
 static void zm_econ_refund(unsigned char,unsigned short) {}
+static bool zm_econ_kill_confirmed(const Entity* e) { return e->health < 0; }
 static void zm_shared_remove_departed(unsigned short,unsigned char) {}
 static bool away=false;
 static bool zm_spec_away() { return away; }

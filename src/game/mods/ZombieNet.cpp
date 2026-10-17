@@ -41,7 +41,11 @@ unsigned short g_zmNetPort = 27960;
 // Version 70: the survivors' voice lines (ZM_EV_VOICE).
 // Version 72: a survivor's own match id (its HELLO token) seats it and
 // reclaims that seat on a rejoin; the lobby's menu-driven flow.
-#define ZM_NET_VERSION    72
+// Version 73: monster kill time rewards and leaf-room time spheres.
+// Version 74: the clock carries the latest time bonus for its fading HUD popup.
+// Version 75: independent time spheres in leaf rooms without keys or crests.
+// Version 76: survivor timeouts removed; poison pauses during boss regrouping.
+#define ZM_NET_VERSION    76
 #define ZM_NET_GAME_TIMEOUT_MS 5000
 #define ZM_NET_RECONNECT_MS 30000
 #define ZM_NET_TIMEOUT_MS 30000         // generous: room loads and FMVs do not
@@ -139,7 +143,6 @@ struct NetLobbyBody {
     unsigned int recoveryBytes;
     unsigned char options;                           // ZM_LOBBY_OPT_* (the host's)
 };
-#define ZM_LOBBY_OPT_NO_TIMEOUT 0x01                 // the director turned the survivors' timeout off
 #define ZM_LOBBY_OPT_AI_SHIFT   1                    // bits 1-3: the AI director's level (0 a human)
 #define ZM_LOBBY_OPT_AI_MASK    0x0E
 struct NetHelloBody { unsigned char character, vote; unsigned int revision, seed, token[2]; };
@@ -277,12 +280,10 @@ static bool net_has_link_pause(unsigned int now)
     }
     return false;
 }
-// A link down, or the survivors' timeout (ZombieTimeout.cpp): either holds
-// the match on every copy.
+// A lost link holds the match on every copy.
 static bool net_has_pause(unsigned int now)
 {
-    if (net_has_link_pause(now)) return true;
-    return s_role != ZM_NET_OFF && !zombie_mode_match_over() && zm_timeout_active(now);
+    return net_has_link_pause(now);
 }
 bool zm_net_pause_active(void) { return net_has_pause(plat_time_ms()); }
 bool zm_net_link_pause_active(void) { return net_has_link_pause(plat_time_ms()); }
@@ -474,7 +475,8 @@ static void net_queue(int link, const NetEvent& ev)
     // traffic is awaiting acknowledgement. Never evict an assigned sequence.
     bool critical = ev.kind == ZM_EV_PICKUP || ev.kind == ZM_EV_BOX || ev.kind == ZM_EV_DROP ||
                     ev.kind == ZM_EV_WIN || ev.kind == ZM_EV_REVIVE || ev.kind == ZM_EV_SHOTGUN ||
-                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_TIMEOUT || ev.kind == ZM_EV_BOSS;
+                    ev.kind == ZM_EV_PIANO || ev.kind == ZM_EV_BOSS ||
+                    ev.kind == ZM_EV_TIME_PICKUP;
     int limit = critical ? ZM_NET_MAX_PENDING : ZM_NET_MAX_PENDING - 24;
     if (L.pendingCount >= limit) {
         dbg_printf("[net] link %d event queue full, dropping kind %d\n", link, (int)ev.kind);
@@ -832,15 +834,9 @@ static void net_take_event(const NetEvent& e, int link)
         zm_shotgun_take(e.args, e.src);
         return;
     }
-    if (e.kind == ZM_EV_TIMEOUT) {
-        // A survivor asks the host for itself; only the host starts, refuses
-        // or ends one. Taken here, not from the inbox: every copy is in the
-        // pause loop while it holds.
-        if (s_role == ZM_NET_ZOMBIE) {
-            if (e.src != link || e.dst != ZM_NET_DIRECTOR || e.args[0] != 1 || e.args[1] != link) return;
-        } else if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR ||
-                   (e.dst != ZM_NET_ALL && e.dst != s_self) || e.args[0] < 2 || e.args[0] > 4) return;
-        zm_timeout_take(e.args, e.src);
+    if (e.kind == ZM_EV_TIME_PICKUP) {
+        if (s_role != ZM_NET_SURVIVOR || link != ZM_NET_DIRECTOR || e.src != ZM_NET_DIRECTOR) return;
+        zm_time_pickups_take(e.args, e.src);
         return;
     }
     if (e.kind == ZM_EV_BOSS) {
@@ -1337,7 +1333,6 @@ static void net_take_local(const NetEvent& e)
 {
     switch (e.kind) {
     case ZM_EV_SHOTGUN: zm_shotgun_take(e.args, e.src); return;
-    case ZM_EV_TIMEOUT: zm_timeout_take(e.args, e.src); return;
     case ZM_EV_PIANO:   zm_piano_take(e.args, e.src); return;
     case ZM_EV_PICKUP:  zm_pickups_take(e.args, e.src); return;
     case ZM_EV_BOX:     zm_box_take(e.args, e.src); return;
@@ -1678,15 +1673,6 @@ void zm_net_reroll(int vetoBit)
     net_broadcast_lobby();
 }
 
-bool zm_net_timeout_enabled(void) { return (s_lobbyOptions & ZM_LOBBY_OPT_NO_TIMEOUT) == 0; }
-void zm_net_set_timeout_enabled(bool on)
-{
-    if (s_role != ZM_NET_ZOMBIE) return;
-    if (on) s_lobbyOptions &= (unsigned char)~ZM_LOBBY_OPT_NO_TIMEOUT;
-    else s_lobbyOptions |= ZM_LOBBY_OPT_NO_TIMEOUT;
-    dbg_printf("[net] survivors' timeout %s\n", on ? "on" : "off");
-    net_broadcast_lobby();
-}
 
 int zm_net_seat_limit(void) { return zm_net_ai_level() > 0 ? 3 : ZM_NET_MAX_PLAYERS; }
 int zm_net_ai_level(void) { return (s_lobbyOptions & ZM_LOBBY_OPT_AI_MASK) >> ZM_LOBBY_OPT_AI_SHIFT; }

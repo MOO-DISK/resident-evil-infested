@@ -211,7 +211,6 @@
     <ClCompile Include="src\game\mods\ZombiePiano.cpp" />
     <ClCompile Include="src\game\mods\ZombieBumpers.cpp" />
     <ClCompile Include="src\game\mods\ZombieVoice.cpp" />
-    <ClCompile Include="src\game\mods\ZombieTimeout.cpp" />
     <ClCompile Include="src\game\mods\ZombieKeypad.cpp" />
     <ClCompile Include="src\game\mods\ZombieGreenhouse.cpp" />
     <ClCompile Include="src\game\mods\ZombieRoomSync.cpp" />

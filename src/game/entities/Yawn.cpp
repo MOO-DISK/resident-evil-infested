@@ -1677,7 +1677,7 @@ void yawn_action_reposition(void)
 #define YT_WHIP_PERIOD   20
 #define YT_WHIP_REACH    2200   // the body's radius (Sca 800) and a survivor's
 #define YT_WHIP_DAMAGE   20
-#define YS_REACH         1875   // damage radius increased 25%
+#define YS_REACH         2344   // 25% larger than the previous 1875-unit radius
 #define YS_CLOUD_RADIUS  1500   // keep the current graphic size
 #define YS_DAMAGE        30
 #define YS_RECOVER       24
@@ -1801,25 +1801,6 @@ static void yawn_slam_angles(const MATRIX& matrix, SVECTOR* out)
     }
 }
 
-// Limit one coherent hinge rotation, rather than moving individual links to
-// the floor independently (which would detach the mesh at its seams).
-static bool yawn_slam_angle_clear(double angle, double ux, double uz)
-{
-    const int* pivot = s_slamBody[7].world.t;
-    for (int k = 0; k <= 6; k++) {
-        double along = ux * (s_slamBody[k].world.t[0] - pivot[0]) +
-                       uz * (s_slamBody[k].world.t[2] - pivot[2]);
-        double baseY = s_slamBody[k].world.t[1] - pivot[1];
-        double y = std::sin(angle) * along + std::cos(angle) * baseY;
-        // Respect a baseline already slightly above/below the hinge, without
-        // allowing the custom motion to push it farther below the floor.
-        double floor = baseY > 0 ? baseY : 0;
-        double ceiling = baseY < -YS_MAX_RISE ? baseY : -YS_MAX_RISE;
-        if (y > floor + 1 || y < ceiling - 1) return false;
-    }
-    return true;
-}
-
 static void yawn_slam_pose(double angle)
 {
     JointStruct* j = ENTITY->jointsStructs;
@@ -1840,30 +1821,46 @@ static void yawn_slam_pose(double angle)
         if (length < 0.001) { ux = 1; uz = 0; }
         else { ux /= length; uz /= length; }
     } else { ux /= reach; uz /= reach; }
-    if (!yawn_slam_angle_clear(angle, ux, uz)) {
-        double lo = 0, hi = 1;
-        for (int i = 0; i < 16; i++) {
-            double mid = (lo + hi) * 0.5;
-            if (yawn_slam_angle_clear(angle * mid, ux, uz)) lo = mid;
-            else hi = mid;
-        }
-        angle *= lo;
-    }
+    // Solve from the grounded hinge toward the head. A curled neck can
+    // reach the floor before the mouth does; limiting one rigid rotation
+    // there stalls the entire dive. Bend each link instead, retaining its
+    // length and carrying the next attachment with it.
     double c = std::cos(angle), sn = std::sin(angle);
-    double q[3][3] = {
-        {1+(c-1)*ux*ux, -sn*ux, (c-1)*ux*uz},
-        {sn*ux, c, sn*uz},
-        {(c-1)*uz*ux, -sn*uz, 1+(c-1)*uz*uz}
-    };
-    // Rotate the entire connected front around the grounded neck hinge.
-    // A rigid transform preserves every link length and attachment.
-    for (int k = 0; k <= 6; k++) {
-        j[k] = s_slamBody[k];
+    for (int k = 6; k >= 0; k--) {
+        if (k == 1 || k == 2) continue; // head helpers, not neck links
+        int parent = k == 0 ? 3 : k + 1;
+        double bx = s_slamBody[k].world.t[0] - s_slamBody[parent].world.t[0];
+        double by = s_slamBody[k].world.t[1] - s_slamBody[parent].world.t[1];
+        double bz = s_slamBody[k].world.t[2] - s_slamBody[parent].world.t[2];
+        double along = ux * bx + uz * bz;
+        double radius = std::sqrt(along * along + by * by);
+        double targetY = pivot[1] + sn *
+            (ux * (s_slamBody[k].world.t[0] - pivot[0]) +
+             uz * (s_slamBody[k].world.t[2] - pivot[2])) +
+            c * (s_slamBody[k].world.t[1] - pivot[1]);
+        double floor = s_slamBody[k].world.t[1] > pivot[1] ?
+                       s_slamBody[k].world.t[1] : pivot[1];
+        double ceiling = s_slamBody[k].world.t[1] < pivot[1] - YS_MAX_RISE ?
+                         s_slamBody[k].world.t[1] : pivot[1] - YS_MAX_RISE;
+        if (targetY > floor) targetY = floor;
+        if (targetY < ceiling) targetY = ceiling;
+        double height = targetY - j[parent].world.t[1];
+        if (height > radius) height = radius;
+        if (height < -radius) height = -radius;
+        double forward = std::sqrt(radius * radius - height * height);
+        if (c * along - sn * by < 0) forward = -forward;
+        double bend = std::atan2(height, forward) - std::atan2(by, along);
+        double bc = std::cos(bend), bs = std::sin(bend);
+        double q[3][3] = {
+            {1+(bc-1)*ux*ux, -bs*ux, (bc-1)*ux*uz},
+            {bs*ux, bc, bs*uz},
+            {(bc-1)*uz*ux, -bs*uz, 1+(bc-1)*uz*uz}
+        };
+        double offset[3] = {bx, by, bz};
         for (int row = 0; row < 3; row++) {
-            double position = pivot[row];
-            for (int col = 0; col < 3; col++)
-                position += q[row][col] * (s_slamBody[k].world.t[col] - pivot[col]);
-            j[k].world.t[row] = (int)position;
+            double position = j[parent].world.t[row];
+            for (int col = 0; col < 3; col++) position += q[row][col] * offset[col];
+            j[k].world.t[row] = (int)std::round(position);
             for (int col = 0; col < 3; col++) {
                 double value = 0;
                 for (int n = 0; n < 3; n++) value += q[row][n] * s_slamBody[k].world.m[n][col];
@@ -1871,6 +1868,21 @@ static void yawn_slam_pose(double angle)
             }
         }
         if (k >= 3) yawn_slam_angles(j[k].world, &j[k].rotation);
+        if (k == 0) {
+            for (int helper = 1; helper <= 2; helper++) {
+                for (int row = 0; row < 3; row++) {
+                    double position = j[0].world.t[row];
+                    for (int col = 0; col < 3; col++)
+                        position += q[row][col] * (s_slamBody[helper].world.t[col] - s_slamBody[0].world.t[col]);
+                    j[helper].world.t[row] = (int)std::round(position);
+                    for (int col = 0; col < 3; col++) {
+                        double value = 0;
+                        for (int n = 0; n < 3; n++) value += q[row][n] * s_slamBody[helper].world.m[n][col];
+                        j[helper].world.m[row][col] = (short)value;
+                    }
+                }
+            }
+        }
     }
     // Body joints are world-space during this pose. Never let the generic
     // hierarchy pass recompose them from the old animation's local matrices.
@@ -1960,11 +1972,13 @@ void yawn_action_slam(void)
         if (tick >= YS_DROP_FRAMES) {
             int pts[1][3];
             yawn_slam_impact(pts[0]);
-            // One circle around the impact, rather than overlapping circles
-            // along the neck. PHURT supplies the survivor's hit-stun reaction.
-            zombie_mode_yawn_area_hit(pts, 1, YS_REACH, YS_DAMAGE);
-            yawn_slam_cloud(pts[0]);
-            Snd_em(3);
+            // A timer alone is not contact: do not create a ground blast
+            // while the mouth is still raised in an unusual captured pose.
+            if (pts[0][1] >= s_slamBody[7].world.t[1] - 200) {
+                zombie_mode_yawn_area_hit(pts, 1, YS_REACH, YS_DAMAGE);
+                yawn_slam_cloud(pts[0]);
+                Snd_em(3);
+            }
             eub(ENTITY, 0x87) = 4;
             ew(ENTITY, 0xc4) = YS_RECOVER;
         }
@@ -2672,6 +2686,14 @@ void yawn_state_wait(void)
 }
 
 } // namespace
+
+// ============================================================================
+// Compose a guide preview without creating room collision slots or running AI.
+// ============================================================================
+void yawn_preview_pose(void)
+{
+    yawn_pose_init();
+}
 
 // ============================================================================
 // yawn_update @ 0x004051e0 - table entries 13 (Yawn 1) and 18 (Yawn 2)

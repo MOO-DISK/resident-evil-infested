@@ -455,6 +455,11 @@ void FrameRateGovernor(void)
             // lying on the floor.
             CollisionDebug_Draw();
 
+            // Immediate pickup geometry must follow MarniClear and the room
+            // background; drawing it while the game queues its HUD erases it.
+            // Entities and room masks render afterward with their normal depth.
+            zombie_mode_draw_time_pickups();
+
             // Render queued 3D TMD objects (entities, options-menu character)
             FlushTmdObjects();
 

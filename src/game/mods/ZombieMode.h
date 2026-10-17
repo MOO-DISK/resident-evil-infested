@@ -250,6 +250,8 @@ int  zombie_mode_yawn_special(void);
 // boss room's door, the whole team gathered and asked first - ZombieYawn.cpp).
 bool zombie_mode_boss_door_gate(const unsigned char* record);
 bool zombie_mode_boss_prompt_answer(bool yes);
+// Freeze status drain during the post-boss regrouping period; keep the poison.
+bool zombie_mode_poison_paused(void);
 void zombie_mode_yawn_area_hit(const int (*points)[3], int count, int radius, int damage);
 // The player model / weapon-animation block to load for character `base`
 // (g_playerEntity.id & 3): a multiplayer survivor's pick (0 Chris, 1 Jill,
@@ -342,6 +344,8 @@ bool zombie_mode_draw_player(void);
 
 // game_loop, after the scene and room sprites: the mod's 2D overlay.
 void zombie_mode_draw_overlay(void);
+// Immediate world geometry: call after the room background, before entities.
+void zombie_mode_draw_time_pickups(void);
 
 // check_camera_switch: the position camera zones are tested against (the
 // zombie's), or NULL for the player's.

@@ -282,7 +282,7 @@ static int guide_general_count(void)
 }
 static int guide_page_count(void)
 {
-    return guide_general_count() + (s_guideSection == 1 ? 7 : s_guideSection == 2 ? ZM_CHAR_COUNT : 0);
+    return guide_general_count() + (s_guideSection == 1 ? 8 : s_guideSection == 2 ? ZM_CHAR_COUNT : 0);
 }
 static void title_guide_update(void)
 {

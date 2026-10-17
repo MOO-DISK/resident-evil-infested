@@ -125,7 +125,6 @@ set(RE1_SOURCES
     src/game/mods/ZombiePiano.cpp
     src/game/mods/ZombieBumpers.cpp
     src/game/mods/ZombieVoice.cpp
-    src/game/mods/ZombieTimeout.cpp
     src/game/mods/ZombieKeypad.cpp
     src/game/mods/ZombieGreenhouse.cpp
     src/game/mods/ZombieRoomSync.cpp

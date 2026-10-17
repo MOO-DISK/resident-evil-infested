@@ -681,6 +681,180 @@ static void map_text(int x, int y, unsigned char color, const char* text)
     PrintText8x14Scaled((short)x, (short)y, color, 0, 0.75f);
 }
 
+// Shared by the connection markers and their legend.
+static const struct { unsigned char key, r, g, b; } kDoorColors[] = {
+    { ITEM_SWORD_KEY,  0x40, 0xC0, 0xFF },
+    { ITEM_ARMOR_KEY,  0xFF, 0xB0, 0x30 },
+    { ITEM_SHIELD_KEY, 0xE0, 0x60, 0xE0 },
+    { ITEM_HELMET_KEY, 0x60, 0xE0, 0x70 },
+};
+
+// Tiny code-drawn pictograms: nine pixels square, with a dark outline so
+// they remain readable over room stripes and the white selection.
+static const struct MapItemIcon {
+    unsigned char item;
+    unsigned short rows[9];
+} kMapItemIcons[] = {
+    { ITEM_SWORD_KEY,   { 0x010, 0x038, 0x038, 0x038, 0x038, 0x0FE, 0x010, 0x010, 0x038 } },
+    { ITEM_SHIELD_KEY,  { 0x0FE, 0x082, 0x092, 0x0BA, 0x092, 0x082, 0x044, 0x028, 0x010 } },
+    { ITEM_HELMET_KEY,  { 0x038, 0x07C, 0x0FE, 0x0FE, 0x082, 0x0FE, 0x092, 0x092, 0x06C } },
+    { ITEM_ARMOR_KEY,   { 0x0C6, 0x1EF, 0x0FE, 0x07C, 0x07C, 0x07C, 0x07C, 0x06C, 0x0C6 } },
+    { ITEM_WIND_CREST,  { 0x000, 0x00C, 0x002, 0x0FE, 0x000, 0x1FC, 0x080, 0x060, 0x000 } },
+    { ITEM_MOON_CREST,  { 0x038, 0x064, 0x0C0, 0x0C0, 0x0C0, 0x0C0, 0x0C2, 0x066, 0x03C } },
+    { ITEM_STAR_CREST,  { 0x010, 0x010, 0x038, 0x1FF, 0x0FE, 0x07C, 0x06C, 0x0C6, 0x082 } },
+    { ITEM_SUN_CREST,   { 0x092, 0x054, 0x038, 0x07C, 0x1FF, 0x07C, 0x038, 0x054, 0x092 } },
+};
+
+static void map_draw_item_icon(int x, int y, const MapItemIcon& icon)
+{
+    int r = 0xFF, g = 0xE0, b = 0x90;
+    for (int k = 0; k < 4; k++) {
+        if (kDoorColors[k].key != icon.item) continue;
+        r = kDoorColors[k].r; g = kDoorColors[k].g; b = kDoorColors[k].b;
+    }
+    for (int row = 0; row < 9; row++) {
+        for (int col = 0; col < 9; col++) {
+            if (!(icon.rows[row] & (1 << (8 - col)))) continue;
+            map_fill(x + col - 1, y + row - 1, 3, 3, 8, 8, 16, 29);
+            map_fill(x + col, y + row, 1, 1, r, g, b, 28);
+        }
+    }
+}
+
+static void map_draw_items(const MapLayout& L)
+{
+    // Follow the same disclosure rules as the room highlights. Richard's
+    // monster-only radio and survivors' door-only maps reveal no items.
+    if (s_route ? s_routeLevel < ZM_ROUTE_KEYS : s_readOnly) return;
+    for (int home = 0; home < MAP_SHEETS; home++) {
+        for (int room = 0; room < MAP_ROOMS; room++) {
+            int cx, cy;
+            if (!map_room_centre(L, home, room, &cx, &cy)) continue;
+            unsigned char ids[32], qtys[32];
+            bool isNew[32];
+            int n = zm_random_room_items(map_stage_of_sheet(home), (unsigned char)room,
+                                         ids, qtys, isNew, 32, !s_route);
+            const MapItemIcon* icons[8];
+            int count = 0;
+            for (unsigned int k = 0; k < sizeof(kMapItemIcons) / sizeof(kMapItemIcons[0]); k++) {
+                for (int i = 0; i < n; i++) {
+                    if (ids[i] != kMapItemIcons[k].item) continue;
+                    icons[count++] = &kMapItemIcons[k];
+                    break;
+                }
+            }
+            // Centre the group if several progression items share a room.
+            for (int i = 0; i < count; i++)
+                map_draw_item_icon(cx / 2 - (count * 11 - 2) / 2 + i * 11,
+                                   cy / 2 - 4, *icons[i]);
+        }
+    }
+}
+
+// Locate a connection in the gap between the closest drawn sections of its
+// rooms. Use sections rather than room centres (the bar and gallery wrap
+// around other rooms). Coordinates here are twice the map grid coordinates.
+static bool map_door_position(int home, int room, int to, int* sheet, int* x, int* y,
+                              bool* vertical)
+{
+    // The closest room edges are ambiguous where a corridor wraps around a
+    // room. These two connections use the doorway locations on map01.tim,
+    // reviewed against the study/back-passage and boiler/trap-passage doors.
+    // Positions are in doubled 64x64 grid coordinates, independent of layout.
+    static const struct { int room, to, x, y; bool vertical; } doorways[] = {
+        { ROOM_BACK_PASSAGE, ROOM_MANSION_1F_STUDY, 86, 27, true },
+        { ROOM_TRAP_PASSAGE, ROOM_BOILER, 125, 35, true },
+    };
+    if (home == MAP_SHEET_1F) {
+        for (unsigned int i = 0; i < sizeof(doorways) / sizeof(doorways[0]); i++) {
+            if ((room == doorways[i].room && to == doorways[i].to) ||
+                (to == doorways[i].room && room == doorways[i].to)) {
+                *sheet = MAP_SHEET_1F;
+                *x = doorways[i].x; *y = doorways[i].y;
+                *vertical = doorways[i].vertical;
+                return true;
+            }
+        }
+    }
+    int best = 0x7FFFFFFF;
+    int bestOverlap = -1;
+    for (int i = 0; i < s_rectCount; i++) {
+        const MapRect& a = s_rects[i];
+        if (a.homeSheet != home || a.room != room) continue;
+        for (int j = 0; j < s_rectCount; j++) {
+            const MapRect& b = s_rects[j];
+            if (b.homeSheet != home || b.room != to || a.sheet != b.sheet) continue;
+            int ax, bx, ay, by;
+            if (a.x + a.w <= b.x) { ax = a.x + a.w; bx = b.x; }
+            else if (b.x + b.w <= a.x) { ax = a.x; bx = b.x + b.w; }
+            else {
+                int lo = a.x > b.x ? a.x : b.x;
+                int hi = a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w;
+                ax = bx = (lo + hi) / 2;
+            }
+            if (a.y + a.h <= b.y) { ay = a.y + a.h; by = b.y; }
+            else if (b.y + b.h <= a.y) { ay = a.y; by = b.y + b.h; }
+            else {
+                int lo = a.y > b.y ? a.y : b.y;
+                int hi = a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h;
+                ay = by = (lo + hi) / 2;
+            }
+            int distance = (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
+            int overlapX = (a.x + a.w < b.x + b.w ? a.x + a.w : b.x + b.w) -
+                           (a.x > b.x ? a.x : b.x);
+            int overlapY = (a.y + a.h < b.y + b.h ? a.y + a.h : b.y + b.h) -
+                           (a.y > b.y ? a.y : b.y);
+            int overlap = overlapX > overlapY ? overlapX : overlapY;
+            // Prefer facing edges to a corner when several sections are
+            // equally close. The long axis runs along the separating wall.
+            if (distance > best || (distance == best && overlap <= bestOverlap)) continue;
+            bestOverlap = overlap;
+            if (overlapY > 0 && overlapX <= 0) *vertical = true;
+            else if (overlapX > 0 && overlapY <= 0) *vertical = false;
+            else {
+                int dx = (2 * a.x + a.w) - (2 * b.x + b.w);
+                int dy = (2 * a.y + a.h) - (2 * b.y + b.h);
+                *vertical = dx * dx >= dy * dy;
+            }
+            best = distance; *sheet = a.sheet; *x = ax + bx; *y = ay + by;
+        }
+    }
+    return best != 0x7FFFFFFF;
+}
+
+static void map_draw_doors(const MapLayout& L)
+{
+    for (int home = 0; home < MAP_SHEETS; home++) {
+        if (!map_sheet_shown(home)) continue;
+        for (int room = 0; room < MAP_ROOMS; room++) {
+            unsigned char to[MAP_ROOMS], keys[MAP_ROOMS];
+            int n = zm_random_room_locks(map_stage_of_sheet(home), (unsigned char)room,
+                                         to, keys, MAP_ROOMS, true);
+            for (int d = 0; d < n; d++) {
+                // Both sides describe the same connecting door.
+                if (room >= to[d]) continue;
+                int sheet, gx, gy;
+                bool vertical;
+                if (!map_door_position(home, room, to[d], &sheet, &gx, &gy, &vertical)) continue;
+                for (int k = 0; k < 4; k++) {
+                    if (keys[d] != kDoorColors[k].key) continue;
+                    int x = L.ox[sheet] + gx * L.cell / 2;
+                    int y = L.oy[sheet] + gy * L.cell / 2;
+                    int w = vertical ? 2 : 5, h = vertical ? 5 : 2;
+                    map_fill(x - w / 2, y - h / 2, w, h, kDoorColors[k].r,
+                             kDoorColors[k].g, kDoorColors[k].b, 29);
+                }
+            }
+        }
+    }
+    // Two rows leave the status/help lines below the map unobstructed.
+    for (int k = 0; k < 4; k++) {
+        int x = L.listX + (k % 2) * 74, y = 174 + (k / 2) * 11;
+        map_fill(x, y + 2, 5, 5, kDoorColors[k].r, kDoorColors[k].g, kDoorColors[k].b, 29);
+        map_text(x + 9, y, 0x7F, map_key_short(kDoorColors[k].key));
+    }
+}
+
 static const char* map_room_name(unsigned char stage, unsigned char room, char* buf, int len)
 {
     const char* name = DebugRoom_Name(stage, room);
@@ -764,12 +938,10 @@ void zm_map_draw(void)
         if (visited) { r = 0x60; g = 0x60; b = 0x78; }
         MapRoomColors colors;
         if (s_route) {
-            // The route map shows all applicable conditions: key-locked doors
-            // blue; monsters orange (Richard's radio); other new pickups teal
+            // Key locks have their own connection markers. Room conditions:
+            // monsters orange (Richard's radio); other new pickups teal
             // (the director's); keys and crests purple; this survivor's room
             // green and the others' red (in the game); the selection white.
-            unsigned char to[4], key[4];
-            if (zm_random_room_locks(stage, m.room, to, key, 4) > 0) { colors.add(0x30, 0x50, 0xC0); }
             if (s_routeMonsters && m.room < MAP_ROOMS && s_zombies[m.homeSheet][m.room] > 0) {
                 colors.add(0xA0, 0x58, 0x18);
             }
@@ -823,6 +995,9 @@ void zm_map_draw(void)
                       m.w * L.cell, m.h * L.cell, colors);
     }
 
+    if (s_route) map_draw_doors(L);
+    map_draw_items(L);
+
     char line[96], nameBuf[24];
     for (int s = 0; s < MAP_SHEETS; s++) {
         if (!map_sheet_shown(s)) continue;
@@ -844,14 +1019,14 @@ void zm_map_draw(void)
             unsigned char stage = map_stage_of_sheet(s_selSheet);
             unsigned char to[4], key[4];
             int n = zm_random_room_locks(stage, (unsigned char)s_sel, to, key, 4);
-            for (int i = 0; i < n && lines < 4; i++, lines++) {
+            for (int i = 0; i < n && lines < 4 && ty < 163; i++, lines++) {
                 snprintf(line, sizeof(line), "%s > %s", map_key_short(key[i]),
                          map_room_name(stage, to[i], nameBuf, sizeof(nameBuf)));
                 line[19] = '\0';
                 map_text(L.listX, ty, 0x7F, line);
                 ty += 11;
             }
-            if (s_routeMonsters && s_sel < MAP_ROOMS && s_zombies[s_selSheet][s_sel] > 0 && lines < 4) {
+            if (s_routeMonsters && s_sel < MAP_ROOMS && s_zombies[s_selSheet][s_sel] > 0 && lines < 4 && ty < 163) {
                 snprintf(line, sizeof(line), "MONSTERS: %d", (int)s_zombies[s_selSheet][s_sel]);
                 map_text(L.listX, ty, 0x8F, line);
                 ty += 11;
@@ -861,7 +1036,7 @@ void zm_map_draw(void)
                 unsigned char ids[8], qtys[8];
                 bool isNew[8];
                 int m = zm_random_room_items(stage, (unsigned char)s_sel, ids, qtys, isNew, 8);
-                for (int i = 0; i < m && lines < 4; i++) {
+                for (int i = 0; i < m && lines < 4 && ty < 163; i++) {
                     if (!map_is_key_item(ids[i]) && s_routeLevel < ZM_ROUTE_ALL) continue;
                     snprintf(line, sizeof(line), "%s%s", isNew[i] ? "+" : " ", map_item_name(ids[i]));
                     map_text(L.listX, ty, 0x8F, line);
@@ -873,9 +1048,6 @@ void zm_map_draw(void)
             snprintf(line, sizeof(line), "ROOM: %s", map_room_name(stage, (unsigned char)s_sel, nameBuf, sizeof(nameBuf)));
             map_text(8, 213, 0x8F, line);
         }
-        // The survivors' timeout (ZombieTimeout.cpp), right of the room name.
-        const char* timeout = s_routePlayers ? zm_timeout_map_line() : NULL;
-        if (timeout != NULL) map_text(312 - (int)strlen(timeout) * 6, 213, 0x8F, timeout);
         map_text(8, 200, 0x7F, s_routeStatus);
         map_text(8, 226, 0x7F, s_routeHelp);
         // The survivor's files: the keypad's pass number, once its note is read.

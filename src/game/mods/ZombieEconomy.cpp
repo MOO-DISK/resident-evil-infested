@@ -67,8 +67,7 @@ static unsigned int s_earnedAtMs = 0;
 
 // Each monster pays back once: by uid (the roster's, from either path that
 // sees it die), and per enemy slot of the loaded room for one with no uid yet.
-static unsigned short s_refunded[256];
-static int            s_refundedCount = 0;
+static unsigned char s_refunded[65536 / 8]; // each roster uid pays once for the whole match
 static bool           s_deadSeen[30];
 
 // For the end of the match's stats (ZombieStats.cpp).
@@ -100,7 +99,7 @@ void zm_econ_new_game(bool on)
     s_lastHitMs = 0;
     s_earnedMilli = 0;
     s_earnedAtMs = s_startMs;
-    s_refundedCount = 0;
+    memset(s_refunded, 0, sizeof(s_refunded));
     memset(s_deadSeen, 0, sizeof(s_deadSeen));
     s_placed = 0;
     s_trapsSet = 0;
@@ -236,17 +235,28 @@ void zm_econ_refund(unsigned char id, unsigned short uid)
 {
     if (!s_on) return;
     if (uid >= 0x100 && uid < ZM_WORLD_UID_BODY) {
-        int n = s_refundedCount < 256 ? s_refundedCount : 256;
-        for (int i = 0; i < n; i++) {
-            if (s_refunded[i] == uid) return;
-        }
-        s_refunded[s_refundedCount % 256] = uid;
-        s_refundedCount++;
+        unsigned char mask = (unsigned char)(1u << (uid & 7));
+        if (s_refunded[uid >> 3] & mask) return;
+        s_refunded[uid >> 3] |= mask;
     }
+    unsigned int seconds = 0;
+    switch (id) {
+    case ENEMY_ZOMBIE: case ENEMY_ZOMBIE_VARIANT: case ENEMY_ZOMBIE_NAKED:
+    case ENEMY_CERBERUS: seconds = 5; break;
+    case ENEMY_HUNTER: case ENEMY_WEB_SPINNER: case ENEMY_CHIMERA: seconds = 10; break;
+    }
+    if (seconds) zm_clock_add_bonus(seconds * 1000);
     int back = zm_yawn_lockdown() ? 0 : zm_econ_cost(id) / ZM_ECON_REFUND_DIV;
     s_bonus += back;
     s_lost++;
     dbg_printf("[econ] id %02X (%04X) died: +%d\n", (unsigned)id, (unsigned)uid, back);
+}
+
+// Negative health starts a zombie's fall, but its controller may still revive
+// it. Only the settled corpse is a kill; bite/prone status bits are not kills.
+bool zm_econ_kill_confirmed(const Entity* e)
+{
+    return zm_is_zombie_id(e->id) ? zm_monster_death_settled(e) : zm_monster_dead(e);
 }
 
 // After each monster's update on the director's copy: one that has just died.
@@ -254,7 +264,7 @@ void zm_econ_refund(unsigned char id, unsigned short uid)
 void zm_econ_after_update(const Entity* e, int slot, unsigned short uid)
 {
     if (!s_on || slot < 0 || slot >= 30) return;
-    bool dead = e->health < 0 || (e->status_flags & ENTITY_STATUS_DEAD) != 0;
+    bool dead = zm_econ_kill_confirmed(e);
     if (!dead) {
         s_deadSeen[slot] = false;
         return;

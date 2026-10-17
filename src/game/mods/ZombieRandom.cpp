@@ -1,12 +1,15 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
 #include "../FileLoader.h"
+#include "../SpriteRenderer.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
 #include "../../DebugPrint.h"
 #include <cstdio>
 #include <cstring>
 #include <cmath>
+#include "../../marni/MarniSystem.h"
+#include "../../marni/MarniSound.h"
 
 // ============================================================================
 // ZombieRandom.cpp - port-added: the zombie mod's randomized scenario.
@@ -269,6 +272,11 @@ struct RndSpot {
     short         x, y, z, angle;
 };
 
+// Independent time collectibles: never enter the item pool or item-model table.
+static RndSpot s_timeSpots[RND_ROOMS * 2];
+static int s_timeSpotCount;
+static void rnd_build_time_spots(void);
+
 // Per room: does it exist (not a stub), its item model count (RDT +3; at
 // most ZM_RANDOM_MODELS - g_item_model_table) and the highest room action slot
 // its scripts use (new spots stay below ZM_DROP_SLOT_FIRST - g_RoomActionTable).
@@ -503,6 +511,9 @@ static void rnd_scan_script(const unsigned char* rdt, size_t size, unsigned int 
                     s->flag = flag;
                     s->origId = rdt[q + 10];
                     s->origQty = rdt[q + 11];
+                    s->x = *(const short*)(rdt + q + 0x0E);
+                    s->y = *(const short*)(rdt + q + 0x10);
+                    s->z = *(const short*)(rdt + q + 0x12);
                     s->pool = depth - chrisDepth == 0;
                     // the slot, for the 0x12/0x13 test below
                     s->id = (unsigned char)(rdt[q + 1] & 0x7F);
@@ -587,7 +598,7 @@ static void rnd_read_room(unsigned char stage, unsigned char room)
         // The small key opens nothing in the mode (check_desk lets every
         // survivor in), so its spots - the terrace passage's - take items too.
         bool wanted = rnd_is_key(s.origId) || rnd_is_crest(s.origId) ||
-                      ITEM_IS_MAP(s.origId) || s.origId == ITEM_DESK_KEY ||
+                      ITEM_IS_MAP(s.origId) || s.origId == ITEM_DESK_KEY || s.origId == ITEM_LIGHTER ||
                       (rnd_is_weapon_or_ammo(s.origId) && s.origId != ITEM_BROKEN_SHOTGUN);
         if (touched[s.id] || !wanted) s.pool = false;
         // These otherwise-unused scenario items are optional reward spots.
@@ -1242,7 +1253,7 @@ static int rnd_pick_back_spot(const bool* reach, const bool* taken)
 
 // The puzzles' and the shotgun trap's items, after the keys and crests: the
 // broken shotgun and the pick axe at a medium distance (RND_TOOL_NEAR..FAR
-// crossings), then the sheet music and the chemical, each in a key-item room
+// crossings), then the sheet music, chemical and lighter, each in a key-item room
 // of its own. None of them is needed to escape.
 #define RND_TOOL_NEAR 5
 #define RND_TOOL_FAR  9
@@ -1250,7 +1261,8 @@ static bool rnd_place_key_items(bool* taken)
 {
     bool reach[RND_ROOMS * 2];
     rnd_reach(0, true, reach);
-    const unsigned char items[4] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL };
+    const unsigned char items[] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL, ITEM_LIGHTER };
+    const int itemCount = sizeof(items) / sizeof(items[0]);
     // Exactly one of them in exactly one safe room (none needed to escape, so
     // the director's keeping out of it costs nothing): which at random, in a
     // safe room reached with everything; the others keep out of the safe rooms.
@@ -1260,7 +1272,7 @@ static bool rnd_place_key_items(bool* taken)
         notSafe[r] = !safeOnly[r];
     }
     rnd_reach(0xFF, true, all);
-    int safeTool = rnd_below(4);
+    int safeTool = rnd_below(itemCount);
     {
         // The safe room first, each alike however many spots it has.
         int rooms[RND_ROOMS * 2], nr = 0;
@@ -1281,7 +1293,7 @@ static bool rnd_place_key_items(bool* taken)
         s.qty = 1;
         taken[rnd_room_index(s.stage, s.room)] = true;
     }
-    for (int t = 0; t < 4; t++) {
+    for (int t = 0; t < itemCount; t++) {
         if (t == safeTool) continue;
         int i = t < 2 ? rnd_pick_key_spot(reach, taken, RND_TOOL_NEAR, RND_TOOL_FAR, false, notSafe)
                       : rnd_pick_key_spot(reach, taken, -1, -1, items[t] == ITEM_CHEMICAL, notSafe);
@@ -1513,7 +1525,8 @@ static bool rnd_party(int* survivors, bool* barry)
 static bool rnd_is_key_item(unsigned char id)
 {
     return rnd_is_key(id) || rnd_is_crest(id) || id == ITEM_BROKEN_SHOTGUN || id == ITEM_PICK_AXE ||
-           id == ITEM_MUSIC_NOTES || id == ITEM_CHEMICAL || id == ITEM_BATTERY || id == ITEM_ZM_PASS_NOTE;
+           id == ITEM_MUSIC_NOTES || id == ITEM_CHEMICAL || id == ITEM_LIGHTER ||
+           id == ITEM_BATTERY || id == ITEM_ZM_PASS_NOTE;
 }
 
 // ROOM70F0 (2F small dining room): the shells its frame script arms only
@@ -1631,7 +1644,8 @@ static void rnd_place_weapons(bool barry)
             s.id = ITEM_BLUE_HERB; s.qty = 1;           // the safe room's blue herb
         }
         else if (rnd_main_hall_beretta(s) || rnd_trimmed_spot(s)) { s.id = 0; s.qty = 0; }
-        else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL || s.origId == ITEM_INK_RIBBONS) {
+        else if (s.origId == ITEM_MUSIC_NOTES || s.origId == ITEM_CHEMICAL ||
+                 s.origId == ITEM_LIGHTER || s.origId == ITEM_INK_RIBBONS) {
             rnd_supply(&s.id, &s.qty);
         }
         else if (rnd_is_key(s.origId) || rnd_is_crest(s.origId) || rnd_is_tier3(s.origId)) rnd_supply(&s.id, &s.qty);
@@ -1791,6 +1805,7 @@ bool zm_random_build(unsigned int seed)
     s_active = false;
     s_doorCount = 0;
     s_spotCount = 0;
+    s_timeSpotCount = 0;
     s_lockCount = 0;
     s_unreviewedGates = 0;
     memset(s_roomInfo, 0, sizeof(s_roomInfo));
@@ -1823,6 +1838,7 @@ bool zm_random_build(unsigned int seed)
 #ifdef QUICK_DEBUG
     rnd_add_debug_pickups();
 #endif
+    rnd_build_time_spots();
     s_built = true;
     s_builtSeed = seed;
     s_t3Locked = false;
@@ -1910,13 +1926,14 @@ void zm_random_door_lock(unsigned char stage, unsigned char room, unsigned char 
 
 // For the route map: the key-locked doors of (stage, room), as "to room":"key".
 int zm_random_room_locks(unsigned char stage, unsigned char room, unsigned char* toRoom,
-                         unsigned char* key, int max)
+                         unsigned char* key, int max, bool lockedOnly)
 {
     if (!s_built) return 0;
     int n = 0;
     for (int i = 0; i < s_doorCount && n < max; i++) {
         const RndDoor& d = s_doors[i];
         if (d.fromStage != stage || d.fromRoom != room || !rnd_door_key_lock(d)) continue;
+        if (lockedOnly && s_active && Flg_ck((int)g_LocksFlags, d.lock & 0x3F)) continue;
         bool dup = false;
         for (int k = 0; k < n && !dup; k++) dup = toRoom[k] == d.toRoom;
         if (dup) continue;
@@ -2310,8 +2327,18 @@ static const int* rnd_look(unsigned char id)
     return L.model;
 }
 
+static unsigned int s_timeBurst[RND_MAX_SPOTS];
+static unsigned int s_timeVisualSeed;
+static int s_timeGlassBank;
+
 void zm_random_room_reset(void)
 {
+    memset(s_timeBurst, 0, sizeof(s_timeBurst));
+    if (s_timeGlassBank) {
+        setSndStop(s_timeGlassBank);
+        destroySndBank(s_timeGlassBank);
+        s_timeGlassBank = 0;
+    }
     if (s_active) rnd_weapons_refresh();
     s_lookCount = 0;
     s_lookUsed = 0;
@@ -2531,17 +2558,263 @@ bool zm_random_room_safe(unsigned char stage, unsigned char room)
 }
 
 int zm_random_room_items(unsigned char stage, unsigned char room, unsigned char* ids,
-                         unsigned char* qtys, bool* isNew, int max)
+                         unsigned char* qtys, bool* isNew, int max, bool remainingOnly)
 {
     if (!s_built) return 0;
     int n = 0;
     for (int i = 0; i < s_spotCount && n < max; i++) {
         const RndSpot& s = s_spots[i];
         if (s.stage != stage || s.room != room || !s.overridden || s.id == 0) continue;
+        if (remainingOnly && Flg_ck((int)g_roomItemsFlags, s.flag) == 0) continue;
         ids[n] = s.id;
         qtys[n] = s.qty;
         isNew[n] = s.isNew;
         n++;
     }
     return n;
+}
+
+
+// One separate sphere in each leaf room without a mansion key or crest.
+// Other puzzle tools and every ordinary pickup remain untouched.
+static bool rnd_time_room_eligible(unsigned char stage, unsigned char room)
+{
+    int r = rnd_room_index(stage, room);
+    if (r < 0 || !s_leaf[r]) return false;
+    for (int i = 0; i < s_spotCount; i++) {
+        const RndSpot& s = s_spots[i];
+        if (s.stage == stage && s.room == room && (rnd_is_key(s.id) || rnd_is_crest(s.id))) return false;
+    }
+    return true;
+}
+
+static void rnd_build_time_spots(void)
+{
+    s_timeSpotCount = 0;
+    int flag = 255;
+    for (int k = 0; k < g_zmSpawnSpotCount; k++) {
+        const ZmSpawnSpots& t = g_zmSpawnSpots[k];
+        if (!rnd_time_room_eligible(t.stage, t.room)) continue;
+        while (flag > 0 && (s_usedFlags[flag >> 3] & (1u << (flag & 7)))) flag--;
+        if (flag <= 0 || s_timeSpotCount >= RND_ROOMS * 2) {
+            dbg_printf("[time] no free pickup flag for %u:%02X\n", t.stage, t.room);
+            continue;
+        }
+        unsigned int h = s_seed ^ (t.stage * 73856093u) ^ (t.room * 19349663u);
+        h ^= h >> 16; h *= 0x7feb352du; h ^= h >> 15; h *= 0x846ca68bu; h ^= h >> 16;
+        RndSpot& s = s_timeSpots[s_timeSpotCount++];
+        memset(&s, 0, sizeof(s));
+        s.stage = t.stage; s.room = t.room;
+        s.flag = (unsigned char)flag;
+        s.qty = (h & 1u) ? 10 : 5;
+        s.isNew = true;
+        const short* at = rnd_new_pickup_position(t, (int)((h >> 1) % 3));
+        s.x = at[0]; s.y = at[1]; s.z = at[2];
+        s_usedFlags[flag >> 3] |= (unsigned char)(1u << (flag & 7));
+        dbg_printf("[time] sphere +%u in %u:%02X at (%d,%d,%d), flag %02X\n",
+                   s.qty, s.stage, s.room, s.x, s.y, s.z, s.flag);
+    }
+}
+
+static int rnd_time_seconds(const RndSpot& s)
+{
+    return s_active && s_built ? s.qty : 0;
+}
+
+static void rnd_time_shatter(int i)
+{
+    const RndSpot s = s_timeSpots[i];
+    if (s.stage != g_stageId || s.room != g_roomId) return;
+    s_timeBurst[i] = zm_game_time_ms() + 1;
+    if (!s_timeGlassBank) s_timeGlassBank = loadSndBankFromWav(GAME_DATA_ROOT "sound\\glass.wav");
+    if (s_timeGlassBank) {
+        pan_set(s_timeGlassBank, 0);
+        // A small glass cue, 18 dB below the player's effects level.
+        set_volume(s_timeGlassBank, g_SfxVolume - 1800);
+        SetSndSlot(s_timeGlassBank, 0);
+    }
+}
+
+void zm_time_pickups_take(const short* a, int src)
+{
+    unsigned int seed = (unsigned short)a[1] | ((unsigned int)(unsigned short)a[2] << 16);
+    int i = (unsigned short)a[0];
+    if (!zombie_mode_armed() || src != ZM_NET_DIRECTOR || seed != s_seed || i >= s_timeSpotCount ||
+        !rnd_time_seconds(s_timeSpots[i])) return;
+    // The flag merge can precede the reliable event. The event still owns the
+    // local break effect; reliable-event deduplication prevents double playback.
+    FUN_00473f10((int*)g_roomItemsFlags, s_timeSpots[i].flag);
+    rnd_time_shatter(i);
+}
+
+void zm_time_pickups_frame(void)
+{
+    if (!zombie_mode_armed() || !s_active || !s_built) return;
+    if (s_timeVisualSeed != s_seed) {
+        memset(s_timeBurst, 0, sizeof(s_timeBurst));
+        s_timeVisualSeed = s_seed;
+    }
+    if (!zm_match_authority() || zombie_mode_match_over() || zm_net_pause_active() || zm_bumpers_hold_input()) return;
+    for (int i = 0; i < s_timeSpotCount; i++) {
+        const RndSpot s = s_timeSpots[i];
+        int seconds = rnd_time_seconds(s);
+        if (!seconds || !Flg_ck((int)g_roomItemsFlags, s.flag)) continue;
+        for (int player = 0; player < ZM_NET_MAX_PLAYERS; player++) {
+            ZmNetPeerState solo = {};
+            const ZmNetPeerState* peer = zm_seat_state(player);
+            if (zm_game_role() == ZM_NET_OFF) {
+                if (player != 0 || s.stage != g_stageId || s.room != g_roomId) continue;
+                int xz[1][2], who[1];
+                if (!zm_room_survivors(xz, who, 1)) continue;
+                solo.valid = true; solo.stage = g_stageId; solo.room = g_roomId;
+                solo.x = xz[0][0]; solo.z = xz[0][1];
+                solo.y = g_playerEntity.scaMatrixData.localMatrix.t[1];
+                peer = &solo;
+            }
+            if (!peer || !peer->valid || peer->dead || peer->health < 0 || peer->spectating || peer->transitioning ||
+                peer->stage != s.stage || peer->room != s.room) continue;
+            int dx = peer->x - s.x, dz = peer->z - s.z, dy = peer->y - s.y;
+            if (dx < -850 || dx > 850 || dz < -850 || dz > 850 || dy < -1000 || dy > 1000 ||
+                dx * dx + dz * dz > 850 * 850) continue;
+            FUN_00473f10((int*)g_roomItemsFlags, s.flag);
+            zm_clock_add_bonus(seconds * 1000u);
+            rnd_time_shatter(i);
+            if (zm_game_role() != ZM_NET_OFF) zm_net_send_event(ZM_EV_TIME_PICKUP, (short)i, (short)s_seed, (short)(s_seed >> 16), 0);
+            dbg_printf("[time] player %d collected +%d in %u:%02X flag %02X\n", player, seconds, s.stage, s.room, s.flag);
+            break;
+        }
+    }
+}
+
+// Procedural world geometry: a translucent gold sphere, extruded pixel glyphs
+// and, on collection, its facets flying apart. No external model assets.
+namespace {
+struct TimePoint { float x, y, z; };
+static float timeVerts[1024 * 3 * 10];
+static int timeTris;
+static float timeScaleX, timeScaleY;
+static void time_flush(bool depthWrite)
+{
+    if (timeTris) Marni_DX()->DrawTriangles3D(timeVerts, timeTris, MARNI_NULL_HANDLE,
+        MARNI_SAMPLER_POINT, MARNI_BLEND_ALPHA, depthWrite);
+    timeTris = 0;
+}
+// Match ApplyMatrixLV / CompMatrix: world translations enter with Y negated,
+// and the rotated Y is negated again before the camera translation is added.
+// g_RoomCameraData is not a plain world-to-view matrix for raw world points.
+static TimePoint time_view_point(TimePoint p)
+{
+    const MATRIX& camera = g_RoomCameraData;
+    float world[3] = {p.x, -p.y, p.z};
+    float view[3];
+    for (int r = 0; r < 3; r++) {
+        float rotated = (camera.m[r][0]*world[0] + camera.m[r][1]*world[1] +
+                         camera.m[r][2]*world[2]) / 4096.0f;
+        view[r] = camera.t[r] + (r == 1 ? -rotated : rotated);
+    }
+    TimePoint result = {view[0], view[1], view[2]};
+    return result;
+}
+static void time_tri(TimePoint a, TimePoint b, TimePoint c, float light, float alpha, bool depthWrite,
+                     float alphaB = -1.0f, float alphaC = -1.0f)
+{
+    TimePoint p[3] = {a,b,c}; float v[30];
+    for (int k = 0; k < 3; k++) {
+        TimePoint view = time_view_point(p[k]);
+        if (view.z < 2.0f*g_sceneRenderParam) return;
+        float* o = v + k*10;
+        o[0] = (g_SubpixelOffsetX + view.x*g_sceneRenderParam/view.z)*timeScaleX;
+        o[1] = (g_SubpixelOffsetY + view.y*g_sceneRenderParam/view.z)*timeScaleY;
+        o[2] = (view.z-1.0f)/131071.0f; o[3] = view.z; o[4] = o[5] = 0;
+        o[6] = light; o[7] = light*0.72f; o[8] = light*0.12f;
+        o[9] = k == 1 && alphaB >= 0 ? alphaB : (k == 2 && alphaC >= 0 ? alphaC : alpha);
+    }
+    if (timeTris == 1024) time_flush(depthWrite);
+    memcpy(timeVerts + timeTris++*30, v, sizeof(v));
+}
+// A soft circular shadow on the spawn floor, independent of the sphere's
+// spin. Vertex alpha fades to zero at the edge; leave the depth buffer alone.
+static void time_shadow(const RndSpot& s, float opacity)
+{
+    const float radius = 800.0f;
+    TimePoint centre = {(float)s.x, s.y - 8.0f, (float)s.z};
+    for (int i = 0; i < 32; i++) {
+        float a = i * 6.2831853f / 32;
+        float b = (i + 1) * 6.2831853f / 32;
+        TimePoint edgeA = {s.x + std::cos(a)*radius, centre.y, s.z + std::sin(a)*radius};
+        TimePoint edgeB = {s.x + std::cos(b)*radius, centre.y, s.z + std::sin(b)*radius};
+        time_tri(centre, edgeA, edgeB, 0.0f, opacity, false, 0.0f, 0.0f);
+    }
+    time_flush(false);
+}
+
+static TimePoint time_point(const RndSpot& s, float x, float y, float z, float angle)
+{
+    // Centre the sphere and its number at chest height above the spawn floor.
+    // Keep the pickup position on the floor for survivor proximity checks.
+    const float chestHeight = 1600.0f;
+    TimePoint p = {s.x + x*std::cos(angle) + z*std::sin(angle), s.y - chestHeight + y,
+                   s.z - x*std::sin(angle) + z*std::cos(angle)};
+    return p;
+}
+static void time_cube(const RndSpot& s, float x, float y, float angle)
+{
+    TimePoint v[8];
+    for (int k=0;k<8;k++) v[k]=time_point(s,x+((k&1)?45:-45),y+((k&2)?45:-45),(k&4)?65.0f:-65.0f,angle);
+    const int faces[6][4]={{0,1,3,2},{4,6,7,5},{0,4,5,1},{2,3,7,6},{0,2,6,4},{1,5,7,3}};
+    for(int f=0;f<6;f++) {
+        const int* q=faces[f]; float light=0.65f+0.06f*f;
+        time_tri(v[q[0]],v[q[1]],v[q[2]],light,1,true);
+        time_tri(v[q[0]],v[q[2]],v[q[3]],light,1,true);
+    }
+}
+}
+
+void zombie_mode_draw_time_pickups(void)
+{
+    if (!zombie_mode_armed() || !s_active || !s_built || !Marni_DX() || zombie_mode_match_over() ||
+        (g_main_state_flags & (MSF_MENU_ACTIVE | MSF_ROOM_TRANSITION))) return;
+    MarniGetRenderScale(&timeScaleX,&timeScaleY);
+    unsigned int now=zm_game_time_ms();
+    for(int i=0;i<s_timeSpotCount;i++) {
+        const RndSpot s=s_timeSpots[i]; int seconds=rnd_time_seconds(s);
+        if(!seconds || s.stage!=g_stageId || s.room!=g_roomId) continue;
+        bool live=Flg_ck((int)g_roomItemsFlags,s.flag)!=0;
+        float burst=s_timeBurst[i] ? (now-(s_timeBurst[i]-1))/1000.0f : 2.0f;
+        if(!live && burst>0.9f) continue;
+        time_shadow(s, live ? 0.32f : 0.32f*(1.0f-burst/0.9f));
+        float angle=(now%8000)*6.2831853f/8000;
+        if(live) {
+            // Five columns per glyph, seven rows, solid extruded gold blocks.
+            const unsigned char plus[7]={0,4,4,31,4,4,0}, five[7]={31,16,16,30,1,1,30};
+            const unsigned char one[7]={4,12,4,4,4,4,14}, zero[7]={14,17,19,21,25,17,14};
+            int count=seconds==10?3:2;
+            for(int g=0;g<count;g++) for(int y=0;y<7;y++) for(int x=0;x<5;x++) {
+                const unsigned char* rows=g==0?plus:(seconds==5?five:(g==1?one:zero));
+                if(rows[y]&(1<<(4-x))) time_cube(s,(g*6+x-(count*6-2)*0.5f)*95,(float)((y-3)*95),angle);
+            }
+            time_flush(true);
+        }
+        for(int lat=0;lat<10;lat++) for(int lon=0;lon<20;lon++) {
+            TimePoint v[4];
+            for(int k=0;k<4;k++) {
+                float a=(lat+((k&2)?1:0))*3.14159265f/10;
+                float b=(lon+((k&1)?1:0))*6.2831853f/20;
+                float radius=900;
+                float y=std::cos(a)*radius,x=std::sin(a)*std::cos(b)*radius,z=std::sin(a)*std::sin(b)*radius;
+                if(!live) {
+                    float midA=(lat+0.5f)*3.14159265f/10,midB=(lon+0.5f)*6.2831853f/20;
+                    x+=std::sin(midA)*std::cos(midB)*burst*2300;
+                    z+=std::sin(midA)*std::sin(midB)*burst*2300;
+                    y+=std::cos(midA)*burst*1900+burst*burst*2200;
+                }
+                v[k]=time_point(s,x,y,z,0);
+            }
+            float light=0.7f+0.3f*std::sin(lon*0.6f+(float)lat);
+            float alpha=live?0.22f:0.7f*(1-burst/0.9f);
+            time_tri(v[0],v[1],v[3],light,alpha,false);
+            time_tri(v[0],v[3],v[2],light,alpha,false);
+        }
+        time_flush(false);
+    }
 }

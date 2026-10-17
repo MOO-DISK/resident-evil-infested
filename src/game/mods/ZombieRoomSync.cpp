@@ -55,6 +55,169 @@ extern void ScdEventEntry_Create(unsigned int slot, int scriptIndex); // 0x0041d
 
 enum { RS_OP_OBJECT = 1, RS_OP_FLAGS = 2, RS_OP_RESET = 3 };
 
+
+// Lighting is world state, including when nobody remains in the room. The
+// native candle (bank 0, 0x0A) and trophy (bank 1, 0x44) bits already travel
+// through STORY and the BioCard reconnect snapshot. The study's system bit
+// 0x0A is temporary, so bank 1 bit 0xFA stores its persistent "light on" state.
+#define RS_STUDY_LIT 0xFA
+extern int cmd_room_lights_set(void);
+extern int cmd_effect_spawn(void);
+extern int cmd_room_action_reset(void);
+extern int cmd_bullet_effect_spawn(void);
+extern int cmd_bullet_effect_clear(void);
+
+static unsigned char kLightCandle[] = {
+    0x46, 0x00, 0xBE, 0x14, 0x30, 0xF8, 0xBB, 0x22, 0xC8, 0xC8, 0xA0, 0x00, 0x7B, 0x15, 0x16, 0x22, 0x30, 0xF8, 0x9A, 0x22, 0xC8, 0xC8, 0xA0, 0x00, 0x3F, 0x15, 0x00, 0x23, 0x30, 0xF8, 0xCA, 0x0B, 0xA0, 0xA0, 0xF0, 0x00, 0xDF, 0x10, 0xCC, 0x04, 0xCC, 0x04, 0xEC, 0x03
+};
+static unsigned char kLightStudyOff[] = {
+    0x46, 0x00, 0x20, 0x12, 0x8E, 0xF9, 0x40, 0x24, 0x46, 0x46, 0x46, 0x00, 0xF0, 0x23, 0x74, 0x18, 0x30, 0xF8, 0x99, 0x24, 0x46, 0x46, 0x46, 0x00, 0xF0, 0x23, 0x30, 0x0C, 0x30, 0xF8, 0xF0, 0x23, 0x46, 0x46, 0x46, 0x00, 0xF0, 0x23, 0x20, 0x03, 0x20, 0x03, 0x20, 0x03
+};
+static unsigned char kLightStudyOn[] = {
+    0x46, 0x00, 0x60, 0x0E, 0x8E, 0xF9, 0xF8, 0x1B, 0x5A, 0x5A, 0x5A, 0x00, 0x70, 0x17, 0x28, 0x0F, 0x30, 0xF8, 0xF0, 0x1E, 0x82, 0x82, 0x82, 0x00, 0xEF, 0x19, 0x20, 0x0D, 0x30, 0xF8, 0xF0, 0x1E, 0x6F, 0x6F, 0x6F, 0x00, 0x9F, 0x14, 0x70, 0x04, 0x60, 0x04, 0x10, 0x04
+};
+static unsigned char kLightTrophyOff[] = {
+    0x46, 0x00, 0x12, 0x26, 0xF8, 0xF3, 0xF8, 0x19, 0x38, 0x38, 0x38, 0x00, 0xC8, 0x2D, 0xA9, 0x26, 0x16, 0xF4, 0x50, 0x1C, 0x38, 0x38, 0x38, 0x00, 0x70, 0x2B, 0x0B, 0x27, 0x48, 0xF4, 0x08, 0x19, 0xB4, 0xB4, 0xB4, 0x00, 0xA0, 0x23, 0xA0, 0x01, 0xA0, 0x01, 0xA0, 0x01
+};
+static unsigned char kLightTrophyOn[] = {
+    0x46, 0x00, 0x12, 0x26, 0xF8, 0xF3, 0xF8, 0x19, 0xC8, 0xC8, 0xC8, 0x00, 0x00, 0x19, 0xB1, 0x14, 0x16, 0xF4, 0x70, 0x1F, 0xC8, 0xC8, 0xC8, 0x00, 0xF0, 0x19, 0x73, 0x14, 0x48, 0xF4, 0x50, 0x1C, 0xC8, 0xC8, 0xC8, 0x00, 0xF0, 0x19, 0x30, 0x05, 0x40, 0x03, 0x70, 0x01
+};
+static int s_lightKind;
+static bool s_lightOn, s_studySys;
+
+static void rs_light_cmd(unsigned char* command, int (*fn)(void))
+{
+    unsigned char* saved = g_ScdOpcodes;
+    g_ScdOpcodes = command;
+    fn();
+    g_ScdOpcodes = saved;
+}
+
+static bool rs_light_on(void)
+{
+    if (s_lightKind == 1) return Flg_ck((int)g_ScenarioFlags, 0x0A) != 0;
+    if (s_lightKind == 2) return Flg_ck((int)g_ScenarioFlags2, RS_STUDY_LIT) != 0;
+    return Flg_ck((int)g_ScenarioFlags2, 0x44) == 0;
+}
+
+static void rs_light_apply(bool entering)
+{
+    unsigned char* light = NULL;
+    if (s_lightKind == 1 && s_lightOn) {
+        light = kLightCandle;
+        if (!entering && Flg_ck((int)g_SysFlags, 0) == 0) {
+            // ROOM70F0's native flames and pickup re-arm, without its camera cut.
+            unsigned char flames[][12] = {
+                {0x2A,0x0F,0,0,0xFE,0x1F,0xC2,0xF8,0xC8,0x1F,0,0},
+                {0x2A,0x0F,0,0,0x7C,0x20,0x7A,0xF8,0x46,0x20,0,0},
+                {0x2A,0x0F,0,0,0x0C,0x21,0xC2,0xF8,0xC4,0x20,0,0}
+            };
+            for (int i = 0; i < 3; i++) rs_light_cmd(flames[i], cmd_effect_spawn);
+            Flg_on((int)g_SysFlags, 0);
+            unsigned char examine[] = {0x12,1,2,0x81,0x81,0,0xFF,0,0,0};
+            unsigned char pickup[] = {0x12,4,4,0x81,0,0,0,0,0,0};
+            rs_light_cmd(examine, cmd_room_action_reset);
+            if (Flg_ck((int)g_roomItemsFlags, 0x0C) != 0)
+                rs_light_cmd(pickup, cmd_room_action_reset);
+        }
+    } else if (s_lightKind == 2) {
+        light = s_lightOn ? kLightStudyOn : kLightStudyOff;
+        if (s_lightOn) FUN_00473f10((int*)g_SysFlags, 0x0A);
+        else Flg_on((int)g_SysFlags, 0x0A);
+        s_studySys = !s_lightOn;
+    } else if (s_lightKind == 3) {
+        light = s_lightOn ? kLightTrophyOn : kLightTrophyOff;
+        if (!entering && Flg_ck((int)g_roomItemsFlags, 0x1E) != 0) {
+            unsigned char eye[] = {0x3D,0x0C,0x19,0,0x50,0x14,0x60,0xF0,0x44,0x2F,0,0};
+            unsigned char clear[] = {0x3E,0,0,0};
+            rs_light_cmd(clear, cmd_bullet_effect_clear);
+            if (!s_lightOn) rs_light_cmd(eye, cmd_bullet_effect_spawn);
+        }
+    }
+    if (light != NULL) rs_light_cmd(light, cmd_room_lights_set);
+    // The local switch event may still play its native flicker afterward.
+    // Arriving copies and remote changes need its settled lighting immediately.
+    g_SpecialRoomLightState = (short)0xFFFF;
+    g_SpecialRoomLightDelta = 0;
+    dbg_printf("[roomsync] light %d %s (%s)\n", s_lightKind,
+               s_lightOn ? "on" : "off", entering ? "entry" : "change");
+}
+
+// The background art has separate camera groups for each lighting state:
+// ROOM70F0 dark 0-2 / lit 3-5; ROOM6190 lit 0-1 / dark 2-3;
+// ROOM70F0's init explicitly selects camera 3 in the lit branch, alongside
+// spawning the three flames and arming the reward (bank 0 bit 0x0A set).
+// ROOM7150 dark 0-2 / lit 4-6 (3 and 7 are the eye close-ups).
+// A reveal can restore its old camera after the switch has changed, so check
+// whenever the camera is free, including after that reveal releases it.
+static void rs_light_camera(bool entering)
+{
+    if (!s_lightKind || (!entering && (g_main_state_flags & MSF_CAMERA_LOCK))) return;
+    int cam = g_roomCameraId, next = cam;
+    if (s_lightKind == 1) {
+        if (s_lightOn && cam <= 2) next += 3;
+        if (!s_lightOn && cam >= 3 && cam <= 5) next -= 3;
+    } else if (s_lightKind == 2) {
+        if (s_lightOn && cam >= 2 && cam <= 3) next -= 2;
+        if (!s_lightOn && cam <= 1) next += 2;
+    } else {
+        if (s_lightOn && cam <= 2) next += 4;
+        if (!s_lightOn && cam >= 4 && cam <= 6) next -= 4;
+    }
+    if (next == cam) return;
+    g_roomCameraId = (unsigned char)next;
+    const CAM_SWITCH_ZONE* zone = (const CAM_SWITCH_ZONE*)g_RdtPointer->cam_switch_zones;
+    for (int i = 0; i < 1024; i++, zone++) {
+        if ((unsigned short)zone->camFrom >= g_RdtPointer->cameras_count) break;
+        if (zone->camFrom == next) {
+            g_CurrentRdtDataTypePtr = (void*)zone;
+            break;
+        }
+    }
+    if (!entering) {
+        if (g_main_state_flags & MSF_CAMERA_DEFER) {
+            g_main_state_flags |= MSF_CAMERA_REDRAW;
+            StMask(0, 5);
+        } else {
+            StMask(0, 4);
+            display_room_camera_bg();
+        }
+    }
+}
+
+static void rs_light_room(void)
+{
+    s_lightKind = 0;
+    if (!zombie_mode_armed()) return;
+    if (g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_SMALL_DINING) s_lightKind = 1;
+    if (g_stageId == STAGE_MANSION_RETURN_1F && g_roomId == ROOM_MANSION_1F_STUDY) s_lightKind = 2;
+    if (g_stageId == STAGE_MANSION_RETURN_2F && g_roomId == ROOM_TROPHY_ROOM) s_lightKind = 3;
+    if (!s_lightKind) return;
+    s_lightOn = rs_light_on();
+    rs_light_apply(true);
+    rs_light_camera(true);
+}
+
+static void rs_light_frame(void)
+{
+    if (!s_lightKind || !zombie_mode_armed() || g_roomTransitionBusy ||
+        (g_main_state_flags & MSF_ROOM_TRANSITION) != 0) return;
+    if (s_lightKind == 2) {
+        bool sys = Flg_ck((int)g_SysFlags, 0x0A) != 0;
+        if (sys != s_studySys) {
+            s_studySys = sys;
+            if (sys) FUN_00473f10((int*)g_ScenarioFlags2, RS_STUDY_LIT);
+            else Flg_on((int)g_ScenarioFlags2, RS_STUDY_LIT);
+        }
+    }
+    bool on = rs_light_on();
+    if (on != s_lightOn) {
+        s_lightOn = on;
+        rs_light_apply(false);
+    }
+    rs_light_camera(false);
+}
+
 // The rooms whose system flags hold puzzle progress, and which bits.
 struct RsFlagRoom {
     unsigned char stage, room, first, last;
@@ -159,6 +322,8 @@ void zm_roomsync_reset(void)
 {
     memset(s_rooms, 0, sizeof(s_rooms));
     s_loaded = false;
+    s_lightKind = 0;
+    if (zombie_mode_armed()) FUN_00473f10((int*)g_ScenarioFlags2, RS_STUDY_LIT);
 }
 
 // The unsolved gallery's portraits (room action slots 2-7) each start their
@@ -194,6 +359,7 @@ static void rs_gallery_shuffle(void)
 // After the room's init (zombie_mode_room_spawn).
 void zm_roomsync_room(void)
 {
+    rs_light_room();
     s_loaded = false;
     s_flagRoom = NULL;
     s_localSolve = false;
@@ -266,6 +432,7 @@ static void rs_gallery_catch_up(void)
 
 void zm_roomsync_frame(void)
 {
+    rs_light_frame();
     if (!s_loaded || !rs_on() || g_stageId != s_stage || g_roomId != s_room) return;
     if (g_roomTransitionBusy || (g_main_state_flags & MSF_ROOM_TRANSITION) != 0) return;
     RsRoom* r = rs_room(g_stageId, g_roomId);

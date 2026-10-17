@@ -6,6 +6,18 @@
 #include "../../DebugPrint.h"
 #include <cstdlib>
 
+// The original's prone/standing transitions use absolute Y=1/0. Infested
+// zombies can climb the main hall's steps, so those stores must keep an
+// elevated floor. Preserve the original stores on the base floor and when
+// the mode is off; collision and animation still own all other Y changes.
+static void zombie_set_base_floor_height(int y)
+{
+    int floorY = ENTITY->scaMatrixData.localMatrix.t[1];
+    if (!zombie_mode_armed() || floorY == 0 || floorY == 1) {
+        ENTITY->scaMatrixData.localMatrix.t[1] = y;
+    }
+}
+
 // Forward declarations for cross-TU functions
 extern int is_entity_in_switch_zone(VECTOR* pos, void* zoneData);
 extern void ResetJointTransforms(void);
@@ -509,7 +521,7 @@ void zombie_init(void)
     // (MATRIX = 18 bytes of m[][] + 2 pad + t[3], so t[1] is at 0x20+0x18=0x38).
     // The old code wrote m[1][0..3] at 0x26, corrupting the rotation instead.
     if ((ENTITY->behavior_flags & ZOMBIE_FLAG_LAYING_DOWN) != 0) {
-        ENTITY->scaMatrixData.localMatrix.t[1] = 1;
+        zombie_set_base_floor_height(1);
     }
 
     // 0x00433818-0x0043387f: Dead zombie (behavior == 6: laying down, doing nothing)
@@ -756,7 +768,7 @@ static void explode_leg_and_drop(void)
         if (ENTITY->health < 0) {
             ENTITY->health = 1;
         }
-        ENTITY->scaMatrixData.localMatrix.t[1] = 1;   // dword at 0x38
+        zombie_set_base_floor_height(1);   // dword at 0x38
         // FALLS THROUGH into sub-state 1.
     }
     case 1:
@@ -1386,7 +1398,7 @@ void zombie_dead_animation(void)
             ENTITY->action_behavior = 0;
             ENTITY->action_state = 0;
             ENTITY->hit_state = 0;
-            ENTITY->scaMatrixData.localMatrix.t[1] = 1;   // dword at 0x38
+            zombie_set_base_floor_height(1);   // dword at 0x38
             ENTITY->behavior_step &= ~0x04;
             ENTITY->status_flags &= 0x1F;
             return;
@@ -2258,7 +2270,7 @@ void zombie_eating(void)
             ENTITY->action_behavior    = 3;
             ENTITY->action_state       = 0;
             // dword at 0x38 is localMatrix.t[1], not m[1][0].
-            ENTITY->scaMatrixData.localMatrix.t[1] = 0;
+            zombie_set_base_floor_height(0);
         }
         break;
     }
@@ -3085,7 +3097,7 @@ void zombie_falldown(void)
         ENTITY->move_speed_current = 20;
         Snd_em(5);
         // dword at 0x38 is localMatrix.t[1], not m[1][0] (0x26, rotation).
-        ENTITY->scaMatrixData.localMatrix.t[1] = 1;  // set laying-down height
+        zombie_set_base_floor_height(1);  // set laying-down height
         break;
 
     case 1:
@@ -3162,7 +3174,7 @@ void zombie_falldown(void)
             ENTITY->action_behavior = 3;
             ENTITY->action_state = 0;
             ENTITY->behavior_step &= ~0x04;
-            ENTITY->scaMatrixData.localMatrix.t[1] = 0;  // clear laying height
+            zombie_set_base_floor_height(0);  // clear laying height
         }
         Add_speedXZ(0x800);
         break;

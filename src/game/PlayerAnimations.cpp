@@ -2382,7 +2382,8 @@ static void player_state_01_control(void)
     // 0x004951e6: poison style status drain. The timer byte at
     // entity+0x174 is read BEFORE it is decremented, so the tick fires on the frame
     // the old value was already 0 (the decrement having wrapped it to 0xFF).
-    if ((g_playerEntity.healthStatusFlags & 0x62) != 0) {
+    // The post-boss regroup freezes the countdown as well as its damage.
+    if ((g_playerEntity.healthStatusFlags & 0x62) != 0 && !zombie_mode_poison_paused()) {
         unsigned char prev = g_playerEntity.pad_174;
         g_playerEntity.pad_174--;
         if (prev == 0) {
