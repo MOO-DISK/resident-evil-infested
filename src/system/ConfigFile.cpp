@@ -6,7 +6,8 @@
 #include "../DebugPrint.h"
 #include "../platform/platform.h"
 #include "AssetPath.h"
-#include "../game/mods/ZombieNet.h"   // [Net] keys   // SetAssetBase / SetSaveRoot / SetAssetVersion
+#include "../game/mods/ZombieNet.h"   // [Net] keys
+#include "../game/mods/ZombieRendezvous.h"   // [Net] Rendezvous / Public   // SetAssetBase / SetSaveRoot / SetAssetVersion
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -46,6 +47,7 @@ const OwnedKey kOwnedKeys[] = {
     { "Input",   "SideDef" },
     { "Net",     "Address" },     // port-added: the zombie mod's last host
     { "Net",     "Port" },
+    { "Net",     "Public" },      // the host lists its game on the match server
 };
 const int kOwnedKeyCount = (int)(sizeof(kOwnedKeys) / sizeof(kOwnedKeys[0]));
 
@@ -543,6 +545,13 @@ BOOL ConfigFile_Load(void)
         }
         int port = ReadInt(path, "Net", "Port", (int)g_zmNetPort);
         if (port > 0 && port <= 65535) g_zmNetPort = (unsigned short)port;
+        // The match server (ZombieRendezvous.cpp): "host" or "host:port", or
+        // "off". Not rewritten on exit; a missing key keeps the built-in one.
+        char rdv[96];
+        if (ReadValue(path, "Net", "Rendezvous", rdv, sizeof(rdv))) {
+            snprintf(g_zmRdvServer, sizeof(g_zmRdvServer), "%s", rdv);
+        }
+        g_zmRdvPublic = ReadInt(path, "Net", "Public", 1) != 0;
     }
     dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
                GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
@@ -618,6 +627,7 @@ void ConfigFile_Save(void)
     snprintf(values[8], sizeof(values[8]), "%s", sideHex);
     snprintf(values[9], sizeof(values[9]), "%s", g_zmNetAddress);
     snprintf(values[10], sizeof(values[10]), "%u", (unsigned)g_zmNetPort);
+    snprintf(values[11], sizeof(values[11]), "%d", g_zmRdvPublic ? 1 : 0);
 
     for (int i = 0; i < kOwnedKeyCount; ++i) {
         SetValue(kOwnedKeys[i].section, kOwnedKeys[i].key, values[i], lines, &count);

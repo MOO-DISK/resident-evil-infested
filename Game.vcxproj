@@ -192,6 +192,7 @@
     <ClCompile Include="src\game\mods\ZombieNav.cpp" />
     <ClCompile Include="src\game\mods\ZombieNet.cpp" />
     <ClCompile Include="src\game\mods\ZombieLobby.cpp" />
+    <ClCompile Include="src\game\mods\ZombieRendezvous.cpp" />
     <ClCompile Include="src\game\mods\ZombieWorld.cpp" />
     <ClCompile Include="src\game\mods\ZombieMap.cpp" />
     <ClCompile Include="src\game\mods\ZombiePerks.cpp" />
@@ -259,6 +260,7 @@
     <ClInclude Include="src\game\mods\ZombieMode.h" />
     <ClInclude Include="src\game\mods\ZombieModeInternal.h" />
     <ClInclude Include="src\game\mods\ZombieNet.h" />
+    <ClInclude Include="src\game\mods\ZombieRendezvous.h" />
     <ClInclude Include="src\system\PngImage.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

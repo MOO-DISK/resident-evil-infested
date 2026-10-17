@@ -451,3 +451,29 @@ int plat_net_recv(void* buffer, int capacity, PlatNetAddr* from)
     }
     return n;
 }
+
+BOOL plat_net_local(const PlatNetAddr* toward, PlatNetAddr* out)
+{
+    if (s_netSocket == INVALID_SOCKET) return FALSE;
+    sockaddr_in addr;
+    int len = sizeof(addr);
+    if (getsockname(s_netSocket, (sockaddr*)&addr, &len) != 0) return FALSE;
+    out->port = ntohs(addr.sin_port);
+    // A connected UDP socket sends nothing; it only picks the route.
+    SOCKET probe = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (probe == INVALID_SOCKET) return FALSE;
+    ZeroMemory(&addr, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(toward->ip);
+    addr.sin_port = htons(toward->port);
+    BOOL ok = FALSE;
+    if (connect(probe, (sockaddr*)&addr, sizeof(addr)) == 0) {
+        len = sizeof(addr);
+        if (getsockname(probe, (sockaddr*)&addr, &len) == 0) {
+            out->ip = ntohl(addr.sin_addr.s_addr);
+            ok = out->ip != 0;
+        }
+    }
+    closesocket(probe);
+    return ok;
+}

@@ -2,6 +2,7 @@
 #include "ZombieNet.h"
 #include "ZombieBumperBarrier.h"
 #include "ZombieReconnect.h"
+#include "ZombieRendezvous.h"
 #include "../../system/AssetPath.h"
 #include "../../platform/platform.h"
 #include "../../DebugPrint.h"
@@ -361,9 +362,13 @@ int zm_net_pause_seconds(void)
 bool zm_net_rejoining(void) { return s_rejoining; }
 bool zm_net_rejoin_downloaded(void) { return s_downloaded; }
 
+static unsigned int s_rdvCode;   // the rendezvous game code this survivor joined by (0: direct)
+
 // The last match this copy joined: the host, the seed and this survivor's
 // match id. One file - the id, not a seat number, finds the seat again.
-struct NetRejoinCredential { unsigned int magic, seed, token[2], ip; unsigned short port; unsigned char seat, character; };
+// code: the rendezvous game code joined through (0: a direct address) - a
+// rejoin through a NAT must be introduced again from its new socket.
+struct NetRejoinCredential { unsigned int magic, seed, token[2], ip; unsigned short port; unsigned char seat, character; unsigned int code; };
 static void net_credential_path(char* out, int len)
 {
     snprintf(out, len, "%sinfestation-rejoin.dat", GetSaveRoot());
@@ -376,6 +381,7 @@ static void net_save_credential(void)
     c.magic = 0x52454A43; c.seed = s_seed;
     c.token[0] = L.token[0]; c.token[1] = L.token[1];
     c.ip = L.addr.ip; c.port = L.addr.port; c.seat = (unsigned char)s_self; c.character = s_chars[s_self];
+    c.code = s_rdvCode;
     char path[512]; net_credential_path(path, sizeof(path));
     plat_mkdir(GetSaveRoot());
     if (!plat_file_write_atomic(path, &c, sizeof(c))) dbg_printf("[rejoin] could not save seat %d credential\n", s_self);
@@ -1224,6 +1230,9 @@ static void net_take_fragment(int link, unsigned int epoch, int origin, const un
 
 static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* from)
 {
+    // The rendezvous server's packets, and punches still arriving after the
+    // link is up (ZombieRendezvous.cpp).
+    if (zm_rdv_is_packet(buf, len)) { zm_rdv_take(buf, len, from); return; }
     // Older protocols share magic/version/type, but may have shorter headers.
     // Diagnose incompatibility before decoding their version-specific layout.
     if (len >= 6) {
@@ -1601,6 +1610,7 @@ static void net_kick(void)
 {
     const char* why = s_kickText;
     dbg_printf("[net] %s: back to the menu\n", why);
+    zm_rdv_host_end();
     plat_net_close();
     g_bRunInBackground = g_bRunInBackgroundConfig;
     net_reset();
@@ -1624,6 +1634,7 @@ void zm_net_poll(void)
     }
     if (s_kickText != NULL) { net_kick(); return; }
     net_drain_loopback();
+    if (s_role == ZM_NET_ZOMBIE) zm_rdv_frame();     // the game code's heartbeat, punches
     unsigned int now = plat_time_ms();
 
     // Time out silent links.
@@ -1717,6 +1728,7 @@ void zm_net_poll(void)
 // ---------------------------------------------------------------------------
 static void net_reset(void)
 {
+    s_rdvCode = 0;
     s_loopbackCount = 0;
     memset(s_fragIn, 0, sizeof(s_fragIn));
     s_checkpointSentHave = false;
@@ -1763,28 +1775,28 @@ void zm_net_host(void)
         return;
     }
     s_status = ZM_NET_HOSTING;
+    zm_rdv_host_begin();
     s_seed = plat_time_ms() * 2654435761u ^ (unsigned int)rand();
     dbg_printf("[net] hosting on port %u as the director (seed %08X)\n", (unsigned)g_zmNetPort, s_seed);
 }
 
-void zm_net_join(const char* address, unsigned short port, int character)
+// A survivor's session up to the host's address: the role, the pick, the
+// roster (the director places monsters while this survivor is still choosing
+// its character, ZombieWorld.cpp).
+static void net_join_setup(int character)
 {
-    zm_net_stop();
     net_reset();
     g_bRunInBackground = true;
     s_role = ZM_NET_SURVIVOR;
     // No wish (-1) until the survivor picks: the host's free character stands.
     s_myChar = (character >= 0 && character < ZM_CHAR_COUNT) ? character : ZM_SEAT_FREE;
-    // The roster starts here: the director places monsters while this
-    // survivor is still choosing its character (ZombieWorld.cpp).
     zm_world_reset(true);
+}
+
+static void net_join_link(const PlatNetAddr* host)
+{
     NetLink& L = s_links[0];
-    if (!plat_net_resolve(address, port, &L.addr) || !plat_net_open(0)) {
-        s_status = ZM_NET_FAILED;
-        s_role = ZM_NET_OFF;
-        dbg_printf("[net] could not reach %s:%u\n", address, (unsigned)port);
-        return;
-    }
+    L.addr = *host;
     L.used = true;
     L.nextEventId = 1;
     L.epoch = plat_time_ms() * 2654435761u ^ (unsigned int)rand();
@@ -1795,8 +1807,44 @@ void zm_net_join(const char* address, unsigned short port, int character)
     L.token[1] = (unsigned int)rand() * 3266489917u ^ (L.epoch >> 3) ^ 0x9E3779B9u;
     if (!L.token[0] && !L.token[1]) L.token[1] = 1;
     s_status = ZM_NET_JOINING;
+}
+
+void zm_net_join(const char* address, unsigned short port, int character)
+{
+    zm_net_stop();
+    net_join_setup(character);
+    PlatNetAddr host;
+    if (!plat_net_resolve(address, port, &host) || !plat_net_open(0)) {
+        s_status = ZM_NET_FAILED;
+        s_role = ZM_NET_OFF;
+        dbg_printf("[net] could not reach %s:%u\n", address, (unsigned)port);
+        return;
+    }
+    net_join_link(&host);
     dbg_printf("[net] joining %s:%u as %s\n", address, (unsigned)port, zm_char_name(s_myChar));
 }
+
+void zm_net_join_peer(const PlatNetAddr* host, int character, unsigned int code)
+{
+    // Not zm_net_stop: the punched socket must stay open.
+    net_join_setup(character);
+    s_rdvCode = code;
+    net_join_link(host);
+    dbg_printf("[net] joining game %06u at %u.%u.%u.%u:%u\n", code, host->ip >> 24, (host->ip >> 16) & 255,
+               (host->ip >> 8) & 255, host->ip & 255, (unsigned)host->port);
+}
+
+void zm_net_fail(const char* text, const char* hint)
+{
+    g_bRunInBackground = g_bRunInBackgroundConfig;
+    net_reset();
+    s_role = ZM_NET_OFF;
+    s_status = ZM_NET_FAILED;
+    s_failureText = text;
+    s_failureHint = hint;
+}
+
+int zm_net_protocol_version(void) { return ZM_NET_VERSION; }
 
 static void net_broadcast_lobby(void);
 
@@ -1812,15 +1860,34 @@ void zm_net_set_char(int character)
     }
 }
 
-bool zm_net_rejoin_saved(void)
+static bool net_read_credential(NetRejoinCredential* c)
 {
     char path[512]; net_credential_path(path, sizeof(path));
     size_t size = 0;
     void* file = plat_file_read_all(path, &size);
-    NetRejoinCredential c = {};
-    if (file && size == sizeof(c)) memcpy(&c, file, sizeof(c));
+    memset(c, 0, sizeof(*c));
+    if (file && size == sizeof(*c)) memcpy(c, file, sizeof(*c));
     free(file);
-    if (size != sizeof(c) || c.magic != 0x52454A43 || c.seat < 1 || c.seat > 3 || c.character >= ZM_CHAR_COUNT) {
+    return size == sizeof(*c) && c->magic == 0x52454A43 && c->seat >= 1 && c->seat <= 3 &&
+           c->character < ZM_CHAR_COUNT;
+}
+
+static void net_rejoin_apply(const NetRejoinCredential& c)
+{
+    s_rejoining = true; s_seed = c.seed;
+    s_links[0].token[0] = c.token[0]; s_links[0].token[1] = c.token[1];
+}
+
+unsigned int zm_net_rejoin_code(void)
+{
+    NetRejoinCredential c;
+    return net_read_credential(&c) ? c.code : 0;
+}
+
+bool zm_net_rejoin_saved(void)
+{
+    NetRejoinCredential c;
+    if (!net_read_credential(&c)) {
         s_status = ZM_NET_FAILED; s_failureText = "NO SAVED MATCH TO REJOIN";
         s_failureHint = ""; return false;
     }
@@ -1828,8 +1895,19 @@ bool zm_net_rejoin_saved(void)
     char address[32]; snprintf(address, sizeof(address), "%u.%u.%u.%u", a, b, (c.ip >> 8) & 255, d);
     zm_net_join(address, c.port, c.character);
     if (s_status != ZM_NET_JOINING) return false;
-    s_rejoining = true; s_seed = c.seed;
-    s_links[0].token[0] = c.token[0]; s_links[0].token[1] = c.token[1];
+    net_rejoin_apply(c);
+    return true;
+}
+
+bool zm_net_rejoin_peer(const PlatNetAddr* host, unsigned int code)
+{
+    NetRejoinCredential c;
+    if (!net_read_credential(&c) || c.code != code) {
+        zm_net_fail("NO SAVED MATCH TO REJOIN", "");
+        return false;
+    }
+    zm_net_join_peer(host, c.character, code);
+    net_rejoin_apply(c);
     return true;
 }
 
@@ -1934,6 +2012,7 @@ void zm_net_stop(void)
     if (s_status == ZM_NET_CONNECTED || s_status == ZM_NET_HOSTING) {
         net_send_all(PKT_BYE, (unsigned char)(s_self < 0 ? 0 : s_self), NULL, 0, -1);
     }
+    zm_rdv_host_end();
     plat_net_close();
     g_bRunInBackground = g_bRunInBackgroundConfig;
     s_status = ZM_NET_IDLE;

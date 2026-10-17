@@ -144,6 +144,11 @@ BOOL plat_net_resolve(const char* host, unsigned short port, PlatNetAddr* out);
 BOOL plat_net_send(const PlatNetAddr* to, const void* data, int length);
 // Receive one datagram if one is waiting: its length, 0 when none, -1 on error.
 int  plat_net_recv(void* buffer, int capacity, PlatNetAddr* from);
+// The open socket's own address on the LAN: the interface the system would
+// route `toward` through, and the socket's bound port. FALSE if no socket is
+// open or no route is known. (The rendezvous server hands it to peers on the
+// same LAN, whose router may not loop its public address back.)
+BOOL plat_net_local(const PlatNetAddr* toward, PlatNetAddr* out);
 
 // ---------------------------------------------------------------------------
 // Window / cursor lifecycle

@@ -98,6 +98,9 @@ static void zm_world_apply_remote(const short*,int) {}
 static unsigned char* g_ItemSlotsPointer;
 static int zm_net_char(int) { return -1; }   // seat 0 is the human director here
 static void net_log_drop(const PlatNetAddr*,const char*,int,int) {}
+static bool zm_rdv_is_packet(const unsigned char*,int) { return false; }
+static void zm_rdv_take(const unsigned char*,int,const PlatNetAddr*) {}
+static void zm_rdv_frame() {}
 static std::vector<unsigned char> enemiesGot;
 static void net_take_enemies(int,const unsigned char* b,int n) { enemiesGot.assign(b,b+n); }
 struct Datagram { PlatNetAddr addr; std::vector<unsigned char> bytes; };

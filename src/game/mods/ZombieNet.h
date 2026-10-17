@@ -1,5 +1,6 @@
 #pragma once
 #include "../../Globals.h"
+#include "../../platform/platform.h"   // PlatNetAddr
 
 // ============================================================================
 // ZombieNet.h - the zombie mod's multiplayer link (port-added).
@@ -72,6 +73,13 @@ int  zm_net_survivor_count(void);
 // Session control (the lobby).
 void zm_net_host(void);                                   // be the director
 void zm_net_join(const char* address, unsigned short port, int character);
+// Join on the socket the rendezvous punch opened (ZombieRendezvous.cpp),
+// remembering the game code for a rejoin; the socket stays open.
+void zm_net_join_peer(const PlatNetAddr* host, int character, unsigned int code);
+bool zm_net_rejoin_peer(const PlatNetAddr* host, unsigned int code);
+unsigned int zm_net_rejoin_code(void);                    // the saved match's game code, 0: none / direct
+void zm_net_fail(const char* text, const char* hint);     // FAILED, shown on the NEW GAME menu
+int  zm_net_protocol_version(void);                       // ZM_NET_VERSION
 void zm_net_set_char(int character);                      // a survivor's pick, in the lobby
 // Is `character` worn by a player other than this copy's?
 bool zm_net_char_taken(int character);

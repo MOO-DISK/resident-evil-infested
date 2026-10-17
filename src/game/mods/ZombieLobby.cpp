@@ -1,5 +1,6 @@
 #include "ZombieModeInternal.h"
 #include "ZombieNet.h"
+#include "ZombieRendezvous.h"
 #include "../../DebugPrint.h"
 #include "../../system/ConfigFile.h"
 #include "../../platform/platform.h"
@@ -18,8 +19,9 @@
 // ZombieLobby.cpp - the zombie mod's NEW GAME screen (port-added): single
 // player against the AI, host a game as the director (or against the AI
 // director, ZombieDirectorAI.cpp, at the level picked on that row), join one
-// as a survivor, or rejoin the last match joined (its saved match id finds
-// the seat). Chained from the title screen's NEW GAME when [Mods]
+// as a survivor - from the match server's list of public games, by a
+// game code, or by address - or rejoin the last match joined (its saved
+// match id finds the seat). Chained from the title screen's NEW GAME when [Mods]
 // PlayInfested is on. Single player goes on to the normal character select;
 // a multiplayer game skips it and starts Chris's scenario for everyone
 // (lobby_start_game) - the survivors' picks are the models they wear.
@@ -56,6 +58,8 @@ enum {
     ROW_SINGLE = 0,
     ROW_HOST,
     ROW_HOST_AI,
+    ROW_FIND,        // the match server's public games (ZombieRendezvous.cpp)
+    ROW_CODE,        // a game code, six digits
     ROW_JOIN,
     ROW_REJOIN,
     ROW_ADDRESS,
@@ -68,6 +72,7 @@ enum {
 // five digits, one digit at a time with the d-pad (the game has no text input).
 static char s_addr[16];
 static char s_port[6];
+static char s_code[7] = "000000";
 
 static void lobby_load_fields(void)
 {
@@ -189,6 +194,7 @@ static void lobby_draw_players(int x, int y)
 enum {
     MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_LEAVE, MI_START, MI_VETO,
     MI_ACCEPT, MI_BACK_LOBBY, MI_CONTINUE, MI_CLOSE, MI_READY, MI_CHANGE_CHAR, MI_VIEW_MAP,
+    MI_LISTING,
 };
 #define LOBBY_MENU_MAX 8
 
@@ -1103,6 +1109,8 @@ static void lobby_room(void)
             m.add(MI_GENERATE, zm_net_survivor_count() > 0,
                   zm_net_survivor_count() > 0 ? "GENERATE THE MAP" : "GENERATE THE MAP - NOBODY YET");
         }
+        if (host && zm_rdv_host_state() != ZM_RDV_HOST_OFF)
+            m.add(MI_LISTING, true, g_zmRdvPublic ? "LISTED: PUBLIC" : "LISTED: PRIVATE - CODE ONLY");
         m.add(MI_LEAVE, true, "LEAVE");
 
         // The AI level steps with left / right as well as Action.
@@ -1127,6 +1135,10 @@ static void lobby_room(void)
             s_aiLevel = ai >= 5 ? 1 : ai + 1;
             zm_net_set_ai_level(s_aiLevel);
             break;
+        case MI_LISTING:
+            g_zmRdvPublic = !g_zmRdvPublic;     // the next heartbeat tells the server
+            ConfigFile_Save();
+            break;
         case MI_LEAVE:
             zm_net_stop();
             return;
@@ -1148,7 +1160,116 @@ static void lobby_room(void)
         if (joined) {
             lobby_print(x, 200, 0x7F, "WAITING FOR THE HOST TO SHOW THE MAP");
         }
+        if (host) {
+            char line[64];
+            switch (zm_rdv_host_state()) {
+            case ZM_RDV_HOST_REGISTERED:
+                snprintf(line, sizeof(line), "GAME CODE %06u", zm_rdv_code());
+                lobby_print(x, 202, 0x8F, line);
+                lobby_print(x, 216, 0x7F, g_zmRdvPublic ? "SURVIVORS FIND IT UNDER FIND A GAME, OR BY CODE"
+                                                         : "SURVIVORS JOIN BY THIS CODE");
+                break;
+            case ZM_RDV_HOST_CONTACTING:
+                lobby_print(x, 202, 0x7F, "GETTING A GAME CODE...");
+                break;
+            case ZM_RDV_HOST_NO_ANSWER:
+                lobby_print(x, 202, 0x7F, "NO GAME CODE - THE MATCH SERVER DOES NOT ANSWER");
+                lobby_print(x, 216, 0x7F, "SURVIVORS CAN STILL JOIN BY ADDRESS");
+                break;
+            default:
+                break;
+            }
+        }
         lobby_menu_draw(m, sel, x, host ? 136 : 160);
+        Task_sleep(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Finding a game through the match server (ZombieRendezvous.cpp)
+// ---------------------------------------------------------------------------
+
+// Connecting to game `code`: the server's introduction, then the punch.
+// Returns once ZombieNet is JOINING (lobby_session takes it from there),
+// it failed (the NEW GAME menu shows why) or Cancel gave up.
+static void lobby_connect(unsigned int code, bool rejoin)
+{
+    zm_rdv_connect_begin(code, rejoin);
+    bool first = true;
+    for (;;) {
+        int r = zm_rdv_connect_frame();
+        if (r != ZM_RDV_CONNECT_WORKING) return;
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+        if (pressed & PAD_CANCEL) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            zm_rdv_connect_cancel();
+            return;
+        }
+        zm_guide_background(true);
+        char line[64];
+        lobby_print(40, 20, 0x8F, ZM_GAME_TITLE);
+        snprintf(line, sizeof(line), "%s GAME %06u", rejoin ? "REJOINING" : "JOINING", code);
+        lobby_print(40, 88, 0x8F, line);
+        lobby_print(40, 110, 0x7F, zm_rdv_connect_text());
+        lobby_print(40, 200, 0x7F, "CANCEL GIVES UP");
+        Task_sleep(1);
+    }
+}
+
+#define BROWSE_SHOWN 6     // games on the screen at once, with REFRESH and BACK
+
+// The public games: Up / Down, Action joins one. The server's list is asked
+// for again every few seconds.
+static void lobby_browse(void)
+{
+    if (!zm_rdv_browse_begin()) {
+        zm_net_fail("COULD NOT REACH THE MATCH SERVER", "CHECK YOUR INTERNET CONNECTION");
+        return;
+    }
+    enum { MI_GAME = 100, MI_REFRESH = 200, MI_BROWSE_BACK = 201 };
+    int sel = 0;
+    bool first = true;
+    unsigned int began = plat_time_ms();
+    for (;;) {
+        zm_rdv_browse_frame();
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+
+        LobbyMenu m;
+        int n = zm_rdv_list_count();
+        if (n > BROWSE_SHOWN) n = BROWSE_SHOWN;
+        for (int i = 0; i < n; i++) {
+            const ZmRdvGame* g = zm_rdv_list(i);
+            m.add(MI_GAME + i, true, "%06u  %s  %d OF %d SURVIVORS", g->code,
+                  (g->flags & ZM_RDV_AI) ? "AI DIRECTOR" : "DIRECTOR   ", g->survivors, g->capacity);
+        }
+        m.add(MI_REFRESH, true, "REFRESH");
+        m.add(MI_BROWSE_BACK, true, "BACK");
+
+        int pick = lobby_menu_input(m, &sel, pressed);
+        if (pick < 0 && (pressed & PAD_CANCEL)) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            pick = MI_BROWSE_BACK;
+        }
+        if (pick == MI_BROWSE_BACK) { zm_rdv_close(); return; }
+        if (pick == MI_REFRESH) { zm_rdv_browse_begin(); began = plat_time_ms(); sel = 0; }
+        if (pick >= MI_GAME && pick < MI_GAME + BROWSE_SHOWN) {
+            const ZmRdvGame* g = zm_rdv_list(pick - MI_GAME);
+            if (g != NULL) { lobby_connect(g->code, false); return; }
+        }
+
+        zm_guide_background(true);
+        lobby_print(40, 20, 0x8F, ZM_GAME_TITLE);
+        lobby_print(40, 44, 0x8F, "OPEN GAMES");
+        const char* note = "";
+        if (!zm_rdv_list_heard())
+            note = plat_time_ms() - began > 5000 ? "THE MATCH SERVER DOES NOT ANSWER" : "ASKING THE MATCH SERVER...";
+        else if (zm_rdv_list_count() == 0)
+            note = "NO OPEN GAMES - HOST ONE, OR JOIN BY CODE";
+        lobby_print(40, 62, 0x7F, note);
+        lobby_menu_draw(m, sel, 40, 80);
+        lobby_print(40, 200, 0x7F, "PRIVATE GAMES ARE JOINED BY CODE");
         Task_sleep(1);
     }
 }
@@ -1240,7 +1361,13 @@ void zombie_lobby_state(void)
         if (editing) {
             if (row == ROW_ADDRESS) lobby_edit(s_addr, 15, &cursor, pressed);
             if (row == ROW_PORT)    lobby_edit(s_port, 5, &cursor, pressed);
-            if (pressed & (PAD_CONFIRM | PAD_CANCEL)) {
+            if (row == ROW_CODE)    lobby_edit(s_code, 6, &cursor, pressed);
+            if (row == ROW_CODE && (pressed & PAD_CONFIRM)) {
+                // Action on the code joins it.
+                play_sfx(SFX_UI_BANK, SFX_UI_DECIDE);
+                editing = false;
+                lobby_connect((unsigned int)atoi(s_code), false);
+            } else if (pressed & (PAD_CONFIRM | PAD_CANCEL)) {
                 play_sfx(SFX_UI_BANK, pressed & PAD_CONFIRM ? SFX_UI_DECIDE : SFX_UI_CANCEL);
                 editing = false;
                 lobby_store_fields();
@@ -1285,9 +1412,22 @@ void zombie_lobby_state(void)
                     lobby_store_fields();
                     zm_net_join(g_zmNetAddress, g_zmNetPort, -1);   // the character comes after the map
                     break;
-                case ROW_REJOIN:
-                    zm_net_rejoin_saved();
+                case ROW_FIND:
+                    if (zm_rdv_available()) lobby_browse();
+                    else zm_net_fail("NO MATCH SERVER SET", "SET RENDEZVOUS IN CONFIG.INI");
                     break;
+                case ROW_CODE:
+                    if (zm_rdv_available()) { editing = true; cursor = 0; }
+                    else zm_net_fail("NO MATCH SERVER SET", "SET RENDEZVOUS IN CONFIG.INI");
+                    break;
+                case ROW_REJOIN: {
+                    // Joined through the match server: introduced again from
+                    // this new socket, or the host's NAT would not let it in.
+                    unsigned int code = zm_net_rejoin_code();
+                    if (code && zm_rdv_available()) lobby_connect(code, true);
+                    else zm_net_rejoin_saved();
+                    break;
+                }
                 case ROW_ADDRESS:
                 case ROW_PORT:
                     editing = true;
@@ -1312,7 +1452,9 @@ void zombie_lobby_state(void)
             "SINGLE PLAYER - AI SURVIVOR",
             "HOST - PLAY THE DIRECTOR",
             "",               // host vs the AI director, with its level
-            "JOIN - PLAY A SURVIVOR",
+            "FIND A GAME - PLAY A SURVIVOR",
+            "",               // join by code
+            "JOIN BY ADDRESS - PLAY A SURVIVOR",
             "REJOIN THE LAST MATCH",
             "",               // address
             "",               // port
@@ -1321,7 +1463,7 @@ void zombie_lobby_state(void)
         for (int r = 0; r < ROW_COUNT; r++) {
             char line[80];
             const char* mark = (r == row) ? "> " : "  ";
-            int yy = y + r * 15;
+            int yy = y + r * 14;
             if (r == ROW_ADDRESS) {
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  HOST ADDRESS ", s_addr, cursor,
@@ -1329,6 +1471,18 @@ void zombie_lobby_state(void)
             } else if (r == ROW_HOST_AI) {
                 snprintf(line, sizeof(line), "%sHOST - AI DIRECTOR  < %s >", mark, zm_ai_level_name(s_aiLevel));
                 lobby_print(x, yy, r == row ? 0x8F : 0x7F, line);
+            } else if (r == ROW_CODE) {
+                bool off = !zm_rdv_available();
+                lobby_print(x, yy, 0x7F, mark);
+                if (editing && row == ROW_CODE) {
+                    lobby_print_field(x + 12, yy, "JOIN BY CODE  ", s_code, cursor, true);
+                } else {
+                    snprintf(line, sizeof(line), "JOIN BY CODE  %s", s_code);
+                    lobby_print(x + 12, yy, off ? 0x2F : r == row ? 0x8F : 0x7F, line);
+                }
+            } else if (r == ROW_FIND && !zm_rdv_available()) {
+                snprintf(line, sizeof(line), "%s%s", mark, labels[r]);
+                lobby_print(x, yy, 0x2F, line);
             } else if (r == ROW_PORT) {
                 lobby_print(x, yy, 0x7F, mark);
                 lobby_print_field(x + 12, yy, "  PORT ", s_port, cursor,
@@ -1339,10 +1493,11 @@ void zombie_lobby_state(void)
             }
         }
 
-        y += ROW_COUNT * 15 + 12;
+        y += ROW_COUNT * 14 + 12;
         const char* st = zm_net_status_text();
         if (st[0] != '\0') lobby_print(x, y, 0x8F, st);
-        if (editing) lobby_print(x, y + 16, 0x7F, "ARROWS EDIT  ENTER DONE");
+        if (editing) lobby_print(x, y + 16, 0x7F, row == ROW_CODE ? "ARROWS EDIT  ACTION JOIN  CANCEL BACK"
+                                                                  : "ARROWS EDIT  ENTER DONE");
         else {
             const char* hint = zm_net_status_hint();
             if (hint[0] != '\0') lobby_print(x, y + 16, 0x7F, hint);

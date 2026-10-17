@@ -106,6 +106,7 @@ set(RE1_SOURCES
     src/game/mods/ZombieNav.cpp
     src/game/mods/ZombieNet.cpp
     src/game/mods/ZombieLobby.cpp
+    src/game/mods/ZombieRendezvous.cpp
     src/game/mods/ZombieWorld.cpp
     src/game/mods/ZombieMap.cpp
     src/game/mods/ZombiePerks.cpp

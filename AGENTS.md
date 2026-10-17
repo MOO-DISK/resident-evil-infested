@@ -81,6 +81,9 @@ of guessed. Run them from the repo root.
 - `estimate_zombie_route_time.py` — turns each seed's fastest escape into seconds (room walks at run speed from the RDT door/pickup positions, fixed door/pickup/crest costs; solo and a coordinated team); report `tools/zombie_route_time_report.json`.
 - `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
 
+**Match server**
+- `rendezvous_probe.py` — check a deployed rendezvous server (`server/rendezvous/`) answers from the address it was sent to, which hole punching needs; prints this machine's public address.
+
 **Zombie mod assets**
 - `convert_bumper_videos.py` — convert a folder of videos to the match bumpers' format (`docs/INFESTED_BUMPERS.md`): H.264 yuv420p MP4s at a constant 24 fps, silent except `wesker_victory` (or `--keep-audio`); clips in an `intro` folder are made exactly 72 frames, the rest are cut to 30 s.
 
@@ -666,6 +669,23 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   - Event kinds: HIT=1, GRAB=2, GRAB_END=3, ROSTER=4, SOUND=5, FX=6, PSND=7,
     PHURT=8, WIN=9, BURST=10, HEAL=11, STUN=12, STORY=13, CREDIT=14, TRAP=15, BOX=16, CLOCK=17, DROP=18, DROP_TAKE=19, STATS=20, REVIVE=21, PIANO=32, ROOMSYNC=33, TIMEOUT=34, BOSS=35, VOICE=36. FX, SOUND, PSND, BURST, HEAL and STUN carry
     `stage|room<<8`. PICKUP=30 is the host's exclusive pickup transaction.
+  - **Rendezvous** (`ZombieRendezvous.cpp`, `server/rendezvous/`): joining
+    without port forwarding. The host registers its game socket with a
+    small UDP server (`[Net] Rendezvous=host:port` in config.ini, else
+    `ZM_RDV_DEFAULT_SERVER`; "off" disables it) every 5 s and shows a
+    six-digit GAME CODE; `[Net] Public` (the join screen's LISTED switch)
+    puts it in the server's list. A survivor picks FIND A GAME (the list)
+    or JOIN BY CODE; the server sends each side the other's public and LAN
+    address, both send PUNCH, and the first PUNCH / PUNCH_ACK to arrive is
+    the address ZombieNet joins - all on the one game socket
+    (`zm_net_join_peer` keeps it open). Rendezvous packets carry magic
+    "RE1R" and are routed by `net_handle` before the game header. No relay:
+    two symmetric NATs fail ("COULD NOT REACH THE HOST"). The rejoin file
+    keeps the code, and REJOIN goes through the server again. The server
+    keeps the game's code while its heartbeat lasts, so it also lists only
+    games of the same `ZM_NET_VERSION`. CPU test
+    `tests/test_zombie_rendezvous.py` (the client built twice, the real
+    server, simulated NATs). Untested by the user.
   - **Bump `ZM_NET_VERSION` (currently 77) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION
@@ -1093,6 +1113,7 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 | `ZombieSurvivor.cpp` | the AI survivor, the RDT door/spawn cache, `zs_net_frame` / `zs_ride_frame`, survivor start positions, HUD |
 | `ZombieWorld.cpp` | the roster, extras and uid↔slot mapping, flag merge |
 | `ZombieNet.cpp/.h` | the 4-player link |
+| `ZombieRendezvous.cpp/.h` | the match server's side: the host's game code and heartbeat, the public list, joining by code, the NAT punch |
 | `ZombieLobby.cpp` | the menu (Single / Host / Join / Address / Port) and the lobby screen. A survivor presses Action for the character select screen: the list, the highlighted character's name, toughness, description, items and perk (`zm_perk_describe`), and its model turning on the right, drawn like the options menu's player (`options_render_entity`, the player entity borrowed through `zombie_mode_preview_skin` - no game is loaded yet). The host presses Enter to start, which calls `lobby_start_game` → `game_start` |
 | `ZombieMap.cpp` | the director's map overlay; areas come from the map TIM palettes |
 | `ZombiePerks.cpp` | the survivors' per-character perks and starting kits |
