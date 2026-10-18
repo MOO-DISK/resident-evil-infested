@@ -76,6 +76,8 @@ bool zm_reconnect_import(const void* data, int size)
         h->elapsedMs < -1 || h->elapsedMs > 3600000 || !h->player.maxHealth ||   // an hour: boss fights hold and add to the clock
         (h->shotgun[0] & 3) > 2 || h->shotgun[0] > 1022 || h->shotgun[1] > 2 || h->shotgun[2] > 15001 ||
         h->shotgun[3] > 4 || (h->shotgun[4] & ~14u) || (h->shotgun[5] & ~30u) || h->shotgun[6] > 1023 || h->shotgun[7] > 4) return false;
+    for (int i = 0; i < 8; i++)
+        if (!zm_net_item_ok(h->player.inventory[i * 2]) || h->player.indices[i] >= 32) return false;
     for (int i = 0; i < 4; i++)
         if (h->shotgun[8+i] > 1023 || (h->shotgun[12+i] != 0 && h->shotgun[12+i] != ITEM_SHOTGUN && h->shotgun[12+i] != ITEM_BROKEN_SHOTGUN)) return false;
     memcpy(s_restore, data, size);

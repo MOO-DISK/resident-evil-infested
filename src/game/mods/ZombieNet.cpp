@@ -900,7 +900,7 @@ static void net_take_state(int origin, const unsigned char* body, int bodyLen)
     p.x = b->x; p.y = b->y; p.z = b->z;
     p.angle = b->angle;
     p.health = b->health;
-    p.jointCount = b->jointCount;
+    p.jointCount = b->jointCount < ZM_NET_JOINTS ? b->jointCount : ZM_NET_JOINTS;
     memcpy(p.root, b->root, sizeof(p.root));
     memcpy(p.rot, b->rot, sizeof(p.rot));
     p.receivedMs = zm_game_time_ms();
@@ -913,7 +913,7 @@ static void net_take_state(int origin, const unsigned char* body, int bodyLen)
         p.zombie.y = b->zombie.y;
         p.zombie.z = b->zombie.z;
         p.zombie.angle = b->zombie.angle;
-        p.zombie.jointCount = b->zombie.jointCount;
+        p.zombie.jointCount = b->zombie.jointCount < ZM_NET_JOINTS ? b->zombie.jointCount : ZM_NET_JOINTS;
         memcpy(p.zombie.root, b->zombie.root, sizeof(p.zombie.root));
         memcpy(p.zombie.rot, b->zombie.rot, sizeof(p.zombie.rot));
     }
@@ -1003,6 +1003,10 @@ static void net_take_enemies(int origin, const unsigned char* body, int bodyLen)
 // on), or both.
 static void net_take_event(const NetEvent& e, int link)
 {
+    // A survivor's link carries only its own events: the host passes them on
+    // to the others, which trust src (the director's word among them).
+    if (s_role == ZM_NET_ZOMBIE && e.src != link) return;
+    if (e.src >= ZM_NET_MAX_PLAYERS) return;
     if (e.kind == ZM_EV_SHOTGUN) {
         if (s_role == ZM_NET_ZOMBIE) {
             if (e.src != link || e.dst != ZM_NET_DIRECTOR) return;
@@ -1294,8 +1298,8 @@ static void net_handle(const unsigned char* buf, int len, const PlatNetAddr* fro
                 s_links[i].token[0] = hello->token[0];
                 s_links[i].token[1] = hello->token[1];
             } else {
-                s_links[i].token[0] = (unsigned int)rand() ^ plat_time_ms() * 2654435761u ^ s_seed;
-                s_links[i].token[1] = (unsigned int)rand() ^ h->epoch * 2246822519u ^ (s_seed >> 1);
+                s_links[i].token[0] = plat_random_u32();
+                s_links[i].token[1] = plat_random_u32() | 1;
             }
             s_links[i].lastHeardMs = plat_time_ms();
             s_chars[i] = ZM_SEAT_FREE;
@@ -1804,12 +1808,13 @@ static void net_join_link(const PlatNetAddr* host)
     L.addr = *host;
     L.used = true;
     L.nextEventId = 1;
-    L.epoch = plat_time_ms() * 2654435761u ^ (unsigned int)rand();
+    L.epoch = plat_random_u32();
     if (!L.epoch) L.epoch = 1;
     L.lastHeardMs = plat_time_ms();
-    // This survivor's match id: drawn here, carried by every HELLO.
-    L.token[0] = plat_time_ms() * 2246822519u ^ (unsigned int)rand() ^ L.epoch;
-    L.token[1] = (unsigned int)rand() * 3266489917u ^ (L.epoch >> 3) ^ 0x9E3779B9u;
+    // This survivor's match id: drawn here, carried by every HELLO. It alone
+    // reclaims the seat on a rejoin, so it comes from the secure generator.
+    L.token[0] = plat_random_u32();
+    L.token[1] = plat_random_u32();
     if (!L.token[0] && !L.token[1]) L.token[1] = 1;
     s_status = ZM_NET_JOINING;
 }

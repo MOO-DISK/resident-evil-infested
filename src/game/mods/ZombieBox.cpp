@@ -35,6 +35,9 @@ void zm_box_snapshot_take(unsigned int revision, const void* slots)
 {
     if (s_revisionHave && (int)(revision - s_revision) < 0) return;
     memcpy(g_itemboxSlots, slots, sizeof(ItemSlot) * 48);
+    // The menu indexes its item tables by id unchecked.
+    for (int i = 0; i < 48; i++)
+        if (!zm_net_item_ok(g_itemboxSlots[i].Id)) { g_itemboxSlots[i].Id = 0; g_itemboxSlots[i].qty = 0; }
     s_revision = revision; s_revisionHave = true;
 }
 static unsigned short box_item(const ItemSlot& s) { return s.Id | (s.qty << 8); }
@@ -70,6 +73,7 @@ void zm_box_take(const short* a, int src)
             if (zm_net_role() == ZM_NET_ZOMBIE) return;   // the host's box is the box
             unsigned int revision = (unsigned short)a[1] | ((unsigned int)(unsigned short)a[5] << 16);
             if (s_revisionHave && (int)(revision - s_revision) < 0) return;
+            if (!zm_net_item_ok((unsigned char)a[4])) return;
             g_itemboxSlots[a[2]].Id = (unsigned char)a[4];
             g_itemboxSlots[a[2]].qty = (unsigned short)a[4] >> 8;
             s_revision = revision; s_revisionHave = true;
@@ -100,7 +104,7 @@ void zm_box_take(const short* a, int src)
     ItemSlot& slot = g_itemboxSlots[a[2]];
     bool valid = free >= 0 && !zombie_mode_match_over() && peer && !peer->dead &&
                  !peer->spectating && !peer->transitioning && box_item(slot) == (unsigned short)a[3] &&
-                 (a[3] || a[4]);
+                 (a[3] || a[4]) && zm_net_item_ok((unsigned char)a[4]);
     if (!valid) {
         box_update(src, a); box_send(src, BOX_DENY, a); return;
     }

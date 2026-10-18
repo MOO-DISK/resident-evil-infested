@@ -14,6 +14,8 @@
 #include <ws2tcpip.h>
 #include <mmsystem.h>
 #pragma comment(lib, "Ws2_32.lib")
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
 #include <stdio.h>
 #include <stdlib.h>   // malloc/free for plat_file_read_all
 
@@ -450,6 +452,15 @@ int plat_net_recv(void* buffer, int capacity, PlatNetAddr* from)
         from->port = ntohs(addr.sin_port);
     }
     return n;
+}
+
+unsigned int plat_random_u32(void)
+{
+    unsigned int r = 0;
+    if (BCryptGenRandom(NULL, (PUCHAR)&r, sizeof(r), BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0) {
+        r = GetTickCount() * 2654435761u ^ (unsigned int)rand() ^ ((unsigned int)rand() << 16);
+    }
+    return r;
 }
 
 BOOL plat_net_local(const PlatNetAddr* toward, PlatNetAddr* out)

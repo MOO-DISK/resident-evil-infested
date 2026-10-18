@@ -179,9 +179,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
 - Commit only when the user asks.
 - Debug traces go through `RE1_DEBUGLOG=1` into `re1_debug.log`: `[shot pN]`
   shot audit, hits, monster hits and hurts. Ask the user for that log.
-- Keep both `CMakeLists.txt` and `Game.vcxproj` updated. The Windows build has
-  not been compiled since the multiplayer work started. Only Linux is built and
-  checked with `tests/check_platform_boundary.py`.
+- Keep both `CMakeLists.txt` and `Game.vcxproj` updated. Both build; the
+  Windows Release build (`build.bat`) compiled cleanly on 2026-10-18. Run
+  `tests/check_platform_boundary.py` before committing.
 
 **Design**
 - **Roles** (`ZM_NET_OFF` / `ZM_NET_ZOMBIE` / `ZM_NET_SURVIVOR`):
@@ -699,6 +699,21 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     only. CPU test `tests/test_zombie_rendezvous.py` (the client built
     twice, the C server as a library, simulated NATs, a sanitizer fuzz
     pass, the binary on a socket). Untested by the user.
+  - **Untrusted input.** Every byte from another copy is checked before it
+    reaches an engine table: the engine indexes function-pointer and path
+    tables by monster id, behaviour and state bytes, item ids, sound ids and
+    effect types without bounds. `zm_net_monster_ok` (placeable types, each
+    type's behaviour range) guards every roster/ENEMIES spawn and the rejoin
+    roster; `zm_net_death_ok` guards `zm_resume_death` (else the corpse is
+    held, `zm_hold_corpse`); `zm_net_item_ok` the box, its snapshot and the
+    rejoin inventory; `Play3DSnd` refuses negative ids; FX types stay under
+    `g_effectSpriteInfo`'s 50. The host drops any event whose `src` is not
+    its link. Match ids, epochs and the server token come from
+    `plat_random_u32` (the OS's secure generator). A survivor joins only a
+    PUNCH from the introduced host's IPs. The server rate-limits REGISTER
+    (before the token lookup) and LIST per source IP, and relays nothing to a
+    survivor until it has sent on the session. Add a check with any new
+    field that indexes something.
   - **Bump `ZM_NET_VERSION` (currently 77) whenever a packet layout changes.**
   - Lobby version mismatches are decoded from the stable magic/version/type
     prefix, before parsing the full packet layout. The client shows GAME VERSION

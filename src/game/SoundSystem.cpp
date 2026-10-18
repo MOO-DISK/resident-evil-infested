@@ -1058,6 +1058,9 @@ int CalcPanVolume(int panL, int panR) // 0x00480610
 // ============================================================================
 void Play3DSnd(int bank, int soundId, int vol, int pos) // 0x0047f9c0
 {
+    // Port-added: the original checks only the top of each bank. A negative
+    // id (the mod replays other copies' sounds) read a handle before the table.
+    if (soundId < 0) return;
     zombie_mode_on_player_sound(bank, soundId, vol, pos);   // port-added mod (mods/ZombieMode.h)
     VECTOR* soundPos = (VECTOR*)pos;
     int handle = 0;

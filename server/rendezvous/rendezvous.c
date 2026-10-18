@@ -43,6 +43,11 @@
 #define RDV_EXPIRE_MS       30000           /* a host heartbeats every 5 s */
 #define RDV_JOIN_PER_MIN    60              /* JOINs per source IP */
 #define RDV_CODES_PER_MIN   30              /* new game codes per source IP */
+#define RDV_REGISTER_PER_MIN 300            /* REGISTERs per source IP, before the token lookup:
+                                               a heartbeat is 12 a minute; guessing a live
+                                               game's token would take billions */
+#define RDV_LIST_PER_MIN    40              /* LIST replies per (spoofable) source IP: the
+                                               reply is bigger than the request */
 #define RDV_MAX_OUT         2               /* datagrams one packet can cause */
 #define RDV_DATAGRAM_MAX    (ZM_RDV_GAME_DATAGRAM_MAX + ZM_RDV_RELAY_OVERHEAD)
 #define RDV_RELAY_HARD      1024            /* relay sessions the tables hold */
@@ -162,9 +167,10 @@ typedef struct rdv_game {
 typedef struct rdv_bucket {                 /* token buckets, refilled per minute */
     int      used;
     uint32_t ip;
-    double   joins, codes;
+    double   joins, codes, registers, lists;
     uint64_t lastMs;
 } rdv_bucket;
+enum { RATE_JOIN = 0, RATE_CODE = 1, RATE_REGISTER = 2, RATE_LIST = 3 };
 
 static rdv_game   s_games[RDV_MAX_GAMES];
 static int32_t    s_freeGame[RDV_MAX_GAMES];
@@ -176,6 +182,8 @@ typedef struct rdv_relay {
     int          used;
     uint32_t     id, code;
     rdv_endpoint a, b;                      /* a: the survivor, b: the host */
+    int          aSpoke;                    /* a sent on the session: RELAY_REQ's source can be
+                                               spoofed, the session id (RELAY_OK) cannot be read */
     uint64_t     createdMs, lastA, lastB, tokenMs;
     double       tokens;
     uint64_t     bytes;
@@ -303,8 +311,14 @@ void rdv_expire(uint64_t now)
     }
 }
 
-/* Takes one JOIN (codes = 0) or one new code (codes = 1) from ip's bucket. */
-static int rate_allow(uint32_t ip, int codes, uint64_t now)
+static void bucket_fill(double* tokens, double minutes, double perMin)
+{
+    *tokens += minutes * perMin;
+    if (*tokens > perMin) *tokens = perMin;
+}
+
+/* Takes one token of `kind` (RATE_*) from ip's bucket. */
+static int rate_allow(uint32_t ip, int kind, uint64_t now)
 {
     int32_t i = map_get(&s_byIp, ip);
     if (i < 0) {
@@ -313,16 +327,18 @@ static int rate_allow(uint32_t ip, int codes, uint64_t now)
         rdv_bucket* b = &s_buckets[i];
         b->used = 1; b->ip = ip; b->lastMs = now;
         b->joins = RDV_JOIN_PER_MIN; b->codes = RDV_CODES_PER_MIN;
+        b->registers = RDV_REGISTER_PER_MIN; b->lists = RDV_LIST_PER_MIN;
         map_put(&s_byIp, ip, i);
     }
     rdv_bucket* b = &s_buckets[i];
     double minutes = (double)(now - b->lastMs) / 60000.0;
     b->lastMs = now;
-    b->joins += minutes * RDV_JOIN_PER_MIN;
-    b->codes += minutes * RDV_CODES_PER_MIN;
-    if (b->joins > RDV_JOIN_PER_MIN) b->joins = RDV_JOIN_PER_MIN;
-    if (b->codes > RDV_CODES_PER_MIN) b->codes = RDV_CODES_PER_MIN;
-    double* tokens = codes ? &b->codes : &b->joins;
+    bucket_fill(&b->joins, minutes, RDV_JOIN_PER_MIN);
+    bucket_fill(&b->codes, minutes, RDV_CODES_PER_MIN);
+    bucket_fill(&b->registers, minutes, RDV_REGISTER_PER_MIN);
+    bucket_fill(&b->lists, minutes, RDV_LIST_PER_MIN);
+    double* tokens = kind == RATE_CODE ? &b->codes : kind == RATE_REGISTER ? &b->registers :
+                     kind == RATE_LIST ? &b->lists : &b->joins;
     if (*tokens < 1.0) return 0;
     *tokens -= 1.0;
     return 1;
@@ -372,9 +388,11 @@ static int on_register(const unsigned char* body, int len, rdv_endpoint src, uin
     if (len < (int)sizeof(r)) return 0;
     memcpy(&r, body, sizeof(r));
     if (!r.token) return 0;
+    /* Before the lookup: the token is all that proves a game is this host's. */
+    if (!rate_allow(src.ip, RATE_REGISTER, now)) return 0;
     int32_t g = map_get(&s_byToken, r.token);
     if (g < 0) {
-        if (!s_freeGames || !rate_allow(src.ip, 1, now)) return 0;
+        if (!s_freeGames || !rate_allow(src.ip, RATE_CODE, now)) return 0;
         uint32_t code = 0;
         for (int tries = 0; tries < 1000 && !code; tries++) {
             uint32_t c = 100000u + rdv_random() % 900000u;
@@ -437,6 +455,7 @@ static int on_list(const unsigned char* body, int len, rdv_endpoint src, uint64_
     int n = 0;
     if (len < (int)sizeof(q)) return 0;
     memcpy(&q, body, sizeof(q));
+    if (!rate_allow(src.ip, RATE_LIST, now)) return 0;
     rdv_out* o = out_begin(out, &n, src, ZM_RDV_LIST);
     RdvListHead head;
     memset(&head, 0, sizeof(head));
@@ -462,7 +481,7 @@ static int on_join(const unsigned char* body, int len, rdv_endpoint src, uint64_
     int n = 0;
     if (len < (int)sizeof(j)) return 0;
     memcpy(&j, body, sizeof(j));
-    if (!rate_allow(src.ip, 0, now)) { join_fail(out, &n, src, j.code, ZM_RDV_FAIL_BUSY); return n; }
+    if (!rate_allow(src.ip, RATE_JOIN, now)) { join_fail(out, &n, src, j.code, ZM_RDV_FAIL_BUSY); return n; }
     int32_t g = map_get(&s_byCode, j.code);
     if (g < 0 || !game_live(&s_games[g], now)) { join_fail(out, &n, src, j.code, ZM_RDV_FAIL_NOT_FOUND); return n; }
     const rdv_game* G = &s_games[g];
@@ -543,7 +562,7 @@ static int on_relay_req(const unsigned char* body, int len, rdv_endpoint src, ui
         if (R->a.ip == src.ip) perIp++;
         if (R->code == q.code) perGame++;
     }
-    if (!rate_allow(src.ip, 0, now)) { relay_fail(out, &n, src, q.code, ZM_RDV_FAIL_BUSY); return n; }
+    if (!rate_allow(src.ip, RATE_JOIN, now)) { relay_fail(out, &n, src, q.code, ZM_RDV_FAIL_BUSY); return n; }
     if (s_relayCount >= s_limits.maxSessions || !s_freeRelays || s_monthUsed >= s_limits.monthBytes ||
         perIp >= RDV_RELAY_PER_IP || perGame >= RDV_RELAY_PER_GAME) {
         rdv_log("game %06u: relay refused for %s:%u (%d sessions, %llu MB this month)\n", q.code,
@@ -590,9 +609,12 @@ static int on_relay_data(const unsigned char* packet, int packetLen, const unsig
     if (r < 0) return 0;
     rdv_relay* R = &s_relays[r];
     rdv_endpoint to;
-    if (same_endpoint(src, R->a)) { to = R->b; R->lastA = now; }
+    if (same_endpoint(src, R->a)) { to = R->b; R->lastA = now; R->aSpoke = 1; }
     else if (same_endpoint(src, R->b)) { to = R->a; R->lastB = now; }
     else return 0;                          /* not one of the two: never forwarded */
+    /* Nothing to the survivor until it has spoken: else a forged RELAY_REQ
+     * would point a "host" stream at any address. */
+    if (to.ip == R->a.ip && to.port == R->a.port && !R->aSpoke) return 0;
     refill(&R->tokens, &R->tokenMs, s_limits.sessionBytesPerSec, now);
     if (!s_totalTokenMs) { s_totalTokenMs = now; s_totalTokens = s_limits.totalBytesPerSec; }
     refill(&s_totalTokens, &s_totalTokenMs, s_limits.totalBytesPerSec, now);

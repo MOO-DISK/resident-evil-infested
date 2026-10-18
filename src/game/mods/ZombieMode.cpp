@@ -1079,6 +1079,12 @@ static bool zm_load_live_model(Entity* e)
 static Entity* zm_spawn_live(unsigned char id, unsigned char behavior, int x, int y, int z,
                              short angle, unsigned short uid)
 {
+    // Roster and ENEMIES entries come from other copies.
+    if (!zm_net_monster_ok(id, behavior)) {
+        dbg_printf("[net] refused a live spawn of id %02X behaviour %02X (%04X)\n",
+                   (unsigned)id, (unsigned)behavior, (unsigned)uid);
+        return NULL;
+    }
     int slot = -1;
     for (int i = zm_room_highest_script_slot() + 1; i < ZM_FIRST_SURVIVOR_SLOT && slot < 0; i++) {
         if ((g_EnemiesList[i].status_flags & ENTITY_STATUS_ACTIVE) == 0) slot = i;
@@ -2643,6 +2649,8 @@ static void zm_replay_effect(const short* a, int source)
     bool frame = s_fxIncomingFrame[source];
     s_fxIncomingFrame[source] = false;
     if (a[6] != (short)(g_stageId | (g_roomId << 8))) return;
+    // Effect_CreateBillboard indexes g_effectSpriteInfo / g_effectAnimData by type unchecked.
+    if ((unsigned)(a[0] & 0xFF) >= sizeof(g_effectSpriteInfo) / sizeof(g_effectSpriteInfo[0])) return;
     VECTOR w;
     w.x = (unsigned short)a[2];       // room X/Z are 0..65535
     w.y = a[3];
@@ -6063,10 +6071,60 @@ static void zm_init_puppet(Entity* e)
     s_slotHealth[zm_slot_of(e)] = e->health;
 }
 
-static void zm_resume_death(Entity* e, const ZmNetEnemy& n)
+// ---------------------------------------------------------------------------
+// Network input checks (ZombieModeInternal.h). The type's own update calls
+// through fixed function tables indexed by these bytes; the bounds are the
+// tables' sizes (entities/*.cpp).
+// ---------------------------------------------------------------------------
+
+// A monster another copy may make here: the types the director can place or
+// carry, with a behaviour byte inside that type's tables.
+bool zm_net_monster_ok(unsigned char id, unsigned char behavior)
+{
+    switch (id) {
+    case ENEMY_ZOMBIE: case ENEMY_ZOMBIE_NAKED: case ENEMY_ZOMBIE_VARIANT:
+        return (behavior & 0x0F) < 12;          // zombie_behavior_tbl, zombie_move_behavior_tbl
+    case ENEMY_CERBERUS:    return behavior < 13;   // cerberus_behavior_select_tbl
+    case ENEMY_HUNTER:      return behavior < 8;    // hunter_variant_table, hunter_intro_*_tbl
+    case ENEMY_CHIMERA:     return behavior < 3;    // chimera_brain_table
+    case ENEMY_WEB_SPINNER: return true;            // wsp_state_table[6 + (behavior & 3)]
+    case ENEMY_TYRANT_2:    return true;            // s_tyrantStates is range-checked
+    default:                return false;
+    }
+}
+
+// A death block from another copy, before zm_resume_death writes it into a
+// live entity whose AI then dispatches on it.
+bool zm_net_death_ok(unsigned char id, const ZmDeathPlayback& d)
+{
+    unsigned char state = d.state[0], view = d.state[1], action = d.state[2], step = d.state[3];
+    if (!zm_net_monster_ok(id, d.behavior) || d.phase[0] >= 4) return false;   // attacking_direction
+    switch (id) {
+    case ENEMY_ZOMBIE: case ENEMY_ZOMBIE_NAKED: case ENEMY_ZOMBIE_VARIANT:
+        return state == ZOMBIE_STATE_DIE && action < 8;
+    case ENEMY_CERBERUS:    return state < 5 && view < 11 && action < 3;
+    case ENEMY_HUNTER:      return state < 9 && action < 8 && step < 6;
+    case ENEMY_CHIMERA:     return state < 4 && action < 17;
+    case ENEMY_WEB_SPINNER: return state < 6;
+    case ENEMY_TYRANT_2:    return state < 10;
+    default:                return false;
+    }
+}
+
+// An item id the inventory, box and menu tables cover.
+bool zm_net_item_ok(unsigned char id)
+{
+    return id <= ITEM_MINIMI;
+}
+
+static bool zm_resume_death(Entity* e, const ZmNetEnemy& n)
 {
     unsigned char* raw = (unsigned char*)e;
     const ZmDeathPlayback& d = n.death;
+    if (!zm_net_death_ok(e->id, d)) {
+        dbg_printf("[net] refused a death block for slot %d id %02X\n", zm_slot_of(e), (unsigned)e->id);
+        return false;
+    }
     e->status_flags = d.status;
     e->behavior_flags = d.behavior;
     memcpy(raw + 0x6C, d.movement, sizeof(d.movement));
@@ -6085,6 +6143,16 @@ static void zm_resume_death(Entity* e, const ZmNetEnemy& n)
     dbg_printf("[corpse] resumed slot %d anim %d frame %d phase %d/%d\n",
                zm_slot_of(e), e->animationId, e->animation_frame_id,
                e->ignore_player_flag, e->action_state);
+    return true;
+}
+
+// A dead monster whose fall cannot be resumed: it lies where it is.
+static void zm_hold_corpse(Entity* e, int slot)
+{
+    s_slotCorpse[slot] = true;
+    e->status_flags |= 0x0E;
+    if (e->health >= 0) e->health = -1;
+    dbg_printf("[zombie] slot %d stays a corpse\n", slot);
 }
 
 void zm_shared_receive_enemies(const ZmNetEnemy* list, int count, bool adopt,
@@ -6107,7 +6175,7 @@ void zm_shared_receive_enemies(const ZmNetEnemy* list, int count, bool adopt,
                         Entity* e = &g_EnemiesList[slot];
                         if (e != g_zombieModeEntity && e->id == n.id &&
                             !(e->health < 0 && e->state == ZOMBIE_STATE_DIE)) {
-                            zm_resume_death(e, n);
+                            if (!zm_resume_death(e, n)) zm_hold_corpse(e, slot);
                         }
                     }
                 }
@@ -6278,15 +6346,11 @@ static void zm_room_update(void)
                     if (s_snapHave[i] && !s_snap[i].settled && !s_slotCorpse[i]) {
                         // Continue the owner's exact death phase and frame,
                         // with this copy's model/animation pointers intact.
-                        zm_resume_death(e, s_snap[i]);
-                        continue;
+                        if (zm_resume_death(e, s_snap[i])) continue;
                     }
                     // Killed on the owner's copy: a puppet's state is always
                     // idle here, so its own AI would get it back up.
-                    s_slotCorpse[i] = true;
-                    e->status_flags |= 0x0E;
-                    if (e->health >= 0) e->health = -1;
-                    dbg_printf("[zombie] slot %d stays a corpse\n", i);
+                    zm_hold_corpse(e, i);
                     continue;
                 }
                 e->status_flags &= ~ZM_STATUS_NO_PAIR;

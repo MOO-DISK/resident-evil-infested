@@ -149,6 +149,9 @@ int  plat_net_recv(void* buffer, int capacity, PlatNetAddr* from);
 // open or no route is known. (The rendezvous server hands it to peers on the
 // same LAN, whose router may not loop its public address back.)
 BOOL plat_net_local(const PlatNetAddr* toward, PlatNetAddr* out);
+// A random word from the system's secure generator (match ids, connection
+// epochs, the match server's token): not guessable from the clock or rand().
+unsigned int plat_random_u32(void);
 
 // ---------------------------------------------------------------------------
 // Window / cursor lifecycle

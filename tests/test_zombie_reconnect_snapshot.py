@@ -28,6 +28,7 @@ static struct { struct { struct { int t[3]; } localMatrix; } scaMatrixData;
     struct { short x,y,z; } position; short directionAngle,health;
     unsigned char maxHealth,healthStatusFlags; unsigned short posY; } g_playerEntity;
 static unsigned int zm_net_seed() { return 123; }
+static bool zm_net_item_ok(unsigned char id) { return id <= 0x70; }
 static int zm_survivors_in_ms() { return 60000; }
 static unsigned short zm_pickups_reconnect_token() { return 9; }
 static unsigned short zm_box_reconnect_token() { return 12; }

@@ -159,6 +159,13 @@ inline unsigned int zm_death_extra_bytes(unsigned char id)
     if (id == 6) return 4;
     return 0;
 }
+// Network input checks (ZombieMode.cpp). The engine indexes fixed tables -
+// function pointers among them - with a monster's id, behaviour and state
+// bytes and with item ids, unchecked; nothing from another copy reaches those
+// fields without passing these.
+bool zm_net_monster_ok(unsigned char id, unsigned char behavior);
+bool zm_net_death_ok(unsigned char id, const ZmDeathPlayback& d);
+bool zm_net_item_ok(unsigned char id);
 // Persistent joint appearance, independent of one-shot hit/burst events.
 // A late arrival needs the finished damage, without replaying the explosion.
 struct ZmMonsterAppearance {

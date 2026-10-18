@@ -50,6 +50,7 @@ struct ZmNetPeerState {
 static unsigned int now=1000;
 static bool matchOver;
 static unsigned int plat_time_ms() { return now; }
+static unsigned int plat_random_u32() { static unsigned int s=1; s=s*1664525u+1013904223u; return s; }
 static bool zombie_mode_match_over() { return matchOver; }
 static bool zombie_mode_armed() { return true; }
 static bool zombie_mode_live_menu() { return false; }

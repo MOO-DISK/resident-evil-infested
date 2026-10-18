@@ -468,6 +468,16 @@ int plat_net_recv(void* buffer, int capacity, PlatNetAddr* from)
     return (int)n;
 }
 
+unsigned int plat_random_u32(void)
+{
+    unsigned int r = 0;
+    int fd = open("/dev/urandom", O_RDONLY);
+    bool ok = fd >= 0 && read(fd, &r, sizeof(r)) == (ssize_t)sizeof(r);
+    if (fd >= 0) close(fd);
+    if (!ok) r = (unsigned int)SDL_GetTicks() * 2654435761u ^ (unsigned int)rand();
+    return r;
+}
+
 BOOL plat_net_local(const PlatNetAddr* toward, PlatNetAddr* out)
 {
     if (s_netSocket < 0) return FALSE;

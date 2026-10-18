@@ -155,6 +155,11 @@ bool zm_world_reconnect_import(const void* data, int size, unsigned short nextUi
 {
     if (size != sizeof(s_roster)) return false;
     memcpy(s_roster, data, sizeof(s_roster));
+    // The host's roster: script slots (uid < 16) are never spawned from it.
+    for (int i = 0; i < ZM_ROSTER_MAX; i++) {
+        ZmRosterEntry* r = &s_roster[i];
+        if (r->used && r->uid >= ZM_UID_EXTRA_FIRST && !zm_net_monster_ok(r->id, r->behavior)) r->used = 0;
+    }
     s_nextUid = nextUid;
     return true;
 }
@@ -231,6 +236,9 @@ void zm_world_reconnect_enemy(unsigned char stage, unsigned char room, unsigned 
     unsigned char id, short health, bool alive, int x, int y, int z, short angle)
 {
     if (uid == ZM_WORLD_UID_NONE || uid == ZM_WORLD_UID_NEW || uid == ZM_WORLD_UID_BODY) return;
+    // A new entry from a survivor's ENEMIES: only a type the director can place.
+    if (uid >= ZM_UID_EXTRA_FIRST && zm_roster_find(stage, room, uid, id, false) == NULL &&
+        !zm_net_monster_ok(id, 0)) return;
     ZmRosterEntry* r = zm_roster_find(stage, room, uid, id, true);
     if (r == NULL || r->departed) return;
     if (r->alive && !alive && health < 0) zm_econ_refund(id, uid);
@@ -384,6 +392,8 @@ int zm_world_spawn_extras(int firstSlot, int endSlot)
                        (int)next->uid, (int)g_stageId, (int)g_roomId);
             break;
         }
+        // Roster entries come from other copies too (ROSTER, the rejoin snapshot).
+        if (!zm_net_monster_ok(next->id, next->behavior)) continue;
         Entity* e = zm_spawn_monster(slot, next->id, next->behavior, next->x, next->y, next->z,
                                      next->angle);
         if (e != NULL) {
@@ -472,6 +482,9 @@ void zm_world_apply_remote(const short* a, int src)
 {
     if (!s_worldOn) return;
     unsigned short uid = (unsigned short)(a[1] & 0x7FFF);
+    // Extras are spawned from the roster (script slots never are).
+    if (uid >= ZM_UID_EXTRA_FIRST &&
+        !zm_net_monster_ok((unsigned char)(((unsigned short)a[7] >> 8) & 0x7F), (unsigned char)(a[7] & 0xFF))) return;
     ZmRosterEntry* r = zm_roster_find((unsigned char)(a[0] & 0xFF), (unsigned char)((a[0] >> 8) & 0xFF),
                                       uid, (unsigned char)(((unsigned short)a[7] >> 8) & 0x7F), false);
     // Carried bodies get a new uid in the destination. This uid can never

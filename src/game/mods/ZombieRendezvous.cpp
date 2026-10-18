@@ -152,7 +152,7 @@ static bool rdv_same(const PlatNetAddr& a, const PlatNetAddr& b)
 
 static unsigned int rdv_random(void)
 {
-    unsigned int r = plat_time_ms() * 2654435761u ^ ((unsigned int)rand() << 16) ^ (unsigned int)rand();
+    unsigned int r = plat_random_u32();     // the host's token proves it owns its game code
     return r ? r : 1;
 }
 
@@ -240,6 +240,12 @@ bool zm_rdv_is_packet(const unsigned char* buf, int len)
 static void rdv_fail(const char* text, const char* hint);
 static void rdv_connected(const PlatNetAddr* host);
 
+// A survivor's punch partner: the host's public or LAN address, as introduced.
+static bool rdv_from_peer(const PlatNetAddr* from)
+{
+    return from->ip == s_peerSeen.ip || (s_peerLocal.ip != 0 && from->ip == s_peerLocal.ip);
+}
+
 static void rdv_take_control(const unsigned char* buf, int len, const PlatNetAddr* from)
 {
     const RdvHeader* h = (const RdvHeader*)buf;
@@ -295,13 +301,16 @@ static void rdv_take_control(const unsigned char* buf, int len, const PlatNetAdd
         rdv_send(from, ZM_RDV_PUNCH_ACK, &p, sizeof(p));
         // The host's own punch got through: its NAT already lets us in. Late
         // (asking for the relay already) is still better than relayed.
-        if ((s_cState == C_PUNCH || s_cState == C_RELAY) && p.code == s_cCode) rdv_connected(from);
+        // Game codes are public: only the host the server introduced (its
+        // port may differ behind a NAT) is joined.
+        if ((s_cState == C_PUNCH || s_cState == C_RELAY) && p.code == s_cCode && rdv_from_peer(from))
+            rdv_connected(from);
         return;
     }
     case ZM_RDV_PUNCH_ACK: {
         if (bytes < (int)sizeof(RdvPunch) || (s_cState != C_PUNCH && s_cState != C_RELAY)) return;
         const RdvPunch& p = *(const RdvPunch*)body;
-        if (p.code == s_cCode && p.nonce == s_cNonce) rdv_connected(from);
+        if (p.code == s_cCode && p.nonce == s_cNonce && rdv_from_peer(from)) rdv_connected(from);
         return;
     }
     case ZM_RDV_PEER: {

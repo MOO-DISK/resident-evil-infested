@@ -155,6 +155,8 @@ int plat_net_recv(void* buffer, int capacity, PlatNetAddr* from)
 }
 BOOL plat_net_local(const PlatNetAddr*, PlatNetAddr* out)
 { if (!s_open) return FALSE; out->ip = s_localIp; out->port = s_localPort; return TRUE; }
+unsigned int plat_random_u32(void)
+{ static unsigned int s = 0x9E3779B9u; s = s * 1664525u + 1013904223u; return s ^ (s >> 16); }
 void dbg_printf(const char* fmt, ...)
 { va_list a; va_start(a, fmt); vfprintf(stderr, fmt, a); va_end(a); }
 

@@ -38,6 +38,7 @@ static int zm_game_role() { return role; }
 static int zm_net_role() { return netRole>=0 ? netRole : role; }
 static int zm_net_self() { return self; }
 static int zm_net_status() { return status; }
+static bool zm_net_item_ok(unsigned char id) { return id <= 0x70; }
 static bool zm_net_active() { return status==ZM_NET_CONNECTED || status==ZM_NET_LOST; }
 static int zm_net_char(int p) { return p==0 ? (hostPlays ? 0 : -1) : p==2 ? ZM_CHAR_JILL : 0; }
 static int zombie_mode_inventory_slots(int) { return self==2 ? 8 : 6; }
