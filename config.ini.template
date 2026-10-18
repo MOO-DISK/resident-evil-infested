@@ -64,7 +64,7 @@ AiDirector=0
 Address=127.0.0.1
 Port=27960
 Public=1
-Rendezvous=infested-rdv.eastus.azurecontainer.io:27961
+Rendezvous=re1-infested.eastus.azurecontainer.io:27961
 HostLan=0
 
 [Debug]
