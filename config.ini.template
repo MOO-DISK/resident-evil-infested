@@ -61,13 +61,11 @@ PlayInfested=1
 AiDirector=0
 
 [Net]
-; Two-player zombie mode (NEW GAME -> HOST / JOIN, with PlayInfested=1 on both
-; copies). The game rewrites these with the last address and port used.
-; Address = the host to join; Port = the UDP port the host listens on (allow it
-; through the host's firewall). To try both copies on one machine, start the
-; second with RE1_ALLOW_MULTI=1 in its environment and join 127.0.0.1.
 Address=127.0.0.1
 Port=27960
+Public=1
+Rendezvous=infested-rdv.eastus.azurecontainer.io:27961
+HostLan=0
 
 [Debug]
 ; Master switch for the port-added debug features: F1 debug menu, F6
