@@ -24,6 +24,7 @@
 
 char g_zmRdvServer[96] = ZM_RDV_DEFAULT_SERVER;
 bool g_zmRdvPublic = true;
+bool g_zmRdvHostLan = false;
 
 #define RDV_REGISTER_MS        5000   // the heartbeat (the server keeps 30 s)
 #define RDV_REGISTER_FAST_MS   1000   // ... until the first answer
@@ -416,7 +417,7 @@ void zm_rdv_host_begin(void)
     s_code = 0;
     memset(s_targets, 0, sizeof(s_targets));
     memset(&s_lastRegister, 0, sizeof(s_lastRegister));
-    if (!rdv_resolve()) {
+    if (g_zmRdvHostLan || !rdv_resolve()) {
         s_hostState = ZM_RDV_HOST_OFF;
         return;
     }

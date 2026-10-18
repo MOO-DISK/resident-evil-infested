@@ -673,8 +673,12 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     without port forwarding. The host registers its game socket with a
     small UDP server (`[Net] Rendezvous=host:port` in config.ini, else
     `ZM_RDV_DEFAULT_SERVER`; "off" disables it) every 5 s and shows a
-    six-digit GAME CODE; `[Net] Public` (the join screen's LISTED switch)
-    puts it in the server's list. A survivor picks FIND A GAME (the list)
+    six-digit GAME CODE. Where to host is picked after HOST / HOST - AI
+    DIRECTOR (`lobby_pick_hosting`): INTERNET - PUBLIC (`[Net] Public=1`,
+    in the server's list), INTERNET - PRIVATE (code only) or LOCAL NETWORK
+    (`[Net] HostLan=1`: no server, the lobby shows the host's LAN address
+    for JOIN BY ADDRESS); the internet two are greyed with no server set.
+    Untested by the user. A survivor picks FIND A GAME (the list)
     or JOIN BY CODE; the server sends each side the other's public and LAN
     address, both send PUNCH, and the first PUNCH / PUNCH_ACK to arrive is
     the address ZombieNet joins - all on the one game socket
@@ -956,7 +960,10 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   it (`zombie_mode_manual_reload`, `weapon_manual_reload_ready`). In the mode
   that press no longer switches targets (the original's behaviour 0x1A). The
   other weapons have no reload motion and still reload through the
-  inventory. Untested by the user.
+  inventory. Barry's own W23 / W24 (shotgun, Python) have no reload clip
+  (14 clips, not 15): `BorrowChrisReloadClip` in EntityModelLoader.cpp
+  appends Chris's W03 / W04 clip 0xE and its keyframes in the buffer.
+  Untested by the user.
 - **Voice lines** (`ZombieVoice.cpp`, survivors): hold LB (Shift) and press
   up HELP, down WATCH OUT, left GUARD ME, right LEAD THE WAY; aim (X)
   FOLLOW ME, inventory (Y) STAY HERE, action (A) USE THAT, run (B) RUN AWAY.

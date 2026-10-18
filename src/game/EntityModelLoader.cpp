@@ -5,6 +5,7 @@
 #include "../marni/PSXTexture.h"
 #include "FileLoader.h"
 #include <cstdio>
+#include <cstring>
 #include "../system/AssetPath.h"
 #include "dc/EntityModels.h"
 #include "dc/Items.h"        // DC_ITEM_BERETTA_CUSTOM
@@ -266,6 +267,79 @@ static const char* const g_barryWeaponPaths[0xe] = {
     "players/w24.emw", "players/w24.emw", "players/w25.emw",
     NULL, NULL, NULL, NULL, NULL, NULL, NULL,
 };
+
+// Port-added mod: Barry's W23 / W24 (shotgun, Pythons) carry 14 clips; the
+// reload (clip 0xE, behaviour 0x18's motion) is only in Chris's W03 / W04.
+// Joint_move read past Barry's clip table, so the reload played garbage and
+// never reached the frame that loads the rounds (fire_weapon_fx) - the reload
+// button did nothing and an emptied gun never refilled. Chris's clip 0xE and
+// the keyframes it uses are appended past Barry's file in the buffer, and
+// jointMoveData1 is pointed at a 15-entry copy of Barry's clip table. W2x's
+// EMR header and armature are W0x's byte for byte, so the frames fit.
+static unsigned char s_reloadDonor[32768];
+
+static void BorrowChrisReloadClip(unsigned char weapon_id, unsigned int anim_buffer, unsigned int fileSize)
+{
+    unsigned char* buf = (unsigned char*)anim_buffer;
+    unsigned char* bufEnd = g_animationBuffer + sizeof(g_animationBuffer);
+    if (buf != g_animationBuffer) return;
+    unsigned short* table = (unsigned short*)g_playerEntity.jointMoveData1;
+    unsigned int n = table[1] / 4;
+    if (n != 0xe) return;
+
+    char path[96];
+    sprintf(path, "%s%s", GAME_DATA_ROOT, g_weaponPathTable[0][weapon_id]);
+    size_t donorSize = LoadFile(path, s_reloadDonor, 32);
+    if (donorSize == (size_t)-1 || donorSize < 16 || donorSize > sizeof(s_reloadDonor)) return;
+    unsigned short* dHdr = (unsigned short*)s_reloadDonor;
+    unsigned short* bHdr = (unsigned short*)buf;
+    if (dHdr[1] != bHdr[1] || dHdr[2] != bHdr[2] || dHdr[3] != bHdr[3]) return;
+    unsigned int base = bHdr[1], stride = bHdr[3];
+    unsigned int dT0 = *(unsigned int*)(s_reloadDonor + (donorSize & 0xFFFFFFFC) - 8) & 0xFFFFFFFC;
+    unsigned short* dTable = (unsigned short*)(s_reloadDonor + dT0);
+    if (dTable[1] / 4 <= 0xe) return;
+    unsigned int count = dTable[0xe * 2];
+    unsigned short* dEntries = (unsigned short*)((unsigned char*)dTable + (dTable[0xe * 2 + 1] & 0xFFFC));
+    if (count == 0) return;
+    unsigned int lo = 0xFFFF, hi = 0;
+    for (unsigned int k = 0; k < count; k++) {
+        if (dEntries[k * 2] < lo) lo = dEntries[k * 2];
+        if (dEntries[k * 2] > hi) hi = dEntries[k * 2];
+    }
+
+    // Barry's clip data: from the table's end to the furthest clip's last entry.
+    unsigned int edtEnd = n * 4;
+    for (unsigned int i = 0; i < n; i++) {
+        unsigned int e = (table[i * 2 + 1] & 0xFFFC) + table[i * 2] * 4u;
+        if (e > edtEnd) edtEnd = e;
+    }
+
+    // The keyframes, on Barry's frame grid past his file; then the new table.
+    unsigned int end = (fileSize + 3) & 0xFFFFFFFC;
+    unsigned int firstNew = (end - base + stride - 1) / stride;
+    unsigned char* kf = buf + base + firstNew * stride;
+    unsigned int kfBytes = (hi - lo + 1) * stride;
+    unsigned char* newTable = (unsigned char*)(((unsigned int)(kf + kfBytes) + 3) & 0xFFFFFFFC);
+    unsigned int shift = (0xf - n) * 4;
+    unsigned int clipOff = 0xf * 4 + (edtEnd - n * 4);
+    if (newTable + clipOff + count * 4 > bufEnd || firstNew + (hi - lo) > 0xFFFF) return;
+
+    memcpy(kf, s_reloadDonor + base + lo * stride, kfBytes);
+    memcpy(newTable + 0xf * 4, (unsigned char*)table + n * 4, edtEnd - n * 4);
+    unsigned short* nt = (unsigned short*)newTable;
+    for (unsigned int i = 0; i < n; i++) {
+        nt[i * 2] = table[i * 2];
+        nt[i * 2 + 1] = (unsigned short)(table[i * 2 + 1] + shift);
+    }
+    nt[0xe * 2] = (unsigned short)count;
+    nt[0xe * 2 + 1] = (unsigned short)clipOff;
+    unsigned short* ne = (unsigned short*)(newTable + clipOff);
+    for (unsigned int k = 0; k < count; k++) {
+        ne[k * 2] = (unsigned short)(firstNew + dEntries[k * 2] - lo);
+        ne[k * 2 + 1] = dEntries[k * 2 + 1];
+    }
+    g_playerEntity.jointMoveData1 = (unsigned int)newTable;
+}
 
 // The in-hand weapon file for character block `block` (0 Chris, 1 Jill,
 // 2 Barry, 3 Rebecca) and item id `weaponId`, with LoadEquippedWeaponAnimation's
@@ -738,11 +812,12 @@ void LoadEquippedWeaponAnimation(unsigned char weapon_id, unsigned char param_2,
         weapon_id = ITEM_BERETTA;
         g_playerEntity.equippedWeaponId = ITEM_BERETTA;
     }
+    const bool barryFile = weaponModel == 0 && zombie_mode_player_skin(g_playerEntity.id & 3) == 2 &&
+                           weapon_id < 0xe && g_barryWeaponPaths[weapon_id] != NULL;
     sprintf(FILE_PATH, "%s%s",
             GAME_DATA_ROOT,
             weaponModel != 0 ? weaponModel
-                             : (zombie_mode_player_skin(g_playerEntity.id & 3) == 2 && weapon_id < 0xe &&
-                                g_barryWeaponPaths[weapon_id] != NULL)
+                             : barryFile
                                    ? g_barryWeaponPaths[weapon_id]
                                    : g_weaponPathTable[zombie_mode_player_weapon_block(g_playerEntity.id & 3)][weapon_id]);
     SetSpriteBufferFlag();
@@ -752,6 +827,9 @@ void LoadEquippedWeaponAnimation(unsigned char weapon_id, unsigned char param_2,
 
     unsigned int* puVar1 = (unsigned int*)(((fileSize & 0xFFFFFFFC) - 8) + (int)anim_buffer);
     g_playerEntity.jointMoveData1 = (*puVar1 & 0xFFFFFFFC) + (int)anim_buffer;
+    if (barryFile && weapon_id >= ITEM_SHOTGUN && weapon_id <= ITEM_COLT_PYTHON_MAG) {
+        BorrowChrisReloadClip(weapon_id, anim_buffer, fileSize);
+    }
 
     if (weapon_id > 0xb) {
         AdjustWeaponAnimationPositions(weapon_id - 0xc);

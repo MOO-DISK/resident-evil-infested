@@ -48,6 +48,7 @@ const OwnedKey kOwnedKeys[] = {
     { "Net",     "Address" },     // port-added: the zombie mod's last host
     { "Net",     "Port" },
     { "Net",     "Public" },      // the host lists its game on the match server
+    { "Net",     "HostLan" },     // the host skips the match server (join by address)
 };
 const int kOwnedKeyCount = (int)(sizeof(kOwnedKeys) / sizeof(kOwnedKeys[0]));
 
@@ -552,6 +553,7 @@ BOOL ConfigFile_Load(void)
             snprintf(g_zmRdvServer, sizeof(g_zmRdvServer), "%s", rdv);
         }
         g_zmRdvPublic = ReadInt(path, "Net", "Public", 1) != 0;
+        g_zmRdvHostLan = ReadInt(path, "Net", "HostLan", 0) != 0;
     }
     dbg_printf("[CONFIG] mode=%s overlay=%s ps1_credits=%d\n", GameModeName(g_GameMode),
                GetAssetModeName()[0] ? GetAssetModeName() : "(none)",
@@ -628,6 +630,7 @@ void ConfigFile_Save(void)
     snprintf(values[9], sizeof(values[9]), "%s", g_zmNetAddress);
     snprintf(values[10], sizeof(values[10]), "%u", (unsigned)g_zmNetPort);
     snprintf(values[11], sizeof(values[11]), "%d", g_zmRdvPublic ? 1 : 0);
+    snprintf(values[12], sizeof(values[12]), "%d", g_zmRdvHostLan ? 1 : 0);
 
     for (int i = 0; i < kOwnedKeyCount; ++i) {
         SetValue(kOwnedKeys[i].section, kOwnedKeys[i].key, values[i], lines, &count);

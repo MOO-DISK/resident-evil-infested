@@ -194,7 +194,7 @@ static void lobby_draw_players(int x, int y)
 enum {
     MI_GENERATE, MI_TO_MAP, MI_AI_LEVEL, MI_LEAVE, MI_START, MI_VETO,
     MI_ACCEPT, MI_BACK_LOBBY, MI_CONTINUE, MI_CLOSE, MI_READY, MI_CHANGE_CHAR, MI_VIEW_MAP,
-    MI_LISTING,
+    MI_HOST_PUBLIC, MI_HOST_PRIVATE, MI_HOST_LAN, MI_HOST_BACK,
 };
 #define LOBBY_MENU_MAX 8
 
@@ -1088,6 +1088,10 @@ static void lobby_room(void)
 {
     int sel = 0;
     bool first = true;
+    // A LAN host's address, for JOIN BY ADDRESS: the interface the route
+    // toward any outside address leaves by (nothing is sent).
+    PlatNetAddr toward = { 0x01010101u, 53 }, lanSelf = {};
+    bool lanKnown = plat_net_local(&toward, &lanSelf) != FALSE;
     for (;;) {
         zm_net_poll();
         int status = zm_net_status();
@@ -1109,8 +1113,6 @@ static void lobby_room(void)
             m.add(MI_GENERATE, zm_net_survivor_count() > 0,
                   zm_net_survivor_count() > 0 ? "GENERATE THE MAP" : "GENERATE THE MAP - NOBODY YET");
         }
-        if (host && zm_rdv_host_state() != ZM_RDV_HOST_OFF)
-            m.add(MI_LISTING, true, g_zmRdvPublic ? "LISTED: PUBLIC" : "LISTED: PRIVATE - CODE ONLY");
         m.add(MI_LEAVE, true, "LEAVE");
 
         // The AI level steps with left / right as well as Action.
@@ -1134,10 +1136,6 @@ static void lobby_room(void)
         case MI_AI_LEVEL:
             s_aiLevel = ai >= 5 ? 1 : ai + 1;
             zm_net_set_ai_level(s_aiLevel);
-            break;
-        case MI_LISTING:
-            g_zmRdvPublic = !g_zmRdvPublic;     // the next heartbeat tells the server
-            ConfigFile_Save();
             break;
         case MI_LEAVE:
             zm_net_stop();
@@ -1166,10 +1164,11 @@ static void lobby_room(void)
             char line[64];
             switch (zm_rdv_host_state()) {
             case ZM_RDV_HOST_REGISTERED:
-                snprintf(line, sizeof(line), "GAME CODE %06u", zm_rdv_code());
+                snprintf(line, sizeof(line), "%s GAME CODE %06u", g_zmRdvPublic ? "PUBLIC" : "PRIVATE",
+                         zm_rdv_code());
                 lobby_print(x, 202, 0x8F, line);
                 lobby_print(x, 216, 0x7F, g_zmRdvPublic ? "SURVIVORS FIND IT UNDER FIND A GAME, OR BY CODE"
-                                                         : "SURVIVORS JOIN BY THIS CODE");
+                                                         : "NOT LISTED - SURVIVORS JOIN BY THIS CODE");
                 break;
             case ZM_RDV_HOST_CONTACTING:
                 lobby_print(x, 202, 0x7F, "GETTING A GAME CODE...");
@@ -1179,6 +1178,17 @@ static void lobby_room(void)
                 lobby_print(x, 216, 0x7F, "SURVIVORS CAN STILL JOIN BY ADDRESS");
                 break;
             default:
+                if (lanKnown)
+                    snprintf(line, sizeof(line), "%s - ADDRESS %u.%u.%u.%u  PORT %u",
+                             g_zmRdvHostLan ? "LAN GAME" : "NO GAME CODE",
+                             (lanSelf.ip >> 24) & 0xFF, (lanSelf.ip >> 16) & 0xFF,
+                             (lanSelf.ip >> 8) & 0xFF, lanSelf.ip & 0xFF, (unsigned)lanSelf.port);
+                else
+                    snprintf(line, sizeof(line), "%s - PORT %u",
+                             g_zmRdvHostLan ? "LAN GAME" : "NO GAME CODE", (unsigned)g_zmNetPort);
+                lobby_print(x, 202, 0x8F, line);
+                lobby_print(x, 216, 0x7F, g_zmRdvHostLan ? "SURVIVORS JOIN BY ADDRESS"
+                                                          : "MATCH SERVER NOT FOUND - JOIN BY ADDRESS");
                 break;
             }
         }
@@ -1272,6 +1282,58 @@ static void lobby_browse(void)
         lobby_print(40, 62, 0x7F, note);
         lobby_menu_draw(m, sel, 40, 80);
         lobby_print(40, 200, 0x7F, "PRIVATE GAMES ARE JOINED BY CODE");
+        Task_sleep(1);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Where a game is hosted, picked before the socket opens: listed on the
+// match server, on it by code only, or not on it at all (join by address -
+// the local network, a VPN or a forwarded port). FALSE: backed out.
+// ---------------------------------------------------------------------------
+static bool lobby_pick_hosting(bool ai)
+{
+    bool online = zm_rdv_available();
+    int sel = !online || g_zmRdvHostLan ? 2 : g_zmRdvPublic ? 0 : 1;
+    bool first = true;
+    for (;;) {
+        zm_net_poll();
+        unsigned int pressed = first ? 0u : (unsigned int)g_PlayerPadPressed;
+        first = false;
+
+        LobbyMenu m;
+        m.add(MI_HOST_PUBLIC, online, "INTERNET - PUBLIC");
+        m.add(MI_HOST_PRIVATE, online, "INTERNET - PRIVATE");
+        m.add(MI_HOST_LAN, true, "LOCAL NETWORK");
+        m.add(MI_HOST_BACK, true, "BACK");
+        int pick = lobby_menu_input(m, &sel, pressed);
+        if (pick < 0 && (pressed & PAD_CANCEL)) {
+            play_sfx(SFX_UI_BANK, SFX_UI_CANCEL);
+            pick = MI_HOST_BACK;
+        }
+        switch (pick) {
+        case MI_HOST_PUBLIC:  g_zmRdvHostLan = false; g_zmRdvPublic = true;  ConfigFile_Save(); return true;
+        case MI_HOST_PRIVATE: g_zmRdvHostLan = false; g_zmRdvPublic = false; ConfigFile_Save(); return true;
+        case MI_HOST_LAN:     g_zmRdvHostLan = true;                         ConfigFile_Save(); return true;
+        case MI_HOST_BACK:    return false;
+        }
+
+        static const char* const help[][2] = {
+            { "LISTED UNDER FIND A GAME FOR ANYONE TO JOIN,", "OR JOINED BY ITS GAME CODE" },
+            { "NOT LISTED - ONLY SURVIVORS YOU GIVE", "THE GAME CODE CAN JOIN" },
+            { "NO MATCH SERVER - SURVIVORS JOIN BY ADDRESS", "ON YOUR NETWORK, A VPN OR A FORWARDED PORT" },
+            { "", "" },
+        };
+        zm_guide_background(true);
+        int x = 40;
+        lobby_print(x, 20, 0x8F, ZM_GAME_TITLE);
+        lobby_print(x, 44, 0x8F, ai ? "HOST - AI DIRECTOR" : "HOST - PLAY THE DIRECTOR");
+        lobby_print(x, 62, 0x7F, "WHERE IS THE GAME HOSTED?");
+        lobby_menu_draw(m, sel, x, 84);
+        int h = sel >= 0 && sel < 4 ? sel : 3;
+        lobby_print(x, 160, 0x7F, help[h][0]);
+        lobby_print(x, 174, 0x7F, help[h][1]);
+        if (!online) lobby_print(x, 200, 0x2F, "INTERNET HOSTING NEEDS RENDEZVOUS IN CONFIG.INI");
         Task_sleep(1);
     }
 }
@@ -1403,12 +1465,14 @@ void zombie_lobby_state(void)
                     return;
                 case ROW_HOST:
                     lobby_store_fields();
-                    zm_net_host();
+                    if (lobby_pick_hosting(false)) zm_net_host();
                     break;
                 case ROW_HOST_AI:
                     lobby_store_fields();
-                    zm_net_host();
-                    zm_net_set_ai_level(s_aiLevel);
+                    if (lobby_pick_hosting(true)) {
+                        zm_net_host();
+                        zm_net_set_ai_level(s_aiLevel);
+                    }
                     break;
                 case ROW_JOIN:
                     lobby_store_fields();

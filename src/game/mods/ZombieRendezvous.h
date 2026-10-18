@@ -29,6 +29,7 @@
 // ---- configuration (config.ini [Net] Rendezvous / Public) ----
 extern char g_zmRdvServer[96];       // "host" or "host:port"; "" or "off" = none
 extern bool g_zmRdvPublic;           // the host lists its game
+extern bool g_zmRdvHostLan;          // the host skips the server: LAN / join by address only
 bool zm_rdv_available(void);
 
 // ---- ZombieNet's side ----
