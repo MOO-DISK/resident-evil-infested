@@ -79,7 +79,7 @@ of guessed. Run them from the repo root.
 - `evt_disasm.py` — an RDT's SCD *event* scripts (the cutscene VM, not the command stream `mine_room_scd.py` handles).
 - `sim_zone_walk.py` — simulate the zone-graph walkers with the original's exact memory model over real RDT zone tables.
 - `estimate_zombie_route_time.py` — turns each seed's fastest escape into seconds (room walks at run speed from the RDT door/pickup positions, fixed door/pickup/crest costs; solo and a coordinated team); report `tools/zombie_route_time_report.json`.
-- `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
+- `gen_spawn_spots.py` — three monster spawn spots per mansion room (floor flood-fill inside the collision outline and camera zones, away from doors, on floor a camera shows - `camera_shows`: on screen in a camera the player can stand under there, the line of sight not crossing a boundary box under 800 high) and each room's monster cap by its floor area (`CAP_STEPS`); writes the zombie mod's `src/game/mods/ZombieSpawnSpots.cpp` (generated - do not edit by hand).
 
 **Match server**
 - `rendezvous_probe.py` — check a deployed rendezvous server (`server/rendezvous/rendezvous.c`) answers from the address it was sent to, which hole punching needs; prints this machine's public address.
@@ -282,12 +282,11 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   grab or death cuts every running examine/reveal short: its close-up cuts
   back and its later pickup (`cmd_room_action` handler 4/8, `cmd_got_item`)
   is dropped (`zombie_mode_event_room_action_skip`). Untested by the user.
-  The letterbox (main-state `MSF_INTENSITY_RAMP`, `bit_op 05 0F`) is not
-  turned on by an examine or a reveal (`zombie_mode_event_letterbox` in
-  `cmd_bit_op`): those can end without the command that takes it away (the
-  armor room, the large gallery's solve), leaving the bars up. Other scenes
-  keep theirs; up for 30 frames with no SCD event running, it is taken away
-  (`zm_letterbox_frame`). Untested by the user.
+  The letterbox (main-state `MSF_INTENSITY_RAMP`, `bit_op 05 0F`) never
+  comes up in the mode, the user's choice: no scene turns it on
+  (`zombie_mode_event_letterbox` in `cmd_bit_op`), and the flag raised any
+  other way is cleared the same frame (`zm_letterbox_frame`). Untested by the
+  user.
 - **The return mansion.** The mode always plays stages 6/7 (0-indexed 5/6):
   `zombie_mode_new_game` sets `SCENARIO_FLAG_STAGE_VARIANT`. The first visit
   carries 14 of the mansion's 58 rooms as 4-byte stub RDTs.
@@ -317,6 +316,11 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     under it, moved in only as far as needed (`rnd_keep_on_furniture`,
     `[random] look kept on the furniture` in the debug log). Untested by
     the user.
+  - Hidden spots: a room record no camera shows has its pickup zone and
+    model moved to floor one does (`kMovedSpots`: the 2F bedroom's shells
+    behind the bed, flag 0x26). The new spots (the spawn spots) are on shown
+    floor by the generator - the keeper's bedroom's lay in the strip between
+    the bed and the wall. Untested by the user.
   - The item viewer (pickups and the inventory's CHECK) runs at four steps
     a frame in the mode (`FUN_0044e1b0`'s `pickupAnimStep`).
   - Route proof (`rnd_reach`): doors whose trigger a script can switch off
@@ -569,7 +573,9 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   key-1 door; key 3 lies in the attic (its only key or crest), held back until
   Yawn flees, and opens at least one door; key 4 opens the lesson room's door
   (lock 0x19) and lies where only key 3 reaches. The other locks take any key.
-  So exactly two keys are in reach before the attic fight. Verified over 2000
+  So exactly two keys are in reach before the attic fight. The four keys show
+  their own names from the start (their `g_itemExaminedFlags` bits set in
+  `zombie_mode_new_game`), not "MANSION KEY" until checked. Verified over 2000
   real seeds (keys 1 and 2 one at a time, then the attic, then key 4).
   `tests/check_randomizer_progression.py` (a synthetic star of 1F rooms, no
   attic) predates the attic rule and fails; it needs a new fixture.

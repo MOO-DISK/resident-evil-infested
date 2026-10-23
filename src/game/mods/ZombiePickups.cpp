@@ -101,6 +101,32 @@ static bool pickup_available(const short* a)
     return Flg_ck((int)g_roomItemsFlags, flag) != 0;
 }
 
+// A taken item's model and sparkle off (room_event_item_pickup's own removal).
+// A world item the host's copy no longer has (its roomItems flag clear): not
+// merely reserved by someone, really taken.
+static bool pickup_world_taken(const short* a)
+{
+    if (a[2] != 0 || !zm_shotgun_pickup_valid(a)) return false;
+    unsigned int flag = (unsigned short)a[3] & 255;
+    unsigned char mask[32] = {};
+    Flg_on((int)mask, flag);
+    for (int i = 0; i < 32; i++) if ((mask[i] & zm_drops_flag_mask(i)) != 0) return false;
+    return Flg_ck((int)g_roomItemsFlags, flag) == 0;
+}
+
+static void pickup_hide_model(const unsigned char* rec)
+{
+    if (rec[10] >= ROOM_ITEM_MODELS || g_item_model_table[rec[10]] == NULL) return;
+    unsigned char* model = (unsigned char*)g_item_model_table[rec[10]];
+    model[0] = 0;
+    unsigned short* fx = (unsigned short*)(model + 0x86);
+    if (*fx != 0) {
+        g_freeEffectSlots++;
+        memset_((unsigned int*)&g_effectPool[*fx], 0x21);
+        *fx = 0;
+    }
+}
+
 static void pickup_hide_world(int flag)
 {
     FUN_00473f10((int*)g_roomItemsFlags, (unsigned int)flag);
@@ -110,16 +136,21 @@ static void pickup_hide_world(int flag)
         unsigned char* rec = *(unsigned char**)(evt + 8);
         if (rec == NULL || rec[0x14] != flag || zm_drop_is_pickup(rec)) continue;
         evt[0] = 0;
-        if (rec[10] >= ROOM_ITEM_MODELS || g_item_model_table[rec[10]] == NULL) continue;
-        unsigned char* model = (unsigned char*)g_item_model_table[rec[10]];
-        model[0] = 0;
-        unsigned short* fx = (unsigned short*)(model + 0x86);
-        if (*fx != 0) {
-            g_freeEffectSlots++;
-            memset_((unsigned int*)&g_effectPool[*fx], 0x21);
-            *fx = 0;
-        }
+        pickup_hide_model(rec);
     }
+}
+
+// Refused because another survivor has it: if this copy still shows it (the
+// host's word missed it - seen with the drained bathtub's supply, ROOM6130,
+// taken through event 4's room_action on slot 1), it goes now, as the
+// pickup itself would have removed it.
+static void pickup_refused_taken(unsigned char* evt, const unsigned char* rec, bool drop)
+{
+    if (drop || zm_drop_is_pickup(rec)) return;
+    if (Flg_ck((int)g_roomItemsFlags, rec[0x14]) != 0) return;     // still there: not taken
+    if (evt[0] == 4 && *(const unsigned char**)(evt + 8) == rec) evt[0] = 0;
+    pickup_hide_model(rec);
+    dbg_printf("[pickup] flag %02X already taken: its model removed here\n", (unsigned)rec[0x14]);
 }
 
 static void pickup_taken(const short* a)
@@ -206,6 +237,9 @@ void zm_pickups_take(const short* a, int src)
     }
     c.active = available;
     c.atMs = plat_time_ms();
+    // Asked for an item already taken: that copy missed the PK_TAKEN (it
+    // still shows it). Send it again ahead of the refusal; it is idempotent.
+    if (!available && pickup_world_taken(a)) pickup_send(src, PK_TAKEN, a);
     pickup_send(src, available ? PK_GRANT : PK_DENY, a);
 }
 
@@ -232,6 +266,7 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
     bool drop = zm_drop_pickup_uid(rec, &uid);
     if ((zm_drop_is_pickup(rec) && !drop) ||
         (!drop && Flg_ck((int)g_roomItemsFlags, rec[0x14]) == 0)) {
+        pickup_refused_taken(evt, rec, drop);
         zm_reinforce_notice("SOMEONE ELSE TOOK THAT ITEM");
         return false;
     }
@@ -271,6 +306,8 @@ bool zombie_mode_pickup_claim(unsigned char* evt, const unsigned char* rec)
     if (!grant) {
         pickup_send(ZM_NET_DIRECTOR, PK_CANCEL, request);
         s_waiting = false;
+        if (s_reply == PK_DENY && request[4] == (short)(g_stageId | (g_roomId << 8)))
+            pickup_refused_taken(evt, rec, drop);
         zm_reinforce_notice(s_reply == PK_DENY ? "SOMEONE ELSE TOOK THAT ITEM" : "PICKUP CANCELLED");
         return false;
     }

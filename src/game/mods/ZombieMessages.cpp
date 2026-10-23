@@ -466,38 +466,26 @@ unsigned int zombie_mode_event_flag_clear(unsigned int mask)
     return mask & ~(unsigned int)ZM_MSG_WORLD_FLAGS;
 }
 
-// The letterbox (main-state MSF_INTENSITY_RAMP, MainLoop.cpp's bars) of the
-// scenes played as a close-up stays off. The mode runs them on without the
-// control - cut short by a hit, their later cuts dropped, a reveal's group
-// ending in an event that never comes - so the command that takes the bars
-// away again (bit_op 05 0F 01) can be left unrun: the armor room's display
-// case (ROOM7050 event 1), the large gallery's solve (ROOM6170 event 20, whose
-// bars event 21 takes away) and the rest of kReveals and the examines.
-// Other scenes keep theirs (zm_letterbox_frame is their net).
+// The letterbox (main-state MSF_INTENSITY_RAMP, MainLoop.cpp's bars) never
+// comes up in the mode: the world runs on through every scene, and the scenes
+// played as a close-up can end without the command that takes the bars away
+// again (bit_op 05 0F 01) - the armor room's display case (ROOM7050 event 1),
+// the large gallery's solve (ROOM6170 event 20) and others.
 bool zombie_mode_event_letterbox(void)
 {
-    if (!zm_in_examine()) return true;
-    dbg_printf("[msg] event %d (slot %d): letterbox left off\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
+    if (!zombie_mode_armed()) return true;
+    if (s_evtSlot >= 0 && s_evtSlot < 8)
+        dbg_printf("[msg] event %d (slot %d): letterbox left off\n", (int)s_script[s_evtSlot], (int)s_evtSlot);
     return false;
 }
 
-// Only scenes (SCD events) turn the letterbox on - no room's per-frame script
-// does. Up with no event running for a second (a skipped scene's flag replay
-// that turned it on and not off, a scene the mode ended early), it goes.
-#define ZM_LETTERBOX_IDLE_FRAMES 30
+// The net for anything that raises the flag some other way (a skipped scene's
+// flag replay): taken away the frame it is seen.
 static void zm_letterbox_frame(void)
 {
-    static int idle = 0;
-    bool running = false;
-    for (int i = 0; i < 8 && !running; i++) running = g_ScdEventTable[i].active != 0;
-    if ((g_main_state_flags & MSF_INTENSITY_RAMP) == 0 || running) {
-        idle = 0;
-        return;
-    }
-    if (++idle < ZM_LETTERBOX_IDLE_FRAMES) return;
-    idle = 0;
+    if ((g_main_state_flags & MSF_INTENSITY_RAMP) == 0) return;
     g_main_state_flags &= ~MSF_INTENSITY_RAMP;
-    dbg_printf("[msg] letterbox left up with no scene running: taken away\n");
+    dbg_printf("[msg] letterbox raised outside a scene: taken away\n");
 }
 
 // The event VM's state 1, a reveal's command on the player: the look-at

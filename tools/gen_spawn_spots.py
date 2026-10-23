@@ -66,7 +66,10 @@ PLACE_DOOR_CLEAR = 1000
 PLACE_STUN_CLEAR = 2700
 PLACE_SPACING = 1000
 ITEM_CLEAR = (4000, 3000, 2000, 1500)      # the most a room's floor allows
-PLACE_OPEN_CELLS = 3            # a 7 x 7 cell square around the spot: openness 1..49
+SCREEN_HALF = (150, 110)        # a spot's frame: 320 x 240 less a 10-pixel margin
+FURNITURE_HEIGHT = 800          # what a boundary box is taken to stand to, for the line of sight
+ITEM_LIFT = 100                 # the point of a pickup looked at, above the floor
+PLACE_OPEN_CELLS = 3           # a 7 x 7 cell square around the spot: openness 1..49
 # (floor cells at least, cap): the first row a room reaches.
 CAP_STEPS = [(6000, 5), (1500, 4), (700, 3), (250, 2), (0, 1)]
 
@@ -251,6 +254,91 @@ def in_camera(x, z, quads):
     return False
 
 
+def cameras_of(b):
+    """The room's cameras (RDT+0x94, 0x2C bytes each): (position, look-at, projection distance)."""
+    out = []
+    for i in range(b[1]):
+        px, py, pz, tx, ty, tz, _roll, _zero, fov = struct.unpack_from('<9i', b, 0x94 + i * 0x2C + 8)
+        out.append(((px, py, pz), (tx, ty, tz), fov))
+    return out
+
+
+def cut_groups(b):
+    """Each camera's switch quads as {camera: [(cut to, quad), ...]} (headers left out)."""
+    cams = b[1]
+    p = struct.unpack_from('<I', b, 0x48)[0]
+    groups, group = {}, None
+    for _ in range(1024):
+        if p + 0x14 > len(b):
+            break
+        to, frm = struct.unpack_from('<HH', b, p)
+        if frm >= cams:
+            break
+        pts = struct.unpack_from('<8H', b, p + 4)
+        if frm != group:
+            group = frm
+            groups.setdefault(frm, [])
+        elif to < cams:
+            groups[frm].append((to, [(pts[0], pts[1]), (pts[2], pts[3]), (pts[4], pts[5]), (pts[6], pts[7])]))
+        p += 0x14
+    return groups
+
+
+def on_screen(cam, x, y, z):
+    """The point inside the camera's 320 x 240 frame (a margin in from the edge)."""
+    (px, py, pz), (tx, ty, tz), h = cam
+    f = (tx - px, ty - py, tz - pz)
+    n = (f[0] ** 2 + f[1] ** 2 + f[2] ** 2) ** 0.5
+    if n == 0:
+        return False
+    f = (f[0] / n, f[1] / n, f[2] / n)
+    r = (-f[2], 0.0, f[0])                     # f x (0, -1, 0)
+    rn = (r[0] ** 2 + r[2] ** 2) ** 0.5
+    if rn == 0:
+        return False
+    r = (r[0] / rn, 0.0, r[2] / rn)
+    u = (r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0])
+    d = (x - px, y - py, z - pz)
+    depth = d[0] * f[0] + d[1] * f[1] + d[2] * f[2]
+    if depth <= 0:
+        return False
+    sx = h * (d[0] * r[0] + d[2] * r[2]) / depth
+    sy = h * (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / depth
+    return abs(sx) < SCREEN_HALF[0] and abs(sy) < SCREEN_HALF[1]
+
+
+def sight_blocked(cam, x, y, z, blocks):
+    """The camera's line to a floor point crosses a boundary box lower than FURNITURE_HEIGHT
+    above the floor: the bed or desk in front of it (the boxes have no height in the RDT)."""
+    px, py, pz = cam[0]
+    for i in range(1, 64):
+        t = i / 64.0
+        sx, sy, sz = px + (x - px) * t, py + (y - py) * t, pz + (z - pz) * t
+        if y - sy > FURNITURE_HEIGHT:
+            continue
+        for bk in blocks:
+            if bk[0] == 'r':
+                if bk[1] < sx < bk[3] and bk[2] < sz < bk[4]:
+                    return True
+            elif (sx - bk[1]) ** 2 + (sz - bk[2]) ** 2 < bk[3] ** 2:
+                return True
+    return False
+
+
+def camera_shows(x, y, z, cams, groups, blocks):
+    """A camera the player can stand at (x, z) under - one of whose switch quads does not cut
+    away from there - has the point on screen with nothing in the way. The switch zones cover
+    the whole floor, so they alone let pickups land where no camera looks (the strip between
+    the keeper's bed and the wall)."""
+    for c, quads in groups.items():
+        if c >= len(cams) or any(in_poly(x, z, q) or in_poly(x, z, [q[0], q[1], q[3], q[2]]) for _, q in quads):
+            continue
+        p = (x, y - ITEM_LIFT, z)
+        if on_screen(cams[c], *p) and not sight_blocked(cams[c], *p, blocks):
+            return True
+    return False
+
+
 def in_steps(x, z, steps):
     return any(x0 - CELL <= x <= x1 + CELL and z0 - CELL <= z <= z1 + CELL for x0, z0, x1, z1 in steps)
 
@@ -307,6 +395,15 @@ def spots_for(root, stage, room, arrivals):
         cand = [(x, z) for x, z in floor if not in_steps(x, z, steps)] or floor
     if not cand:
         return None
+    heights = collections.Counter(a[1] for a in seeds)
+    y = heights.most_common(1)[0][0]
+    # Seen by a camera: the randomizer's extra pickups lie here, and a survivor must see them.
+    cams, groups = cameras_of(b), cut_groups(b)
+    seen_cand = [(x, z) for x, z in cand if camera_shows(x, y, z, cams, groups, blocks)]
+    if seen_cand:
+        cand = seen_cand
+    else:
+        print('warning: stage %d room 0x%02X: no spot a camera shows' % (stage, room))
     # Clear of the room's own pickups (the randomizer's extra ones lie here).
     items = items_of(b)
     def item_gap(x, z):
@@ -317,8 +414,6 @@ def spots_for(root, stage, room, arrivals):
         if clear:
             cand = clear
             break
-    heights = collections.Counter(a[1] for a in seeds)
-    y = heights.most_common(1)[0][0]
     picks = [max(cand, key=lambda p: door_gap(*p))]
     while len(picks) < 3:
         nxt = max(cand, key=lambda p: min(((p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2) for q in picks))

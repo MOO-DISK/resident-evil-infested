@@ -1988,6 +1988,21 @@ static const RndLooseSpot kLooseSpots[] = {
     { RND_STAGE_2F, 0x0F, 0x0C, 4700, 0, 3100 },    // the candle shells: zone x ..4400, z 1900..4300
 };
 
+// Spots no camera shows: the original hid them, a key item there is never
+// found. The record's pickup zone and model move to floor a camera does show
+// (checked with tools/gen_spawn_spots.py's camera_shows against the RDT).
+struct RndMovedSpot {
+    unsigned char  stage, room, flag;
+    unsigned short zx, zz, zw, zd;                  // the pickup zone
+    short          x, y, z;                         // the model
+};
+static const RndMovedSpot kMovedSpots[] = {
+    // 2F bedroom's shells, behind the bed by the far wall (2800, 2500): every
+    // camera that looks there has the bed in front. Now at the bed's foot,
+    // in camera 0.
+    { RND_STAGE_2F, 0x09, 0x26, 2400, 6900, 1800, 1800, 3300, 0, 7800 },
+};
+
 static const int* rnd_look(unsigned char id);
 static const RndSpot* rnd_spot_here(unsigned char flag);
 static void rnd_tmd_extent(const unsigned char* tmd, int ext[3], int* lo = NULL, int* hi = NULL);
@@ -2097,6 +2112,17 @@ void zombie_mode_item_spot(unsigned char* op)
             *(short*)(op + 0x0E) = L.x;
             *(short*)(op + 0x10) = L.y;
             *(short*)(op + 0x12) = L.z;
+        }
+        for (unsigned int i = 0; i < sizeof(kMovedSpots) / sizeof(kMovedSpots[0]); i++) {
+            const RndMovedSpot& M = kMovedSpots[i];
+            if (M.stage != g_stageId || M.room != g_roomId || M.flag != op[0x16] || op[0x0D] != 0xFF) continue;
+            *(unsigned short*)(op + 0x02) = M.zx;
+            *(unsigned short*)(op + 0x04) = M.zz;
+            *(unsigned short*)(op + 0x06) = M.zw;
+            *(unsigned short*)(op + 0x08) = M.zd;
+            *(short*)(op + 0x0E) = M.x;
+            *(short*)(op + 0x10) = M.y;
+            *(short*)(op + 0x12) = M.z;
         }
         if (g_stageId == RND_STAGE_1F && g_roomId == ROOM_GALLERY && op[0x16] == 0x91)
             memcpy(s_galleryPickup, op, sizeof(s_galleryPickup));

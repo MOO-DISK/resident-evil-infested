@@ -779,6 +779,15 @@ void zombie_mode_new_game(int isNewGame)
     Flg_on((int)g_ScenarioFlags2, 0x02);
     Flg_on((int)g_ScenarioFlags2, 0x03);
 
+    // The four mansion keys go by their own names from the start, not
+    // "MANSION KEY" until CHECKed: their "examined" bits (each key's category,
+    // byte 6 of its image record, as message_item_name_lookup reads it) set.
+    static const unsigned char kNamedKeys[] = { ITEM_SWORD_KEY, ITEM_ARMOR_KEY, ITEM_SHIELD_KEY, ITEM_HELMET_KEY };
+    for (unsigned char key : kNamedKeys) {
+        unsigned char category = g_ItemImageLookupTable[(unsigned int)(key - 1) * 4 + 6];
+        if ((category & 0x80) == 0) Flg_on((int)g_itemExaminedFlags, category);
+    }
+
     // The mode plays the return mansion (stages 6/7): every mansion room is
     // built there - the first visit carries 14 of its rooms (the basement
     // among them) as stub RDTs. The scenario's stage-variant bit is what
@@ -4196,6 +4205,12 @@ static void zm_resume_control(Entity* e)
 {
     bool prone = (e->behavior_flags & ZOMBIE_FLAG_LAYING_DOWN) != 0;
     zm_set_rollback(e);
+    if (e->health < 0) {
+        // Shot dead while it held the survivor (zm_owner_take_hit counts the
+        // damage only): it falls now that the grab has let go.
+        zm_apply_reaction(e);
+        return;
+    }
     zm_start(e, prone ? ZM_ACT_PRONE : ZM_ACT_IDLE, prone ? ZM_ANIM_PRONE : ZM_ANIM_IDLE);
 }
 
@@ -5494,6 +5509,54 @@ static bool         s_slotRemoteSeen[30];
 // Owner's copy: each monster's burst joints already sent (ZM_EV_BURST, below).
 static unsigned short s_burstSent[30];
 
+// A zombie shot by another copy's survivor while it holds one (ZM_EV_HIT).
+// zombie_attack poses the held player itself and alone lets it go: a
+// reaction or a death started over the grab left the survivor stuck in the
+// held pose. So the damage counts and nothing else; a lethal shot cuts the
+// bites short - the release, as when the survivor struggles free - and the
+// zombie falls once it has let go. Laying down, the release is the head bite
+// or the vomit, so a prone grab just plays out.
+// ZM_EV_HIT a[4] = ZM_HIT_GRAB_RELEASE: the owner tells the victim's copy,
+// which runs that grab, with a[5] the zombie's health.
+#define ZM_HIT_GRAB_RELEASE 1
+static bool          s_grabCut[30];            // cut the bite loop short
+static bool          s_grabDie[30];            // fall once the grab is over
+static unsigned char s_grabDieHit[30];         // ...with the killing shot's hit state
+
+static void zm_grab_shot(Entity* e, int slot, short health, unsigned char hitState)
+{
+    e->health = health;
+    if (health >= 0) return;
+    s_grabDie[slot] = true;
+    s_grabDieHit[slot] = hitState;
+    if ((e->behavior_flags & ZOMBIE_FLAG_LAYING_DOWN) == 0) s_grabCut[slot] = true;
+}
+
+// After a frame of zombie_attack: its bite loop (action_state 3) lets go once
+// its timer (reaction_timer's high byte, Zombie.cpp's ATTACK_TIMER) drops
+// below zero, which it does on the next frame from 0. Then, the grab over, a
+// zombie killed in it starts its death.
+static void zm_grab_shot_frame(Entity* e, int slot)
+{
+    if (e->state == ZOMBIE_STATE_ATTACK) {
+        if (s_grabCut[slot] && e->action_state >= 3) {
+            if (e->action_state == 3) ((unsigned char*)&e->reaction_timer)[1] = 0;
+            s_grabCut[slot] = false;
+        }
+        return;
+    }
+    s_grabCut[slot] = false;
+    if (!s_grabDie[slot]) return;
+    s_grabDie[slot] = false;
+    if (e->health >= 0 || e->state == ZOMBIE_STATE_DIE) return;
+    e->hit_state = s_grabDieHit[slot] != 0 ? s_grabDieHit[slot] : 0x09;
+    e->ignore_player_flag = 0;
+    e->action_behavior = 0;
+    e->action_state = 0;
+    e->state = ZOMBIE_STATE_DIE;
+    dbg_printf("[zombie] slot %d falls dead after its grab\n", slot);
+}
+
 static bool zm_survivor_role(void) { return s_gameRole == ZM_NET_SURVIVOR; }
 static bool zm_director_role(void) { return s_gameRole == ZM_NET_ZOMBIE; }
 
@@ -5805,6 +5868,8 @@ static void zm_shared_room_reset(void)
     s_tyrantPendingHave = false;
     memset(s_tyrantTrailCues, 0, sizeof(s_tyrantTrailCues));
     memset(s_burstSent, 0, sizeof(s_burstSent));
+    memset(s_grabCut, 0, sizeof(s_grabCut));
+    memset(s_grabDie, 0, sizeof(s_grabDie));
     s_grabSlot = -1;
     s_grabPendingSlot = -1;
     s_targetIdx = -1;
@@ -6826,12 +6891,18 @@ static void zm_puppet_grab_frame(Entity* e)
             check_room_collision((VECTOR*)&e->scaMatrixData.localMatrix.t,
                                  *(short*)(e->Sca_info + 10));
         }
+        if (e->state == ZOMBIE_STATE_ATTACK) zm_grab_shot_frame(e, slot);
     }
     zm_draw_shadow(e);
     s_slotShown[slot] = true;
 
-    if (e->state == ZOMBIE_STATE_IDLE || e->state == ZOMBIE_STATE_EATING || s_grabFrames > ZM_PUPPET_GRAB_MAX) {
+    // Shot dead in the grab (ZM_HIT_GRAB_RELEASE): over once it has let go -
+    // its owner plays the fall (zm_owner_release_remote / zm_resume_control).
+    bool shotDead = e->health < 0 && e->state != ZOMBIE_STATE_ATTACK;
+    if (e->state == ZOMBIE_STATE_IDLE || e->state == ZOMBIE_STATE_EATING || shotDead ||
+        s_grabFrames > ZM_PUPPET_GRAB_MAX) {
         s_grabSlot = -1;
+        s_grabCut[slot] = s_grabDie[slot] = false;
         zm_net_send_event_to(s_grabOwner, ZM_EV_GRAB_END, (short)e->scaMatrixData.localMatrix.t[0],
                              (short)e->scaMatrixData.localMatrix.t[2], e->angle, 0,
                              (short)s_grabOwnerSlot, e->state == ZOMBIE_STATE_EATING ? 1 : 0, 0, 0);
@@ -7280,6 +7351,11 @@ static void zm_shared_after_update(Entity* e)
         zm_target_report_hit(e);
         zm_target_end();
     }
+    // This copy's own grab, shot from another copy (zm_owner_take_hit).
+    if (slot >= 0 && slot < ZM_FIRST_SURVIVOR_SLOT && !zombie_mode_is_puppet(e) &&
+        !s_slotRemote[slot] && zm_is_zombie_id(e->id)) {
+        zm_grab_shot_frame(e, slot);
+    }
     // Close for a local zombie grab before its paired animation advances.
     // Other attacks close on actual hurt, rather than a distant attack wind-up.
     if (zm_survivor_role() && (g_main_state_flags & MSF_MENU_ACTIVE) != 0 &&
@@ -7301,6 +7377,33 @@ static void zm_owner_release_remote(Entity* e, int slot)
     e->action_state = 0;
     e->hit_state = 0;
     zm_set_rollback(e);
+    if (e->health < 0) {
+        zm_apply_reaction(e);   // shot dead while it held on (zm_owner_take_hit)
+        dbg_printf("[zombie] slot %d falls dead after its remote grab\n", slot);
+    }
+}
+
+// A shot on a zombie whose grab runs on its victim's copy: counted here, and
+// a lethal one sent on to that copy, which cuts the bites short.
+static void zm_owner_grab_shot(Entity* e, int slot, int victim, const short* a)
+{
+    e->health = (short)(e->health - a[0]);
+    dbg_printf("[zombie] slot %d shot mid-grab for %d, health %d\n", slot, (int)a[0], (int)e->health);
+    if (e->health < 0 && victim >= 0) {
+        zm_net_send_event_to(victim, ZM_EV_HIT, a[0], a[1], (short)slot, 0,
+                             ZM_HIT_GRAB_RELEASE, e->health, 0, 0);
+    }
+}
+
+// ZM_HIT_GRAB_RELEASE on the victim's copy: the zombie holding this survivor
+// was shot dead on its owner's copy.
+static void zm_victim_grab_shot(const short* a, int src)
+{
+    if (s_grabSlot < 0 || src != s_grabOwner || a[2] != s_grabOwnerSlot) return;
+    Entity* e = &g_EnemiesList[s_grabSlot];
+    zm_grab_shot(e, s_grabSlot, a[5], (unsigned char)a[1]);
+    s_slotHealth[s_grabSlot] = e->health;
+    dbg_printf("[zombie] slot %d holding us was shot dead: letting go\n", s_grabSlot);
 }
 
 // update_entities, instead of its own update, while its attack runs remotely:
@@ -7354,14 +7457,20 @@ static void zm_owner_take_hit(const short* a)
     if (e == z) {
         if (e->state == ZOMBIE_STATE_DIE || s_riding) return;
         if (s_remoteGrab) {                  // mid-grab: the damage still counts
-            e->health = (short)(e->health - a[0]);
+            zm_owner_grab_shot(e, slot, s_remoteGrabVictim, a);
             return;
         }
         if (s_biteVictim != NULL) zm_end_bite(e);
     }
     if (s_slotRemote[slot]) {
-        e->health = (short)(e->health - a[0]);
-        dbg_printf("[zombie] slot %d shot mid-bite for %d, health %d\n", slot, (int)a[0], (int)e->health);
+        zm_owner_grab_shot(e, slot, s_slotRemoteVictim[slot], a);
+        return;
+    }
+    // Holding this copy's own survivor (any other copy's grab is handed off
+    // above): a reaction here would strand the survivor in the held pose.
+    if (zm_is_zombie_id(e->id) && e->state == ZOMBIE_STATE_ATTACK) {
+        zm_grab_shot(e, slot, (short)(e->health - a[0]), (unsigned char)a[1]);
+        dbg_printf("[zombie] slot %d shot holding us for %d, health %d\n", slot, (int)a[0], (int)e->health);
         return;
     }
     // apply_weapon_damage's tail (0x0043c020): the reaction is the monster's
@@ -7549,7 +7658,8 @@ static void zm_route_events(void)
             if (zm_survivor_role()) zm_take_hurt(a);
             break;
         case ZM_EV_HIT:
-            zm_owner_take_hit(a);
+            if (a[4] == ZM_HIT_GRAB_RELEASE) zm_victim_grab_shot(a, src);
+            else zm_owner_take_hit(a);
             break;
         case ZM_EV_FEED:
             zm_world_apply_feeding(a);

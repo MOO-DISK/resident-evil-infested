@@ -80,15 +80,22 @@ int g_trailSlotUsed[64] = {};          // 0x00aada68
 static DWORD g_trailSlotUV[16][4] = {};  // 0x008f8c80
 
 // ---------------------------------------------------------------------------
-// The two CMarniViewport2 pools (16 x 0x38-byte entries each). Pool A lives
-// inside g_tmdObjectBuffer at +0x151290 exactly as in the original; pool B is
-// a standalone region. Elements are seeded with MarniViewport2_InitEntry
-// (the port equivalent of FUN_00485020's placement ctor iterator).
+// The two CMarniViewport2 pools (16 x 0x38-byte entries each). Elements are
+// seeded with MarniViewport2_InitEntry (the port equivalent of FUN_00485020's
+// placement ctor iterator).
+//
+// In the original pool A sits at g_tmdObjectBuffer + 0x151290, just past the
+// 250 TMD slots - 0x151288 is 250 * 0x1594. The port widened those slots
+// (TMD_ENTITY_SLOT_COUNT), so that address became slot 250: the allocator
+// handed it out and ObjectCleanupCallback swept it as a CMarniDirect3DTMD,
+// calling through the trail entries' fields (a crash at a room change after
+// a second trail had been used). Both pools are standalone regions now.
 // ---------------------------------------------------------------------------
-#define TRAIL_POOL_A(i) ((CMarniViewport2*)((BYTE*)g_tmdObjectBuffer + 0x151290 + (i) * 0x38))  // 0x00a74de0
+#define TRAIL_POOL_A(i) ((CMarniViewport2*)(s_trailPoolA + (i) * 0x38))                          // 0x00a74de0
 #define TRAIL_POOL_B(i) ((CMarniViewport2*)(s_trailPoolB + (i) * 0x38))                          // 0x00ac3178
 
 static bool s_trailPoolsReady = false;
+alignas(16) static BYTE s_trailPoolA[16 * 0x38] = {};
 static BYTE s_trailPoolB[16 * 0x38] = {};
 
 static void ensure_trail_pools(void)

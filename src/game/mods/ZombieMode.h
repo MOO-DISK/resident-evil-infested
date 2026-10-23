@@ -231,7 +231,7 @@ bool zombie_mode_key_used_up(unsigned char* slots, int index);
 // its pickup).
 bool zombie_mode_action_busy(const unsigned char* entry);
 // cmd_bit_op, a script turning the letterbox on (main-state MSF_INTENSITY_RAMP):
-// false = drop it (an examine or a reveal - ZombieMessages.cpp).
+// false = drop it (always in the mode - ZombieMessages.cpp).
 bool zombie_mode_event_letterbox(void);
 bool zombie_mode_event_room_action_skip(unsigned char actionIdx);
 // cmd_room_action, before a handler runs on `entry`: true = drop the call (the

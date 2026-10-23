@@ -211,8 +211,7 @@ int cmd_bit_op(void)
     if (operation == 1 && op1 >> 8 == 6 && bitOffset == 0) {
         mask = zombie_mode_event_flag_clear(mask);
     }
-    // Port-added mod: no letterbox for the scenes the mode plays as a
-    // close-up (an examine or a reveal), which can end without taking it away.
+    // Port-added mod: no letterbox in the zombie mode (mods/ZombieMessages.cpp).
     if (operation != 1 && op1 >> 8 == 5 && bitOffset == 0 && mask == MSF_INTENSITY_RAMP &&
         !zombie_mode_event_letterbox()) {
         return 1;
