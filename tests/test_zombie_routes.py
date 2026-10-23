@@ -514,13 +514,14 @@ int main() {
             self.assertEqual({i[2] for i in data["items"]}, set(routes.ITEM_IDS + routes.ACCESS_IDS))
             self.assertEqual(sorted(i[2] for i in data["tools"]), [0x1C, 0x23, 0x26, 0x4C])
             # Every key item in a room of its own, in a leaf room - but the
-            # battery, which keeps out of them, and the back area's crests.
+            # battery, which keeps out of them, the back area's crests and the
+            # tiger statue's blue-gem reward (always a key item).
             back = {(6, 0x13), (6, 0x14), (6, 0x16), (6, 0x17), (6, 0x18), (6, 0x19)}
             leaves = {tuple(l) for l in data["leaves"]}
             rooms = [tuple(i[:2]) for i in data["items"] + data["tools"]]
             self.assertEqual(len(rooms), len(set(rooms)))
             leafy = {tuple(i[:2]) for i in data["items"] + data["tools"]
-                     if i[2] != 0x27 and tuple(i[:2]) not in back}
+                     if i[2] != 0x27 and tuple(i[:2]) not in back and tuple(i[:2]) != (5, 0x0D)}
             self.assertTrue(leafy <= leaves, data["seed"])
             # A crest always lies in the back area, no key or way in does,
             # and either way in alone reaches the exit.

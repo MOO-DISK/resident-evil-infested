@@ -316,6 +316,18 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
     under it, moved in only as far as needed (`rnd_keep_on_furniture`,
     `[random] look kept on the furniture` in the debug log). Untested by
     the user.
+  - The tiger statue's blue-gem reward (ROOM60D0 slot 3, flag 0xAE, the
+    wind crest's; `RND_GEM_*`, `RndSpot::gem`) always holds a key item: one
+    of the fill's keys/crests (not the back area's crest, Yawn 2's or the
+    attic key) or a puzzle tool, drawn at random in `rnd_generate_once`; a
+    fill item that cannot go there leaves it to a tool
+    (`rnd_place_key_items`). The route counts it only once the 2F dining
+    room (the statue), the 1F dining room (the gem, flag 0x2C) and the tiger
+    room are reached (`rnd_gem_reached`, in `rnd_reach` and
+    `rnd_key_spot_ok`). Over seeds 1-2000: every seed generated, the reward
+    always a key item in reach - tools ~70%, crests ~20%, keys ~9%.
+    `evaluate_zombie_routes.py`'s own solver does not know the gem gate.
+    Untested by the user.
   - Hidden spots: a room record no camera shows has its pickup zone and
     model moved to floor one does (`kMovedSpots`: the 2F bedroom's shells
     behind the bed, flag 0x26). The new spots (the spawn spots) are on shown

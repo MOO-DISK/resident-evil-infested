@@ -77,6 +77,13 @@ extern void FUN_00473f10(int* baseAddr, unsigned int bitIndex);        // clear 
 #define RND_BATTERY_AWAY 4               // door crossings from the kitchen's elevator, at least
 #define RND_ATTIC_ROOM   0x10            // 2F
 #define RND_PILLAR_ROOM  0x0D
+// The tiger statue's blue-gem reward: ROOM60D0's slot 3 record (the wind
+// crest's, armed by room_action_reset once the blue gem is set in the eye).
+// The gem itself is the 1F dining room's (ROOM6050 flag 0x2C), there once the
+// 2F dining room's statue is pushed down (ScenarioFlags 0x0B).
+#define RND_GEM_STAGE    RND_STAGE_1F
+#define RND_GEM_ROOM     0x0D            // the tiger statue room
+#define RND_GEM_FLAG     0xAE
 
 static const unsigned char kKeys[4]    = { ITEM_SWORD_KEY, ITEM_ARMOR_KEY, ITEM_SHIELD_KEY, ITEM_HELMET_KEY };
 static const unsigned char kCrests[4]  = { ITEM_WIND_CREST, ITEM_MOON_CREST, ITEM_STAR_CREST, ITEM_SUN_CREST };
@@ -262,6 +269,7 @@ struct RndSpot {
     bool          pool;            // can take a randomized item
     bool          rewardOnly;      // optional puzzle reward; never keys/crests
     unsigned char puzzle;          // 1 + kPuzzles index: that puzzle's reward slot
+    bool          gem;             // the tiger statue's blue-gem reward (rnd_gem_reached)
     unsigned char id, qty;         // what it holds this game
     bool          overridden;
     // A spot of our own (no record in the room's script): where it lies,
@@ -608,6 +616,11 @@ static void rnd_read_room(unsigned char stage, unsigned char room)
             ((room == 0x19 && s.flag == 0x39 && s.origId == ITEM_BATTERY) ||
              (room == 0x17 && s.flag == 0x4D && s.origId == ITEM_MO_DISK));
         if (s.rewardOnly) s.pool = true;
+        // The tiger statue's blue-gem reward (the wind crest's slot, armed by
+        // the gem's script) always holds a key item: a key, a crest or a
+        // puzzle tool (rnd_generate_once, rnd_place_key_items).
+        s.gem = stage == RND_GEM_STAGE && room == RND_GEM_ROOM && s.flag == RND_GEM_FLAG;
+        if (s.gem) s.pool = true;
         // A puzzle's reward slot holds that puzzle's heavy weapon, never a
         // key or crest.
         for (int p = 0; p < RND_PUZZLES; p++) {
@@ -644,6 +657,15 @@ static int rnd_room_index(unsigned char stage, unsigned char room)
     if (stage == RND_STAGE_1F) return room;
     if (stage == RND_STAGE_2F) return RND_ROOMS + room;
     return -1;
+}
+
+// The blue-gem reward can be had: the statue pushed in the 2F dining room,
+// the gem picked up below it in the 1F dining room, set in the tiger statue.
+static bool rnd_gem_reached(const bool* reach)
+{
+    return reach[rnd_room_index(RND_STAGE_2F, 0x02)] &&
+           reach[rnd_room_index(RND_STAGE_1F, 0x05)] &&
+           reach[rnd_room_index(RND_GEM_STAGE, RND_GEM_ROOM)];
 }
 
 // The route's bit for a progression item: bit per kKeys index, bit 4 + n per
@@ -718,7 +740,7 @@ static unsigned int rnd_reach(unsigned int owned, bool collect, bool* reach)
             // let assumed fill and the final proof rely on removed items.
             if (!s.pool) continue;
             int r = rnd_room_index(s.stage, s.room);
-            if (r < 0 || !reach[r]) continue;
+            if (r < 0 || !reach[r] || (s.gem && !rnd_gem_reached(reach))) continue;
             owned |= rnd_item_bit(s.id);
         }
         if (owned == before) return owned;
@@ -768,6 +790,8 @@ static int rnd_route_cost(int goal, int need)
     for (int i = 0; i < s_spotCount; i++) {
         const RndSpot& s = s_spots[i];
         int r = rnd_room_index(s.stage, s.room);
+        // The blue-gem reward counts as had in the tiger room itself: the
+        // dining rooms' detour for the gem is left out of the cost.
         if (s.pool && r >= 0) roomItems[r] |= rnd_route_state(rnd_item_bit(s.id));
     }
     memset(dist, 0xFF, sizeof(dist));
@@ -1192,6 +1216,7 @@ static void rnd_supply(unsigned char* id, unsigned char* qty)
 static bool rnd_key_spot_ok(const RndSpot& s, const bool* reach, const bool* taken)
 {
     int r = rnd_room_index(s.stage, s.room);
+    if (s.gem) return s.pool && s.id == 0 && r >= 0 && !taken[r] && rnd_gem_reached(reach);
     return s.pool && !s.rewardOnly && s.id == 0 && r >= 0 && reach[r] && !taken[r] &&
            !rnd_room_unverified(s.stage, s.room) && !rnd_puzzle_room(s.stage, s.room) &&
            (!rnd_boss_room(s.stage, s.room) || s_bossItem) &&
@@ -1254,15 +1279,27 @@ static int rnd_pick_back_spot(const bool* reach, const bool* taken)
 // The puzzles' and the shotgun trap's items, after the keys and crests: the
 // broken shotgun and the pick axe at a medium distance (RND_TOOL_NEAR..FAR
 // crossings), then the sheet music, chemical and lighter, each in a key-item room
-// of its own. None of them is needed to escape.
+// of its own. None of them is needed to escape. The blue-gem reward, if no
+// key or crest went there, takes one of them first: `gemTool` (an index into
+// the list) or one at random.
 #define RND_TOOL_NEAR 5
 #define RND_TOOL_FAR  9
-static bool rnd_place_key_items(bool* taken)
+#define RND_KEY_TOOLS 5
+static bool rnd_place_key_items(bool* taken, int gemTool)
 {
     bool reach[RND_ROOMS * 2];
     rnd_reach(0, true, reach);
-    const unsigned char items[] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL, ITEM_LIGHTER };
-    const int itemCount = sizeof(items) / sizeof(items[0]);
+    const unsigned char items[RND_KEY_TOOLS] = { ITEM_BROKEN_SHOTGUN, ITEM_PICK_AXE, ITEM_MUSIC_NOTES, ITEM_CHEMICAL, ITEM_LIGHTER };
+    const int itemCount = RND_KEY_TOOLS;
+    int gemPlaced = -1;
+    for (int i = 0; i < s_spotCount; i++) {
+        RndSpot& s = s_spots[i];
+        if (!s.gem || !rnd_key_spot_ok(s, reach, taken)) continue;
+        gemPlaced = gemTool >= 0 ? gemTool : rnd_below(itemCount);
+        s.id = items[gemPlaced];
+        s.qty = 1;
+        taken[rnd_room_index(s.stage, s.room)] = true;
+    }
     // Exactly one of them in exactly one safe room (none needed to escape, so
     // the director's keeping out of it costs nothing): which at random, in a
     // safe room reached with everything; the others keep out of the safe rooms.
@@ -1273,6 +1310,7 @@ static bool rnd_place_key_items(bool* taken)
     }
     rnd_reach(0xFF, true, all);
     int safeTool = rnd_below(itemCount);
+    if (safeTool == gemPlaced) safeTool = (safeTool + 1) % itemCount;
     {
         // The safe room first, each alike however many spots it has.
         int rooms[RND_ROOMS * 2], nr = 0;
@@ -1294,7 +1332,7 @@ static bool rnd_place_key_items(bool* taken)
         taken[rnd_room_index(s.stage, s.room)] = true;
     }
     for (int t = 0; t < itemCount; t++) {
-        if (t == safeTool) continue;
+        if (t == safeTool || t == gemPlaced) continue;
         int i = t < 2 ? rnd_pick_key_spot(reach, taken, RND_TOOL_NEAR, RND_TOOL_FAR, false, notSafe)
                       : rnd_pick_key_spot(reach, taken, -1, -1, items[t] == ITEM_CHEMICAL, notSafe);
         if (i < 0) return false;
@@ -1461,6 +1499,24 @@ static bool rnd_generate_once(void)
         key2Rooms[r] = keyRooms[r] && !noKey[r];
         key4Rooms[r] = keyRooms[r] && !noKey3[r];
     }
+    // What the blue-gem reward holds, at random among the keys and crests of
+    // the fill (not the back area's crest, Yawn 2's or the attic's key) and
+    // the puzzle tools. One the fill cannot put there (the gem out of reach
+    // without it, or its role's rooms) goes elsewhere, and a tool takes the
+    // reward instead (rnd_place_key_items).
+    int gem = -1, gemFill = -1, gemTool = -1;
+    for (int i = 0; i < s_spotCount; i++) if (s_spots[i].gem && s_spots[i].pool) gem = i;
+    if (gem >= 0) {
+        int fill[8], fillCount = 0;
+        for (int n = 0; n < itemCount; n++) {
+            if ((n == 0 && s_backAny) || (n == bossCrestAt && lesson >= 0) || items[n] == role[2]) continue;
+            fill[fillCount++] = n;
+        }
+        int k = rnd_below(fillCount + RND_KEY_TOOLS);
+        if (k < fillCount) gemFill = fill[k];
+        else gemTool = k - fillCount;
+    }
+    int gemRoom = rnd_room_index(RND_GEM_STAGE, RND_GEM_ROOM);
     for (int n = 0; n < itemCount; n++) {
         unsigned int owned = 0;
         for (int m = n + 1; m < itemCount; m++) owned |= rnd_item_bit(items[m]);
@@ -1471,8 +1527,10 @@ static bool rnd_generate_once(void)
                          : items[n] == role[3] ? key4Rooms
                          : rnd_is_key(items[n]) ? keyRooms : notSafe;
         s_bossItem = only == lessonOnly;
-        int pick = (n == 0 && s_backAny) ? rnd_pick_back_spot(reach, progressionRoom)
-                                         : rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, only);
+        int pick = -1;
+        if (n == gemFill && only[gemRoom] && rnd_key_spot_ok(s_spots[gem], reach, progressionRoom)) pick = gem;
+        if (pick < 0) pick = (n == 0 && s_backAny) ? rnd_pick_back_spot(reach, progressionRoom)
+                                                   : rnd_pick_key_spot(reach, progressionRoom, -1, -1, false, only);
         s_bossItem = false;
         if (pick < 0) return false;
         RndSpot& s = s_spots[pick];
@@ -1488,7 +1546,7 @@ static bool rnd_generate_once(void)
     if ((owned & required) != required) return false;
     if (!reach[rnd_room_index(RND_STAGE_1F, ROOM_STOREROOM)]) return false;
 
-    if (!rnd_place_key_items(progressionRoom)) return false;
+    if (!rnd_place_key_items(progressionRoom, gemTool)) return false;
     rnd_rank_puzzles();
     return true;
 }
