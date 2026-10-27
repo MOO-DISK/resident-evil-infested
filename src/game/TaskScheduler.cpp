@@ -26,6 +26,8 @@
 //
 // Two switch implementations, selected by compiler:
 //   - MSVC x86: the original's naked-asm ESP switching (below).
+//   - MinGW x86 (the Windows build cross-compiled from Linux): the same
+//     routines as GNU file-level asm, instruction for instruction.
 //   - Everything else (Linux, and later ARM): ucontext makecontext/swapcontext,
 //     which expresses the same "run until yield, resume where you left off"
 //     contract without hand-written assembly. See docs/LINUX_PORT.md Phase 1.
@@ -80,7 +82,12 @@ static BYTE* TaskStackBase(int id)
     return g_TaskStackBase + (size_t)id * (TASK_STACK_SIZE + TASK_GUARD_SIZE);
 }
 
-#if defined(_MSC_VER) && defined(_M_IX86)
+#if (defined(_MSC_VER) && defined(_M_IX86)) || \
+    (defined(__GNUC__) && defined(_WIN32) && defined(__i386__))
+#define TASK_SWITCH_ASM 1
+#endif
+
+#if defined(TASK_SWITCH_ASM)
 
 // Initial ESP for a task START dispatch. The original layout had contiguous
 // stacks, so tasks were entered with ESP exactly at slot_top and a read at
@@ -96,6 +103,7 @@ static uintptr_t TaskStackTop(int id)
     return (uintptr_t)(TaskStackBase(id) + TASK_STACK_SIZE) - 16;
 }
 
+#if defined(_MSC_VER)
 #pragma warning(disable: 4731)  // frame pointer register modified by inline asm
 
 // ============================================================================
@@ -175,6 +183,74 @@ __declspec(naked) static void TaskYield(void) {
     }
 }
 
+#else  // MinGW x86
+
+// The same five routines as the MSVC naked functions above (see their
+// comments), as file-level asm: GCC's naked attribute only allows basic asm,
+// which cannot name C++ objects. Namespace-scope variables are not mangled,
+// so the globals are their C names with the i386 PE "_" prefix. The asm
+// labels below are literal symbol names (no prefix added).
+extern "C" void SwitchToTask_Asm(void) __asm__("re1_SwitchToTask_Asm");
+extern "C" void ReturnToScheduler_Resume(void) __asm__("re1_ReturnToScheduler_Resume");
+extern "C" void TaskYield(void) __asm__("re1_TaskYield");
+
+__asm__(
+    ".intel_syntax noprefix\n"
+    ".text\n"
+
+    // SwitchToTask_Core (0x00475740)
+    ".p2align 4\n"
+    "re1_SwitchToTask_Core:\n"
+    "    mov  eax, dword ptr [_g_CurrentTaskID]\n"
+    "    mov  dword ptr [_g_SchedulerESP], esp\n"
+    "    mov  esp, dword ptr [_g_TasksESP + eax*4]\n"
+    "    jmp  dword ptr [_g_TasksEIP + eax*4]\n"
+
+    // SwitchToTask_Asm (0x0047575c)
+    ".p2align 4\n"
+    ".globl re1_SwitchToTask_Asm\n"
+    "re1_SwitchToTask_Asm:\n"
+    "    pushad\n"
+    "    pushfd\n"
+    "    call re1_SwitchToTask_Core\n"
+    "    popfd\n"
+    "    popad\n"
+    "    ret\n"
+
+    // ReturnToScheduler_Core (0x00475788)
+    ".p2align 4\n"
+    "re1_ReturnToScheduler_Core:\n"
+    "    mov  eax, dword ptr [_g_CurrentTaskID]\n"
+    "    mov  dword ptr [_g_SchedulerESP], esp\n"
+    "    mov  esp, dword ptr [_g_TasksESP + eax*4]\n"
+    "    popad\n"
+    "    ret\n"
+
+    // ReturnToScheduler_Resume (0x0047579c)
+    ".p2align 4\n"
+    ".globl re1_ReturnToScheduler_Resume\n"
+    "re1_ReturnToScheduler_Resume:\n"
+    "    pushad\n"
+    "    pushfd\n"
+    "    call re1_ReturnToScheduler_Core\n"
+    "    popfd\n"
+    "    popad\n"
+    "    ret\n"
+
+    // TaskYield (0x00475768)
+    ".p2align 4\n"
+    ".globl re1_TaskYield\n"
+    "re1_TaskYield:\n"
+    "    pushad\n"
+    "    mov  eax, dword ptr [_g_CurrentTaskID]\n"
+    "    mov  dword ptr [_g_TasksESP + eax*4], esp\n"
+    "    mov  esp, dword ptr [_g_SchedulerESP]\n"
+    "    ret\n"
+
+    ".att_syntax prefix\n");
+
+#endif  // _MSC_VER
+
 static void TaskSwitch_Start(void)
 {
     g_TasksESP[g_CurrentTaskID] = TaskStackTop(g_CurrentTaskID);
@@ -186,7 +262,7 @@ static void TaskSwitch_Resume(void)
     ReturnToScheduler_Resume();
 }
 
-#else  // !(MSVC x86)
+#else  // !TASK_SWITCH_ASM
 
 // ============================================================================
 // Portable switch primitives (ucontext).
@@ -239,7 +315,7 @@ static void TaskYield(void)
     swapcontext(&s_TaskContext[g_CurrentTaskID], &s_SchedContext);
 }
 
-#endif  // _MSC_VER && _M_IX86
+#endif  // TASK_SWITCH_ASM
 
 // ============================================================================
 // TaskScheduler_Update (0x004200E0)

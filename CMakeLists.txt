@@ -7,12 +7,19 @@
 # Build (from WSL/Linux, x86-32):
 #   cmake -S . -B build/linux -DCMAKE_BUILD_TYPE=Release
 #   cmake --build build/linux -j
+#
+# The Windows executable can also be cross-compiled here with MinGW-w64
+# (docs/WINDOWS_CROSS_BUILD.md); it takes its sources from Game.vcxproj:
+#   cmake -S . -B build/windows -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-i686.cmake \
+#         -DCMAKE_BUILD_TYPE=Release
+#   cmake --build build/windows -j
 cmake_minimum_required(VERSION 3.16)
 project(residentevil CXX)
 
-if(WIN32)
+if(WIN32 AND NOT MINGW)
     message(FATAL_ERROR
-        "Windows builds use Game.vcxproj. This CMakeLists targets Linux.")
+        "Windows builds use Game.vcxproj. This CMakeLists targets Linux, "
+        "and Windows only through MinGW-w64 (cmake/mingw-i686.cmake).")
 endif()
 
 set(CMAKE_CXX_STANDARD 17)
@@ -172,6 +179,19 @@ list(APPEND RE1_SOURCES
     src/marni/MarniGLFuncs.cpp
 )
 
+# MinGW: the Windows build's translation units are Game.vcxproj's, read from
+# the project file so that list stays the only one to maintain.
+if(MINGW)
+    file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/Game.vcxproj" RE1_VCXPROJ_LINES
+        REGEX "<ClCompile Include=\"")
+    set(RE1_SOURCES)
+    foreach(line IN LISTS RE1_VCXPROJ_LINES)
+        string(REGEX REPLACE ".*<ClCompile Include=\"([^\"]+)\".*" "\\1" src "${line}")
+        string(REPLACE "\\" "/" src "${src}")
+        list(APPEND RE1_SOURCES "${src}")
+    endforeach()
+endif()
+
 add_executable(residentevil ${RE1_SOURCES})
 
 # Keep mod audio beside the executable, independently of the game asset root.
@@ -206,6 +226,24 @@ add_custom_command(TARGET residentevil POST_BUILD
     VERBATIM)
 
 target_include_directories(residentevil PRIVATE src)
+
+# ---------------------------------------------------------------------------
+# Windows (MinGW-w64) flags and libraries: Game.vcxproj's, plus the ones its
+# sources ask for with #pragma comment(lib), which GCC ignores.
+# ---------------------------------------------------------------------------
+if(MINGW)
+    target_compile_definitions(residentevil PRIVATE
+        WIN32 _WINDOWS DIRECT3D_VERSION=0x0b00 _CRT_SECURE_NO_WARNINGS
+        $<$<CONFIG:Debug>:_DEBUG> $<$<NOT:$<CONFIG:Debug>>:NDEBUG>)
+    target_compile_options(residentevil PRIVATE -w)
+    # GUI subsystem (WinMain); everything static so the exe needs no MinGW
+    # DLLs beside it (the MSVC build is /MT as well).
+    target_link_options(residentevil PRIVATE -mwindows -static)
+    target_link_libraries(residentevil PRIVATE
+        d3d11 dxgi d3dcompiler_47 dxguid xinput1_4 xaudio2_8 winmm imm32
+        vfw32 mfplat mfreadwrite mfuuid ole32 propsys dbghelp ws2_32 bcrypt)
+    return()
+endif()
 
 # ---------------------------------------------------------------------------
 # 32-bit x86: the game's layout and the scheduler assume it.

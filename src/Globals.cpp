@@ -2042,7 +2042,7 @@ extern "C" int re1_rand(void)
     return (int)((g_randState >> 16) & 0x7fff);
 }
 
-#if defined(__linux__)
+#if !defined(_MSC_VER)
 extern "C" int rand() noexcept
 {
     return re1_rand();

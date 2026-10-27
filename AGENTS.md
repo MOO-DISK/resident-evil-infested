@@ -97,6 +97,11 @@ of guessed. Run them from the repo root.
 - `save_editor.html` — PC save-file editor.
 
 **Linux** — `package_linux.sh` and `elf_needed.py`; both are described in the Linux port section above.
+`package_windows.sh` cross-compiles the Windows exe with MinGW-w64 and zips it
+(`docs/WINDOWS_CROSS_BUILD.md`). `package_release.sh` runs both and writes
+`dist/residentevil-<version>-linux-x86.tar.gz` and `...-windows-x86.zip`; each
+carries `config.ini` and the mod's `infested/` runtime files
+(`stage_infested.sh`, copied from the repo's `infested/`).
 
 **Asset migration** — `tools/asset_migrator/` is a standalone Qt 6 GUI for the
 player-facing asset import: a PC tab (a USA/JPN tree from a folder or a disc
@@ -1279,3 +1284,6 @@ An asymmetric multiplayer mode. Everything is gated on `g_bPlayAsZombie`
   disabled** in Release — `/GL` + `/LTCG` miscompiles the task scheduler's naked
   assembly and causes intermittent crashes at room load.
 - **Linux**: see the Linux port section above.
+- **Windows from Linux**: MinGW-w64, `cmake -S . -B build/windows
+  -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-i686.cmake -DCMAKE_BUILD_TYPE=Release`;
+  sources come from `Game.vcxproj`. See `docs/WINDOWS_CROSS_BUILD.md`.

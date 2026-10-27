@@ -513,13 +513,14 @@ extern int           g_DcDifficulty;           // DC_DIFFICULTY_*
 // its demo reels against the CRT rand; the PS1 DC uses its own LCG, so DC
 // sessions must roll the PS1 sequence for demo playback to line up. Every
 // game-code call site goes through the rand()/srand() entry points below. On
-// Windows the names are macros; on Linux the C library entry points forward to
-// the game functions so standard headers remain untouched.
+// MSVC the names are macros; on GCC builds (Linux, and the MinGW Windows
+// build, whose libstdc++ headers name std::rand) the C library entry points
+// forward to the game functions so standard headers remain untouched.
 extern "C" {
 void re1_srand(unsigned int seed);
 int  re1_rand(void);
 }
-#if !defined(__linux__)
+#if defined(_MSC_VER)
 #define rand(...)  re1_rand(__VA_ARGS__)
 #define srand(...) re1_srand(__VA_ARGS__)
 #endif

@@ -14,6 +14,7 @@
 #include "PrintText.h"
 #include "dc/Items.h"    // lockpick item id (is_lockpick_item)
 #include "mods/ZombieMode.h"
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include "../system/AssetPath.h"
